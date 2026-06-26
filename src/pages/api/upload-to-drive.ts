@@ -1,12 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { createClient } from '@supabase/supabase-js'
+import { google } from 'googleapis'
+import { Readable } from 'stream'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -14,22 +10,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { base64, fileName, mimeType = 'application/pdf' } = req.body
     if (!base64 || !fileName) return res.status(400).json({ error: 'Missing base64 or fileName' })
 
+    const clientId     = process.env.GOOGLE_CLIENT_ID || ''
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
+    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || ''
+    const folderId     = process.env.GOOGLE_DRIVE_FOLDER_ID || ''
+
+    if (!clientId || !clientSecret || !refreshToken) {
+      return res.status(500).json({ error: 'Google OAuth credentials not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN env vars.' })
+    }
+
+    const auth = new google.auth.OAuth2(clientId, clientSecret)
+    auth.setCredentials({ refresh_token: refreshToken })
+
+    const drive = google.drive({ version: 'v3', auth })
     const buffer = Buffer.from(base64, 'base64')
-    const path = `uploads/${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`
 
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from('export-docs')
-      .upload(path, buffer, { contentType: mimeType, upsert: false })
+    const uploaded = await drive.files.create({
+      requestBody: {
+        name: fileName,
+        parents: folderId ? [folderId] : undefined,
+      },
+      media: { mimeType, body: Readable.from(buffer) },
+      fields: 'id, webViewLink',
+    })
 
-    if (uploadError) throw new Error(uploadError.message)
+    await drive.permissions.create({
+      fileId: uploaded.data.id!,
+      requestBody: { role: 'reader', type: 'anyone' },
+    })
 
-    const { data: urlData } = supabaseAdmin.storage
-      .from('export-docs')
-      .getPublicUrl(path)
-
-    const publicUrl = urlData?.publicUrl || ''
-    res.json({ driveId: path, driveLink: publicUrl })
+    res.json({ driveId: uploaded.data.id, driveLink: uploaded.data.webViewLink })
   } catch (err: any) {
+    console.error('Drive upload error:', err.message)
     res.status(500).json({ error: err.message })
   }
 }

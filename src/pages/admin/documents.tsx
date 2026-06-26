@@ -1,17 +1,16 @@
 import { useState, useRef } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
-import { supabase } from '@/lib/supabase'
-import { Upload, FileText, Package, ScanLine, Ship, Copy, CheckCircle, Loader, Save, Eye, ExternalLink } from 'lucide-react'
+import { Upload, FileText, Package, ScanLine, Ship, Copy, CheckCircle, Loader, Save, Eye, ExternalLink, AlertCircle } from 'lucide-react'
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy'
 type PdfField = { grid: string; label: string; value: string }
 
 const DOC_TYPES: { key: DocType; label: string; icon: any; color: string; canExtract: boolean }[] = [
-  { key: 'cusdec',     label: 'CUSDEC',      icon: FileText, color: '#1B3A5C', canExtract: true  },
-  { key: 'cdn',        label: 'CDN',          icon: Package,  color: '#22A87A', canExtract: true  },
-  { key: 'barcode',   label: 'Barcode',       icon: ScanLine, color: '#f59e0b', canExtract: false },
-  { key: 'boat_note', label: 'Boat Note',     icon: Ship,     color: '#3b82f6', canExtract: false },
-  { key: 'party_copy',label: "Party's Copy",  icon: Copy,     color: '#8b5cf6', canExtract: false },
+  { key: 'cusdec',      label: 'CUSDEC',       icon: FileText, color: '#1B3A5C', canExtract: true  },
+  { key: 'cdn',         label: 'CDN',           icon: Package,  color: '#22A87A', canExtract: true  },
+  { key: 'barcode',     label: 'Barcode',       icon: ScanLine, color: '#f59e0b', canExtract: false },
+  { key: 'boat_note',   label: 'Boat Note',     icon: Ship,     color: '#3b82f6', canExtract: false },
+  { key: 'party_copy',  label: "Party's Copy",  icon: Copy,     color: '#8b5cf6', canExtract: false },
 ]
 
 interface UploadedDoc {
@@ -24,36 +23,42 @@ interface UploadedDoc {
 }
 
 export default function DocumentsPage() {
-  const [active, setActive]         = useState<DocType>('cusdec')
-  const [uploading, setUploading]   = useState(false)
-  const [extracting, setExtracting] = useState(false)
+  const [active, setActive]               = useState<DocType>('cusdec')
+  const [uploading, setUploading]         = useState(false)
+  const [extracting, setExtracting]       = useState(false)
   const [driveUploading, setDriveUploading] = useState(false)
   const [docs, setDocs] = useState<Record<DocType, UploadedDoc | null>>({
     cusdec: null, cdn: null, barcode: null, boat_note: null, party_copy: null,
   })
-  const [editFields, setEditFields] = useState<PdfField[]>([])
-  const [saving, setSaving]         = useState(false)
-  const [showRaw, setShowRaw]       = useState(false)
-  const [rawText, setRawText]       = useState('')
-  const [status, setStatus]         = useState('')
+  const [editFields, setEditFields]       = useState<PdfField[]>([])
+  const [saving, setSaving]               = useState(false)
+  const [showRaw, setShowRaw]             = useState(false)
+  const [rawText, setRawText]             = useState('')
+  const [status, setStatus]               = useState('')
+  const [statusType, setStatusType]       = useState<'ok' | 'warn' | 'err'>('ok')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const activeDef = DOC_TYPES.find(d => d.key === active)!
   const activeDoc = docs[active]
+
+  function setMsg(msg: string, type: 'ok' | 'warn' | 'err' = 'ok') {
+    setStatus(msg); setStatusType(type)
+  }
 
   async function handleFile(file: File) {
     setUploading(true)
     setExtracting(false)
     setEditFields([])
     setRawText('')
-    setStatus('Uploading to Google Drive...')
+    setMsg('Uploading to Google Drive...', 'ok')
+
+    let driveLink = ''
 
     try {
       const base64 = await fileToBase64(file)
 
       // 1. Upload to Google Drive
       setDriveUploading(true)
-      let driveLink = ''
       try {
         const driveRes = await fetch('/api/upload-to-drive', {
           method: 'POST',
@@ -61,45 +66,80 @@ export default function DocumentsPage() {
           body: JSON.stringify({ base64, fileName: file.name, mimeType: 'application/pdf' }),
         })
         const driveData = await driveRes.json()
-        driveLink = driveData.driveLink || ''
-        setStatus(driveLink ? '✓ Saved to Google Drive' : '⚠ Drive upload failed')
-      } catch {
-        setStatus('⚠ Drive upload failed — continuing...')
+        if (driveRes.ok && driveData.driveLink) {
+          driveLink = driveData.driveLink
+          setMsg('✓ Saved to Google Drive', 'ok')
+        } else {
+          setMsg(`⚠ Drive: ${driveData.error || 'upload failed'}`, 'warn')
+        }
+      } catch (e: any) {
+        setMsg('⚠ Drive upload failed — continuing...', 'warn')
       }
       setDriveUploading(false)
 
-      // 2. Extract if CUSDEC or CDN
+      // 2. Extract text for CUSDEC / CDN
       let fields: PdfField[] = []
       let rawTxt = ''
       if (activeDef.canExtract) {
         setExtracting(true)
-        setStatus('Extracting PDF data...')
-        const res = await fetch('/api/extract-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64, docType: active }),
-        })
-        const json = await res.json()
-        fields = json.fields || []
-        rawTxt = json.rawText || ''
-        setRawText(rawTxt)
-        setEditFields(fields)
+        setMsg('Extracting PDF data...', 'ok')
+        try {
+          const res = await fetch('/api/extract-pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base64, docType: active }),
+          })
+          const json = await res.json()
+          if (!res.ok) throw new Error(json.error || 'Extraction failed')
+          fields  = json.fields  || []
+          rawTxt  = json.rawText || ''
+          setRawText(rawTxt)
+          setEditFields(fields)
+          setMsg(fields.length ? `✓ Extracted ${fields.length} fields` : '⚠ No fields found — check Raw Text', fields.length ? 'ok' : 'warn')
+        } catch (e: any) {
+          setMsg(`✗ Extract error: ${e.message}`, 'err')
+        }
         setExtracting(false)
-        setStatus('✓ Extraction complete')
       }
 
-      // 3. Save record to uploaded_documents
-      const { error: dbErr } = await supabase.from('uploaded_documents').insert({
-        doc_type: active,
-        file_name: file.name,
-        file_url: '',
-        drive_url: driveLink,
-        extracted_data: fields.length ? Object.fromEntries(fields.map(f => [`grid_${f.grid}`, f.value])) : null,
-      })
+      // 3. Save to DB via server-side API (bypasses RLS)
+      let dbSaved = false
+      try {
+        const saveRes = await fetch('/api/save-document', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            doc_type: active,
+            file_name: file.name,
+            file_url: '',
+            drive_url: driveLink,
+            extracted_data: fields.length
+              ? Object.fromEntries(fields.map(f => [`grid_${f.grid}`, f.value]))
+              : null,
+          }),
+        })
+        const saveData = await saveRes.json()
+        if (saveRes.ok) {
+          dbSaved = true
+          if (fields.length) {
+            setMsg('✓ Extracted & saved to DB', 'ok')
+          } else {
+            setMsg(driveLink ? '✓ Saved to Drive + DB' : '✓ Saved to DB', 'ok')
+          }
+        } else {
+          setMsg(`⚠ DB save failed: ${saveData.error}`, 'warn')
+        }
+      } catch (e: any) {
+        setMsg(`⚠ DB error: ${e.message}`, 'warn')
+      }
 
-      const doc: UploadedDoc = { docType: active, fileName: file.name, fileUrl: '', driveLink, fields, saved: false }
+      const doc: UploadedDoc = {
+        docType: active, fileName: file.name, fileUrl: '',
+        driveLink, fields, saved: dbSaved,
+      }
       setDocs(prev => ({ ...prev, [active]: doc }))
-      if (!dbErr) setStatus('✓ Saved to database')
+    } catch (e: any) {
+      setMsg(`✗ Error: ${e.message}`, 'err')
     } finally {
       setUploading(false)
       setExtracting(false)
@@ -114,23 +154,47 @@ export default function DocumentsPage() {
       const data: Record<string, any> = {}
       editFields.forEach(f => { data[`grid_${f.grid.replace(/\s/g, '_')}`] = f.value })
 
+      let table = ''
+      let payload: Record<string, any> = {}
+
       if (active === 'cusdec') {
-        await supabase.from('cusdec').insert({
+        table = 'cusdec'
+        payload = {
           cusdec_no: editFields.find(f => f.grid === '33')?.value || '',
-          pdf_url: activeDoc.driveLink,
-          xml_data: JSON.stringify(data),
-          status: 'pending',
-        })
+          pdf_url:   activeDoc.driveLink,
+          xml_data:  JSON.stringify(data),
+          status:    'pending',
+        }
       } else if (active === 'cdn') {
-        await supabase.from('cdn').insert({
-          cdn_no: editFields.find(f => f.grid === 'CDN')?.value || '',
+        table = 'cdn'
+        payload = {
+          cdn_no:  editFields.find(f => f.grid === 'CDN')?.value || '',
           details: data,
           pdf_url: activeDoc.driveLink,
-          status: 'pending',
-        })
+          status:  'pending',
+        }
       }
+
+      if (table) {
+        const res = await fetch('/api/save-document', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            doc_type: active,
+            file_name: activeDoc.fileName,
+            file_url: '',
+            drive_url: activeDoc.driveLink,
+            extracted_data: data,
+          }),
+        })
+        const d = await res.json()
+        if (!res.ok) throw new Error(d.error)
+      }
+
       setDocs(prev => ({ ...prev, [active]: { ...prev[active]!, saved: true } }))
-      setStatus('✓ Data saved to database')
+      setMsg('✓ Data saved to database', 'ok')
+    } catch (e: any) {
+      setMsg(`✗ Save failed: ${e.message}`, 'err')
     } finally {
       setSaving(false)
     }
@@ -139,6 +203,8 @@ export default function DocumentsPage() {
   function updateField(idx: number, val: string) {
     setEditFields(prev => prev.map((f, i) => i === idx ? { ...f, value: val } : f))
   }
+
+  const statusColor = statusType === 'err' ? 'text-red-600' : statusType === 'warn' ? 'text-amber-600' : 'text-green-600'
 
   return (
     <AdminLayout>
@@ -155,7 +221,12 @@ export default function DocumentsPage() {
             const uploaded = !!docs[d.key]
             return (
               <button key={d.key}
-                onClick={() => { setActive(d.key); setEditFields(docs[d.key]?.fields || []); setStatus('') }}
+                onClick={() => {
+                  setActive(d.key)
+                  setEditFields(docs[d.key]?.fields || [])
+                  setRawText('')
+                  setStatus('')
+                }}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${
                   active === d.key ? 'text-white border-transparent shadow-md' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
                 }`}
@@ -177,8 +248,10 @@ export default function DocumentsPage() {
             </h2>
 
             <div
-              onClick={() => fileRef.current?.click()}
-              className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-green-300 hover:bg-green-50 transition-colors">
+              onClick={() => { if (!uploading && !extracting) fileRef.current?.click() }}
+              className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
+                uploading || extracting ? 'border-gray-200 cursor-default' : 'border-gray-200 cursor-pointer hover:border-green-300 hover:bg-green-50'
+              }`}>
               {uploading || extracting || driveUploading ? (
                 <div className="flex flex-col items-center gap-3">
                   <Loader size={32} className="animate-spin text-green-500"/>
@@ -201,7 +274,12 @@ export default function DocumentsPage() {
             <input ref={fileRef} type="file" accept=".pdf" className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = '' }}/>
 
-            {/* Status & Links */}
+            {/* Status message */}
+            {status && !uploading && !extracting && (
+              <p className={`text-xs mt-3 px-1 font-medium ${statusColor}`}>{status}</p>
+            )}
+
+            {/* Drive link & saved badge */}
             {activeDoc && (
               <div className="mt-4 space-y-2">
                 {activeDoc.driveLink && (
@@ -214,14 +292,10 @@ export default function DocumentsPage() {
                 {activeDoc.saved && (
                   <div className="flex items-center gap-2 text-xs text-green-600 bg-green-50 px-3 py-2 rounded-lg">
                     <CheckCircle size={12}/>
-                    Data saved to database
+                    Saved to database
                   </div>
                 )}
               </div>
-            )}
-
-            {status && !uploading && !extracting && (
-              <p className="text-xs text-gray-500 mt-2 px-1">{status}</p>
             )}
           </div>
 
@@ -229,7 +303,12 @@ export default function DocumentsPage() {
           {activeDef.canExtract ? (
             <div className="card">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="font-semibold text-gray-900">Extracted Grid Fields</h2>
+                <h2 className="font-semibold text-gray-900">
+                  Extracted Fields
+                  {editFields.length > 0 && (
+                    <span className="ml-2 text-xs font-normal text-gray-400">({editFields.length} fields)</span>
+                  )}
+                </h2>
                 <div className="flex gap-2">
                   {rawText && (
                     <button onClick={() => setShowRaw(!showRaw)}
@@ -248,21 +327,26 @@ export default function DocumentsPage() {
                 </div>
               </div>
 
-              {showRaw ? (
+              {extracting ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-3">
+                  <Loader size={28} className="animate-spin text-green-500"/>
+                  <p className="text-sm text-gray-400">Extracting PDF fields...</p>
+                </div>
+              ) : showRaw ? (
                 <pre className="text-xs bg-gray-50 rounded-lg p-3 overflow-auto max-h-96 text-gray-700 whitespace-pre-wrap">{rawText}</pre>
               ) : editFields.length > 0 ? (
                 <div className="overflow-auto max-h-96">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-gray-50">
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-12">Grid</th>
+                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-12">Box</th>
                         <th className="text-left px-2 py-2 text-gray-500 font-medium w-36">Field</th>
                         <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
                       </tr>
                     </thead>
                     <tbody>
                       {editFields.map((f, i) => (
-                        <tr key={i} className="border-t border-gray-50 hover:bg-gray-50">
+                        <tr key={i} className={`border-t border-gray-50 hover:bg-gray-50 ${f.value ? '' : 'opacity-50'}`}>
                           <td className="px-2 py-1.5">
                             <span className="inline-block bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-mono text-xs">{f.grid}</span>
                           </td>
@@ -293,9 +377,9 @@ export default function DocumentsPage() {
           )}
         </div>
 
-        {/* All Uploads Summary */}
+        {/* Session Summary */}
         <div className="card mt-6">
-          <h2 className="font-semibold text-gray-900 mb-4">This Session Uploads</h2>
+          <h2 className="font-semibold text-gray-900 mb-4">This Session</h2>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {DOC_TYPES.map(d => {
               const doc = docs[d.key]
@@ -329,7 +413,7 @@ export default function DocumentsPage() {
 function fileToBase64(file: File): Promise<string> {
   return new Promise((res, rej) => {
     const reader = new FileReader()
-    reader.onload = () => res((reader.result as string).split(',')[1])
+    reader.onload  = () => res((reader.result as string).split(',')[1])
     reader.onerror = rej
     reader.readAsDataURL(file)
   })
