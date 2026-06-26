@@ -5,13 +5,14 @@ import { supabase } from '@/lib/supabase'
 import {
   LayoutDashboard, Ship, FileText, Package,
   BarChart2, Users, Settings, LogOut,
-  ChevronLeft, ChevronRight, Shield, DollarSign
+  ChevronLeft, ChevronRight, Shield, DollarSign, Anchor
 } from 'lucide-react'
 
 const navItems = [
   { href: '/admin',            icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/shipments',  icon: Ship,            label: 'Shipments' },
   { href: '/admin/documents',  icon: Package,         label: 'Documents' },
+  { href: '/admin/boat-note',  icon: Anchor,          label: 'Boat Notes' },
   { href: '/admin/financials', icon: DollarSign,      label: 'Financials' },
   { href: '/admin/reports',    icon: BarChart2,       label: 'Reports' },
   { href: '/admin/users',      icon: Users,           label: 'Users' },

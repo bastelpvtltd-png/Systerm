@@ -13,10 +13,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const buffer = Buffer.from(base64, 'base64')
     const parsed = await pdfParse(buffer)
     const text = parsed.text
+    const { isProbablyScanned } = require('@/lib/extractPdf')
 
-    // Log first 800 chars so we can see PDF structure in Vercel logs
     console.log(`[extract-pdf] docType=${docType} textLen=${text.length}`)
-    console.log(`[extract-pdf] RAW:\n${text.slice(0, 800)}`)
+
+    if (isProbablyScanned(text)) {
+      return res.json({
+        fields: [],
+        rawText: text,
+        scanned: true,
+        warning: 'This PDF appears to be a scanned image. Text extraction is not possible. Please use Excel import or manual entry.',
+      })
+    }
 
     let fields: any[] = []
     if (docType === 'cusdec') fields = extractCusdec(text)
@@ -24,8 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const filled = fields.filter((f: any) => f.value).length
     console.log(`[extract-pdf] filled ${filled}/${fields.length} fields`)
-
-    res.json({ fields, rawText: text })
+    res.json({ fields, rawText: text, scanned: false })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
   }

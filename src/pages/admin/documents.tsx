@@ -123,12 +123,17 @@ export default function DocumentsPage() {
           })
           const json = await res.json()
           if (!res.ok) throw new Error(json.error || 'Extraction failed')
-          extracted = json.fields || []
-          setRawText(json.rawText || '')
-          setFields(extracted)
-          const filled = extracted.filter(f => f.value).length
-          setStatusMsg(`✓ Extracted ${filled}/${extracted.length} fields`)
-          if (filled === 0) logError('extract-pdf', '0 fields matched — check Raw Text for PDF structure')
+          if (json.scanned) {
+            logError('extract-pdf', json.warning || 'PDF is scanned image — cannot extract text')
+            setStatusMsg('⚠ Scanned PDF — no text extractable. Use "Import Excel" to load data.')
+          } else {
+            extracted = json.fields || []
+            setRawText(json.rawText || '')
+            setFields(extracted)
+            const filled = extracted.filter(f => f.value).length
+            setStatusMsg(`✓ Extracted ${filled}/${extracted.length} fields`)
+            if (filled === 0) logError('extract-pdf', '0 fields matched — PDF may be scanned. Use Excel import.')
+          }
         } catch (e: any) {
           logError('extract-pdf', e.message)
           setStatusMsg(`✗ Extract failed: ${e.message}`)
