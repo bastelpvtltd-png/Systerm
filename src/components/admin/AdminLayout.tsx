@@ -11,8 +11,7 @@ import {
 const navItems = [
   { href: '/admin',            icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/shipments',  icon: Ship,            label: 'Shipments' },
-  { href: '/admin/cusdec',     icon: FileText,        label: 'CUSDEC' },
-  { href: '/admin/documents',   icon: Package,         label: 'Documents' },
+  { href: '/admin/documents',  icon: Package,         label: 'Documents' },
   { href: '/admin/financials', icon: DollarSign,      label: 'Financials' },
   { href: '/admin/reports',    icon: BarChart2,       label: 'Reports' },
   { href: '/admin/users',      icon: Users,           label: 'Users' },
