@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
 import { supabase } from '@/lib/supabase'
-import { Upload, FileText, Package, Barcode, Ship, Copy, CheckCircle, Loader, X, Save, Eye } from 'lucide-react'
+import { Upload, FileText, Package, ScanLine, Ship, Copy, CheckCircle, Loader, Save, Eye } from 'lucide-react'
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy'
 type PdfField = { grid: string; label: string; value: string }
@@ -9,7 +9,7 @@ type PdfField = { grid: string; label: string; value: string }
 const DOC_TYPES: { key: DocType; label: string; icon: any; color: string; canExtract: boolean }[] = [
   { key: 'cusdec',     label: 'CUSDEC',       icon: FileText, color: '#1B3A5C', canExtract: true  },
   { key: 'cdn',        label: 'CDN',           icon: Package,  color: '#22A87A', canExtract: true  },
-  { key: 'barcode',    label: 'Barcode',       icon: Barcode,  color: '#f59e0b', canExtract: false },
+  { key: 'barcode',    label: 'Barcode',       icon: ScanLine, color: '#f59e0b', canExtract: false },
   { key: 'boat_note',  label: 'Boat Note',     icon: Ship,     color: '#3b82f6', canExtract: false },
   { key: 'party_copy', label: "Party's Copy",  icon: Copy,     color: '#8b5cf6', canExtract: false },
 ]
