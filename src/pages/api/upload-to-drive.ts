@@ -1,42 +1,34 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { google } from 'googleapis'
-import { Readable } from 'stream'
+import { createClient } from '@supabase/supabase-js'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   try {
     const { base64, fileName, mimeType = 'application/pdf' } = req.body
+    if (!base64 || !fileName) return res.status(400).json({ error: 'Missing base64 or fileName' })
 
-    const saJson = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}')
-    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || ''
-
-    const auth = new google.auth.GoogleAuth({
-      credentials: saJson,
-      scopes: ['https://www.googleapis.com/auth/drive.file'],
-    })
-
-    const drive = google.drive({ version: 'v3', auth })
     const buffer = Buffer.from(base64, 'base64')
-    const stream = Readable.from(buffer)
+    const path = `uploads/${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`
 
-    const uploaded = await drive.files.create({
-      requestBody: {
-        name: fileName,
-        parents: [folderId],
-      },
-      media: { mimeType, body: stream },
-      fields: 'id, webViewLink',
-    })
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from('export-docs')
+      .upload(path, buffer, { contentType: mimeType, upsert: false })
 
-    // Make file publicly viewable
-    await drive.permissions.create({
-      fileId: uploaded.data.id!,
-      requestBody: { role: 'reader', type: 'anyone' },
-    })
+    if (uploadError) throw new Error(uploadError.message)
 
-    res.json({ driveId: uploaded.data.id, driveLink: uploaded.data.webViewLink })
+    const { data: urlData } = supabaseAdmin.storage
+      .from('export-docs')
+      .getPublicUrl(path)
+
+    const publicUrl = urlData?.publicUrl || ''
+    res.json({ driveId: path, driveLink: publicUrl })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
   }
