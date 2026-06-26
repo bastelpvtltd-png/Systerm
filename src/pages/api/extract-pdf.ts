@@ -1,6 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require('pdf-parse')
+import pdfParse from 'pdf-parse'
 import { extractCdn, extractCusdec } from '@/lib/extractPdf'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
