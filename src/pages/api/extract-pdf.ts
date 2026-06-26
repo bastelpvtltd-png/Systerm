@@ -14,9 +14,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const parsed = await pdfParse(buffer)
     const text = parsed.text
 
-    let fields = []
+    // Log first 800 chars so we can see PDF structure in Vercel logs
+    console.log(`[extract-pdf] docType=${docType} textLen=${text.length}`)
+    console.log(`[extract-pdf] RAW:\n${text.slice(0, 800)}`)
+
+    let fields: any[] = []
     if (docType === 'cusdec') fields = extractCusdec(text)
     else if (docType === 'cdn') fields = extractCdn(text)
+
+    const filled = fields.filter((f: any) => f.value).length
+    console.log(`[extract-pdf] filled ${filled}/${fields.length} fields`)
 
     res.json({ fields, rawText: text })
   } catch (err: any) {
