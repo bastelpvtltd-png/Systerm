@@ -2,7 +2,6 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
 import { Upload, FileText, RotateCcw, ChevronLeft, ChevronRight, Grid } from 'lucide-react'
 
-// ─── Load pdf.js from CDN ─────────────────────────────────────────────────────
 async function loadPdfJs(): Promise<any> {
   const win = window as any
   if (win.__pdfjsLib) return win.__pdfjsLib
@@ -30,14 +29,13 @@ async function renderPage(pdfDoc: any, pageNum: number, canvas: HTMLCanvasElemen
   await page.render({ canvasContext: ctx, viewport }).promise
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
 export default function GridMapPage() {
   const canvasRef    = useRef<HTMLCanvasElement>(null)
+  const wrapRef      = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pdfDocRef    = useRef<any>(null)
 
-  const [pdfReady, setPdfReady]       = useState(false)
-  const [loading, setLoading]         = useState(false)
+  const [stage, setStage]             = useState<'idle' | 'loading' | 'ready'>('idle')
   const [fileName, setFileName]       = useState('')
   const [totalPages, setTotalPages]   = useState(1)
   const [currentPage, setCurrentPage] = useState(1)
@@ -46,34 +44,29 @@ export default function GridMapPage() {
   const [rows, setRows]               = useState(6)
   const [hoveredCell, setHoveredCell] = useState<number | null>(null)
   const [selectedCell, setSelectedCell] = useState<number | null>(null)
+  const [wrapSize, setWrapSize]       = useState({ w: 0, h: 0 })
 
-  // canvas size tracked so overlay SVG matches exactly
-  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
-
-  // Observe canvas size changes (scale changes on render)
+  // Measure wrapper div size (not canvas pixel size) for SVG overlay
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const el = wrapRef.current
+    if (!el) return
     const obs = new ResizeObserver(() => {
-      setCanvasSize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
+      setWrapSize({ w: el.offsetWidth, h: el.offsetHeight })
     })
-    obs.observe(canvas)
+    obs.observe(el)
     return () => obs.disconnect()
-  }, [pdfReady])
+  }, [stage])
 
   const goToPage = useCallback(async (page: number) => {
     if (!pdfDocRef.current || !canvasRef.current) return
     const p = Math.max(1, Math.min(page, totalPages))
     setCurrentPage(p)
     await renderPage(pdfDocRef.current, p, canvasRef.current)
-    const c = canvasRef.current
-    setCanvasSize({ w: c.offsetWidth, h: c.offsetHeight })
   }, [totalPages])
 
   const processFile = useCallback(async (file: File) => {
-    if (!file || file.type !== 'application/pdf') { alert('PDF file ekak danna'); return }
-    setLoading(true)
-    setPdfReady(false)
+    if (!file || file.type !== 'application/pdf') { alert('PDF file ekak denna'); return }
+    setStage('loading')
     setFileName(file.name)
     setSelectedCell(null)
     try {
@@ -83,16 +76,18 @@ export default function GridMapPage() {
       pdfDocRef.current = pdf
       setTotalPages(pdf.numPages)
       setCurrentPage(1)
+      setStage('ready')
+      // render after state update so canvas is in DOM
+      await new Promise(r => setTimeout(r, 50))
       if (canvasRef.current) {
         await renderPage(pdf, 1, canvasRef.current)
-        const c = canvasRef.current
-        setCanvasSize({ w: c.offsetWidth, h: c.offsetHeight })
-        setPdfReady(true)
+        if (wrapRef.current) {
+          setWrapSize({ w: wrapRef.current.offsetWidth, h: wrapRef.current.offsetHeight })
+        }
       }
     } catch (err: any) {
       alert('Error: ' + err.message)
-    } finally {
-      setLoading(false)
+      setStage('idle')
     }
   }, [])
 
@@ -106,34 +101,28 @@ export default function GridMapPage() {
   }, [processFile])
 
   const reset = () => {
-    setPdfReady(false); setFileName(''); pdfDocRef.current = null
+    setStage('idle'); setFileName(''); pdfDocRef.current = null
     setTotalPages(1); setCurrentPage(1); setSelectedCell(null)
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext('2d')
-      ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height)
-    }
   }
 
   const totalCells = rows * cols
-  // cell number given row r (0-indexed) and col c (0-indexed) → left-to-right, top-to-bottom
-  const cellNum = (r: number, c: number) => r * cols + c + 1
-
-  const cellW = canvasSize.w / cols
-  const cellH = canvasSize.h / rows
+  const cellNum    = (r: number, c: number) => r * cols + c + 1
+  const cellW      = wrapSize.w / cols
+  const cellH      = wrapSize.h / rows
 
   return (
     <AdminLayout>
       <div className="p-6 min-h-screen flex flex-col">
 
-        {/* ── Header ── */}
+        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-xl font-bold text-gray-900">Grid Mapper</h1>
             <p className="text-gray-400 text-sm mt-0.5">
-              PDF upload karanna — numbered red grid overlay show wanawa
+              PDF upload → numbered red grid overlay
             </p>
           </div>
-          {pdfReady && (
+          {stage === 'ready' && (
             <button onClick={reset}
               className="flex items-center gap-2 text-sm text-gray-400 hover:text-red-500 transition-colors">
               <RotateCcw size={14}/> New Upload
@@ -141,8 +130,8 @@ export default function GridMapPage() {
           )}
         </div>
 
-        {/* ── Upload zone ── */}
-        {!pdfReady && !loading && (
+        {/* Upload zone — only when idle */}
+        {stage === 'idle' && (
           <div
             onDragOver={e => { e.preventDefault(); setDragOver(true) }}
             onDragLeave={() => setDragOver(false)}
@@ -164,8 +153,8 @@ export default function GridMapPage() {
           </div>
         )}
 
-        {/* ── Loading ── */}
-        {loading && (
+        {/* Loading */}
+        {stage === 'loading' && (
           <div className="flex-1 bg-white rounded-2xl flex flex-col items-center justify-center border">
             <div className="w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full animate-spin mb-4"/>
             <p className="text-gray-600 font-medium">PDF render wenawa...</p>
@@ -173,11 +162,11 @@ export default function GridMapPage() {
           </div>
         )}
 
-        {/* ── PDF + Grid view ── */}
-        {pdfReady && !loading && (
+        {/* ── PDF + Grid panel — always mounted when ready so canvasRef stays valid ── */}
+        {stage === 'ready' && (
           <div className="flex gap-5 flex-1" style={{ minHeight: '80vh' }}>
 
-            {/* ─── LEFT: PDF canvas with red grid overlay ─── */}
+            {/* LEFT: canvas + overlay */}
             <div className="flex-1 bg-white rounded-xl border flex flex-col overflow-hidden">
 
               {/* Toolbar */}
@@ -185,14 +174,13 @@ export default function GridMapPage() {
                 <FileText size={13} className="text-gray-400"/>
                 <span className="font-medium text-gray-700 truncate max-w-xs">{fileName}</span>
 
-                {/* Page nav */}
                 {totalPages > 1 && (
                   <div className="flex items-center gap-1 ml-2">
                     <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage <= 1}
                       className="p-1 rounded hover:bg-gray-200 disabled:opacity-30">
                       <ChevronLeft size={13}/>
                     </button>
-                    <span className="px-2 font-mono text-gray-600">{currentPage} / {totalPages}</span>
+                    <span className="px-2 font-mono">{currentPage} / {totalPages}</span>
                     <button onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= totalPages}
                       className="p-1 rounded hover:bg-gray-200 disabled:opacity-30">
                       <ChevronRight size={13}/>
@@ -201,22 +189,17 @@ export default function GridMapPage() {
                 )}
 
                 <div className="ml-auto flex items-center gap-3">
-                  {/* Grid controls */}
                   <label className="flex items-center gap-1 text-gray-500">
                     Cols
-                    <input
-                      type="number" min={1} max={20} value={cols}
+                    <input type="number" min={1} max={20} value={cols}
                       onChange={e => { setCols(Math.max(1, Math.min(20, +e.target.value))); setSelectedCell(null) }}
-                      className="w-12 px-1 py-0.5 rounded border border-gray-200 text-center text-xs focus:outline-none focus:border-red-400"
-                    />
+                      className="w-12 px-1 py-0.5 rounded border border-gray-200 text-center text-xs focus:outline-none focus:border-red-400"/>
                   </label>
                   <label className="flex items-center gap-1 text-gray-500">
                     Rows
-                    <input
-                      type="number" min={1} max={30} value={rows}
+                    <input type="number" min={1} max={30} value={rows}
                       onChange={e => { setRows(Math.max(1, Math.min(30, +e.target.value))); setSelectedCell(null) }}
-                      className="w-12 px-1 py-0.5 rounded border border-gray-200 text-center text-xs focus:outline-none focus:border-red-400"
-                    />
+                      className="w-12 px-1 py-0.5 rounded border border-gray-200 text-center text-xs focus:outline-none focus:border-red-400"/>
                   </label>
                   <span className="text-gray-400">{totalCells} cells</span>
                 </div>
@@ -228,68 +211,45 @@ export default function GridMapPage() {
                 )}
               </div>
 
-              {/* Canvas + SVG overlay */}
+              {/* Canvas area */}
               <div className="flex-1 overflow-auto bg-gray-200">
-                <div className="relative inline-block w-full">
+                {/* wrapRef div — same display size as the canvas image */}
+                <div className="relative w-full" ref={wrapRef}>
 
-                  {/* PDF canvas */}
-                  <canvas
-                    ref={canvasRef}
-                    className="block w-full shadow-md"
-                  />
+                  {/* PDF canvas — always in DOM when stage=ready */}
+                  <canvas ref={canvasRef} className="block w-full shadow-md"/>
 
-                  {/* Red grid SVG overlay — sits exactly on top */}
-                  {canvasSize.w > 0 && (
+                  {/* SVG grid overlay */}
+                  {wrapSize.w > 0 && wrapSize.h > 0 && (
                     <svg
                       className="absolute inset-0 pointer-events-none"
-                      width={canvasSize.w}
-                      height={canvasSize.h}
-                      viewBox={`0 0 ${canvasSize.w} ${canvasSize.h}`}
-                      xmlns="http://www.w3.org/2000/svg"
+                      width={wrapSize.w}
+                      height={wrapSize.h}
+                      viewBox={`0 0 ${wrapSize.w} ${wrapSize.h}`}
                     >
-                      {/* Cell fills + numbers (pointer-events via foreignObject trick: use rects with events) */}
+                      {/* Cell highlights */}
                       {Array.from({ length: rows }, (_, r) =>
                         Array.from({ length: cols }, (_, c) => {
-                          const num  = cellNum(r, c)
-                          const x    = c * cellW
-                          const y    = r * cellH
-                          const isHovered  = hoveredCell === num
-                          const isSelected = selectedCell === num
+                          const num = cellNum(r, c)
+                          const x   = c * cellW
+                          const y   = r * cellH
+                          const sel = selectedCell === num
+                          const hov = hoveredCell === num
+                          const badgeW = Math.min(cellW - 2, cols > 8 ? 18 : 28)
+                          const badgeH = Math.min(cellH - 2, rows > 12 ? 12 : 18)
+                          const fs    = badgeW < 20 ? 7 : 9
                           return (
                             <g key={num}>
-                              {/* Cell background highlight */}
-                              <rect
-                                x={x} y={y} width={cellW} height={cellH}
-                                fill={
-                                  isSelected
-                                    ? 'rgba(220,38,38,0.18)'
-                                    : isHovered
-                                      ? 'rgba(220,38,38,0.08)'
-                                      : 'rgba(0,0,0,0)'
-                                }
-                                style={{ pointerEvents: 'none' }}
-                              />
-                              {/* Number badge background */}
-                              <rect
-                                x={x + 1} y={y + 1}
-                                width={cellW < 60 ? Math.min(cellW - 2, 28) : 32}
-                                height={cellH < 30 ? Math.min(cellH - 2, 16) : 18}
-                                rx={2}
-                                fill={isSelected ? '#dc2626' : isHovered ? '#ef4444' : '#dc2626'}
-                                style={{ pointerEvents: 'none' }}
-                              />
-                              {/* Number text */}
+                              <rect x={x} y={y} width={cellW} height={cellH}
+                                fill={sel ? 'rgba(220,38,38,0.18)' : hov ? 'rgba(220,38,38,0.08)' : 'none'}
+                                style={{ pointerEvents: 'none' }}/>
+                              <rect x={x + 1} y={y + 1} width={badgeW} height={badgeH} rx={2}
+                                fill="#dc2626" style={{ pointerEvents: 'none' }}/>
                               <text
-                                x={x + (cellW < 60 ? Math.min(cellW - 2, 28) / 2 : 16)}
-                                y={y + (cellH < 30 ? Math.min(cellH - 2, 16) / 2 : 9) + 1}
-                                textAnchor="middle"
-                                dominantBaseline="middle"
-                                fill="white"
-                                fontSize={cellW < 50 ? 7 : cellH < 25 ? 7 : 9}
-                                fontWeight="bold"
-                                fontFamily="monospace"
-                                style={{ pointerEvents: 'none', userSelect: 'none' }}
-                              >
+                                x={x + 1 + badgeW / 2} y={y + 1 + badgeH / 2}
+                                textAnchor="middle" dominantBaseline="middle"
+                                fill="white" fontSize={fs} fontWeight="bold" fontFamily="monospace"
+                                style={{ pointerEvents: 'none', userSelect: 'none' }}>
                                 {num}
                               </text>
                             </g>
@@ -297,66 +257,46 @@ export default function GridMapPage() {
                         })
                       )}
 
-                      {/* Vertical red grid lines */}
+                      {/* Vertical lines */}
                       {Array.from({ length: cols - 1 }, (_, i) => (
-                        <line
-                          key={`v${i}`}
-                          x1={(i + 1) * cellW} y1={0}
-                          x2={(i + 1) * cellW} y2={canvasSize.h}
-                          stroke="#dc2626" strokeWidth={1.5}
-                          style={{ pointerEvents: 'none' }}
-                        />
+                        <line key={`v${i}`}
+                          x1={(i+1)*cellW} y1={0} x2={(i+1)*cellW} y2={wrapSize.h}
+                          stroke="#dc2626" strokeWidth={1.5} style={{ pointerEvents: 'none' }}/>
                       ))}
 
-                      {/* Horizontal red grid lines */}
+                      {/* Horizontal lines */}
                       {Array.from({ length: rows - 1 }, (_, i) => (
-                        <line
-                          key={`h${i}`}
-                          x1={0}           y1={(i + 1) * cellH}
-                          x2={canvasSize.w} y2={(i + 1) * cellH}
-                          stroke="#dc2626" strokeWidth={1.5}
-                          style={{ pointerEvents: 'none' }}
-                        />
+                        <line key={`h${i}`}
+                          x1={0} y1={(i+1)*cellH} x2={wrapSize.w} y2={(i+1)*cellH}
+                          stroke="#dc2626" strokeWidth={1.5} style={{ pointerEvents: 'none' }}/>
                       ))}
 
-                      {/* Outer border */}
-                      <rect
-                        x={0} y={0}
-                        width={canvasSize.w} height={canvasSize.h}
-                        fill="none"
-                        stroke="#dc2626" strokeWidth={2}
-                        style={{ pointerEvents: 'none' }}
-                      />
+                      {/* Border */}
+                      <rect x={0} y={0} width={wrapSize.w} height={wrapSize.h}
+                        fill="none" stroke="#dc2626" strokeWidth={2}
+                        style={{ pointerEvents: 'none' }}/>
                     </svg>
                   )}
 
-                  {/* Invisible click/hover capture layer on top of SVG */}
-                  {canvasSize.w > 0 && (
+                  {/* Interaction layer */}
+                  {wrapSize.w > 0 && (
                     <div
                       className="absolute inset-0"
-                      style={{ width: canvasSize.w, height: canvasSize.h, cursor: 'crosshair' }}
+                      style={{ cursor: 'crosshair' }}
                       onMouseMove={e => {
                         const rect = e.currentTarget.getBoundingClientRect()
-                        const mx = e.clientX - rect.left
-                        const my = e.clientY - rect.top
-                        const c = Math.floor(mx / cellW)
-                        const r = Math.floor(my / cellH)
-                        if (c >= 0 && c < cols && r >= 0 && r < rows) {
-                          setHoveredCell(cellNum(r, c))
-                        } else {
-                          setHoveredCell(null)
-                        }
+                        const c = Math.floor((e.clientX - rect.left) / cellW)
+                        const r = Math.floor((e.clientY - rect.top)  / cellH)
+                        setHoveredCell(c >= 0 && c < cols && r >= 0 && r < rows ? cellNum(r, c) : null)
                       }}
                       onMouseLeave={() => setHoveredCell(null)}
                       onClick={e => {
                         const rect = e.currentTarget.getBoundingClientRect()
-                        const mx = e.clientX - rect.left
-                        const my = e.clientY - rect.top
-                        const c = Math.floor(mx / cellW)
-                        const r = Math.floor(my / cellH)
+                        const c = Math.floor((e.clientX - rect.left) / cellW)
+                        const r = Math.floor((e.clientY - rect.top)  / cellH)
                         if (c >= 0 && c < cols && r >= 0 && r < rows) {
-                          const num = cellNum(r, c)
-                          setSelectedCell(prev => prev === num ? null : num)
+                          const n = cellNum(r, c)
+                          setSelectedCell(prev => prev === n ? null : n)
                         }
                       }}
                     />
@@ -365,18 +305,17 @@ export default function GridMapPage() {
               </div>
             </div>
 
-            {/* ─── RIGHT: Grid reference panel ─── */}
-            <div className="w-64 bg-white rounded-xl border flex flex-col overflow-hidden flex-shrink-0">
+            {/* RIGHT: reference panel */}
+            <div className="w-60 bg-white rounded-xl border flex flex-col overflow-hidden flex-shrink-0">
               <div className="px-4 py-3 border-b bg-gray-50">
                 <p className="text-sm font-semibold text-gray-700">Grid Reference</p>
-                <p className="text-xs text-gray-400 mt-0.5">{rows} rows × {cols} cols = {totalCells} cells</p>
+                <p className="text-xs text-gray-400 mt-0.5">{rows} × {cols} = {totalCells} cells</p>
               </div>
 
-              {/* Selected cell info */}
               {selectedCell !== null ? (
                 <div className="p-4 border-b">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="w-8 h-8 rounded-lg bg-red-600 text-white flex items-center justify-center text-sm font-bold">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="w-8 h-8 rounded-lg bg-red-600 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
                       {selectedCell}
                     </span>
                     <div>
@@ -386,54 +325,43 @@ export default function GridMapPage() {
                       </p>
                     </div>
                   </div>
-                  <div className="bg-red-50 border border-red-100 rounded-lg p-2.5 text-xs text-red-700 font-mono">
+                  <div className="bg-red-50 border border-red-100 rounded-lg p-2.5 text-xs text-red-700 font-mono leading-relaxed">
                     extract from Grid #{selectedCell}
                   </div>
-                  <button
-                    onClick={() => setSelectedCell(null)}
-                    className="mt-2 text-xs text-gray-400 hover:text-gray-600 w-full text-center"
-                  >
+                  <button onClick={() => setSelectedCell(null)}
+                    className="mt-2 text-xs text-gray-400 hover:text-gray-600 w-full text-center">
                     Deselect
                   </button>
                 </div>
               ) : (
                 <div className="p-4 border-b text-xs text-gray-400 italic">
-                  PDF ekaka grid ekak click karanna...
+                  Grid cell ekak click karanna...
                 </div>
               )}
 
-              {/* Mini grid map */}
               <div className="flex-1 overflow-auto p-3">
                 <p className="text-xs text-gray-400 mb-2 font-medium">All cells</p>
-                <div
-                  className="grid gap-px"
-                  style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-                >
+                <div className="grid gap-px" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
                   {Array.from({ length: totalCells }, (_, i) => {
-                    const num = i + 1
-                    const isSelected = selectedCell === num
+                    const n = i + 1
                     return (
-                      <button
-                        key={num}
-                        onClick={() => setSelectedCell(prev => prev === num ? null : num)}
+                      <button key={n}
+                        onClick={() => setSelectedCell(prev => prev === n ? null : n)}
                         className={`aspect-square flex items-center justify-center text-[9px] font-bold rounded-sm transition-colors ${
-                          isSelected
+                          selectedCell === n
                             ? 'bg-red-600 text-white'
                             : 'bg-gray-100 text-gray-500 hover:bg-red-100 hover:text-red-700'
-                        }`}
-                        title={`Grid #${num}`}
-                      >
-                        {num}
+                        }`}>
+                        {n}
                       </button>
                     )
                   })}
                 </div>
               </div>
 
-              {/* Upload another */}
               <div className="p-3 border-t">
                 <label className="flex items-center justify-center gap-2 w-full py-2 text-xs text-gray-500 rounded-lg border border-dashed border-gray-300 hover:border-red-400 hover:text-red-600 transition-colors cursor-pointer">
-                  <Upload size={12}/> Upload another PDF
+                  <Upload size={12}/> Wenama PDF
                   <input type="file" accept=".pdf" className="hidden" onChange={handleFileInput}/>
                 </label>
               </div>
