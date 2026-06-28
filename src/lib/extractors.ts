@@ -479,20 +479,9 @@ export function extractByType(docType: DocType, text: string): ExtractedField[] 
 
 // ─── Text extraction (server-side) ────────────────────────────────────────────
 export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
-  try {
-    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js')
-    const pdf = await (pdfjsLib as any).getDocument({ data: new Uint8Array(buffer) }).promise
-    let text = ''
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page    = await pdf.getPage(i)
-      const content = await page.getTextContent()
-      text += content.items.map((it: any) => it.str).join(' ') + '\n'
-    }
-    return text
-  } catch {
-    const pdfParse = require('pdf-parse')
-    return (await pdfParse(buffer)).text
-  }
+  const pdfParse = require('pdf-parse')
+  const result = await pdfParse(buffer)
+  return result.text
 }
 
 export function isScanned(text: string): boolean {
