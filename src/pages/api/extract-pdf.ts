@@ -3,24 +3,9 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
-  try {
-    // Try pdfjs-dist first (better extraction, same engine as Python pdfplumber)
-    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js')
-    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
-    let fullText = ''
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i)
-      const content = await page.getTextContent()
-      const pageText = content.items.map((item: any) => item.str).join(' ')
-      fullText += pageText + '\n'
-    }
-    return fullText
-  } catch (e) {
-    // Fallback to pdf-parse
-    const pdfParse = require('pdf-parse')
-    const parsed = await pdfParse(buffer)
-    return parsed.text
-  }
+  const pdfParse = require('pdf-parse')
+  const parsed = await pdfParse(buffer)
+  return parsed.text
 }
 
 // Port of Python isProbablyScanned — textLen < 50 chars means scanned
