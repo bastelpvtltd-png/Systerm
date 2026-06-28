@@ -282,11 +282,11 @@ export default function DocCheckPage() {
                 {DOC_LABELS[result.docType] ?? result.docType}
               </span>
               {result.scanned && (
-                <span className="flex items-center gap-1 text-orange-600 text-xs">
-                  <AlertCircle size={13}/> Scanned PDF
+                <span className="flex items-center gap-1 text-orange-600 text-xs font-medium">
+                  <AlertCircle size={13}/> Scanned PDF — text extract karaganna bari
                 </span>
               )}
-              {result.warning && <span className="text-orange-500 text-xs">{result.warning}</span>}
+              {result.warning && <span className="text-orange-400 text-xs ml-1">{result.warning}</span>}
 
               <div className="ml-auto flex items-center gap-2">
                 <button onClick={() => setShowOverlays(p => !p)}
@@ -466,15 +466,21 @@ export default function DocCheckPage() {
                 {/* Table */}
                 <div ref={gridRef} className="flex-1 overflow-auto">
                   {fields.length === 0 ? (
-                    <div className="flex items-center justify-center h-full text-gray-400 p-8 text-center">
-                      <div>
-                        <AlertCircle size={32} className="mx-auto mb-2 opacity-30"/>
-                        <p className="text-sm">
-                          {result.scanned
-                            ? 'Scanned PDF — fields extract karanna ne'
-                            : 'Fields extract nune — document type detect nune'}
-                        </p>
+                    <div className="p-6 text-gray-500 text-sm space-y-3">
+                      <div className="flex items-center gap-2 text-orange-600 font-medium">
+                        <AlertCircle size={16}/>
+                        {result.scanned
+                          ? 'Scanned PDF — text extract karaganna bari'
+                          : 'Fields extract nune — document type detect nune'}
                       </div>
+                      {result.rawText && (
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">Extract una raw text (debug):</p>
+                          <pre className="text-xs bg-gray-50 rounded-lg p-3 overflow-auto max-h-96 text-gray-600 whitespace-pre-wrap border">
+                            {result.rawText || '(empty — no text extracted)'}
+                          </pre>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <table className="w-full text-sm">

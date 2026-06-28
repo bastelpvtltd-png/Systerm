@@ -14,11 +14,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const buffer  = Buffer.from(base64, 'base64')
     const rawText = await extractTextFromPdf(buffer)
+    const wordCount = rawText.trim().split(/\s+/).filter((w: string) => w.length > 2).length
+    console.log(`[smart-detect] textLen=${rawText.length} words=${wordCount} preview="${rawText.slice(0,200).replace(/\n/g,' ')}"`)
 
     if (isScanned(rawText)) {
       return res.json({
-        docType: 'unknown', fields: [], rawText, scanned: true,
-        warning: 'Scanned image PDF — text extraction not possible.',
+        docType: 'unknown', fields: [], rawText: rawText.slice(0, 500), scanned: true,
+        warning: `Scanned image PDF — text extract karaganna bari (words=${wordCount}).`,
       })
     }
 
@@ -28,7 +30,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const filled = fields.filter(f => f.value).length
     console.log(`[smart-detect] type=${docType} forced=${!!forceType} filled=${filled}/${fields.length}`)
 
-    res.json({ docType, fields, rawText: rawText.slice(0, 3000), scanned: false })
+    res.json({ docType, fields, rawText: rawText.slice(0, 5000), scanned: false })
   } catch (err: any) {
     console.error('[smart-detect]', err)
     res.status(500).json({ error: err.message })

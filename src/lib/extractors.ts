@@ -485,5 +485,7 @@ export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 }
 
 export function isScanned(text: string): boolean {
-  return text.trim().split(/\s+/).filter(w => w.length > 2).length < 20
+  // Only flag as scanned if virtually no text at all (< 5 meaningful words)
+  const words = text.trim().split(/\s+/).filter(w => w.length > 2)
+  return words.length < 5
 }
