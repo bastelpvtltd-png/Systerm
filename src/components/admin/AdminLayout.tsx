@@ -6,13 +6,14 @@ import {
   LayoutDashboard, Ship, FileText, Package,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor, ScanLine,
-  Truck, Copy,
+  Truck, Copy, Grid,
 } from 'lucide-react'
 
 const navItems = [
   { href: '/admin',             icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/shipments',   icon: Ship,            label: 'Shipments' },
   { href: '/admin/doc-check',   icon: ScanLine,        label: 'Doc Check' },
+  { href: '/admin/grid-map',    icon: Grid,            label: 'Grid Mapper' },
   { href: '/admin/cusdec',      icon: FileText,        label: 'CUSDEC' },
   { href: '/admin/cdn',         icon: Truck,           label: 'CDN' },
   { href: '/admin/documents',   icon: Package,         label: 'Documents' },
