@@ -5,20 +5,23 @@ import { supabase } from '@/lib/supabase'
 import {
   LayoutDashboard, Ship, FileText, Package,
   BarChart2, Users, Settings, LogOut,
-  ChevronLeft, ChevronRight, Shield, DollarSign, Anchor, ScanLine
+  ChevronLeft, ChevronRight, Shield, DollarSign, Anchor, ScanLine,
+  Truck, Copy,
 } from 'lucide-react'
 
 const navItems = [
-  { href: '/admin',            icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/admin/shipments',  icon: Ship,            label: 'Shipments' },
-  { href: '/admin/doc-check',  icon: ScanLine,        label: 'Doc Check' },
-  { href: '/admin/documents',  icon: Package,         label: 'Documents' },
-  { href: '/admin/boat-note',  icon: Anchor,          label: 'Boat Notes' },
-  { href: '/admin/financials', icon: DollarSign,      label: 'Financials' },
-  { href: '/admin/reports',    icon: BarChart2,       label: 'Reports' },
-  { href: '/admin/users',      icon: Users,           label: 'Users' },
-  { href: '/admin/logs',       icon: Shield,          label: 'Login Logs' },
-  { href: '/admin/settings',   icon: Settings,        label: 'Settings' },
+  { href: '/admin',             icon: LayoutDashboard, label: 'Dashboard' },
+  { href: '/admin/shipments',   icon: Ship,            label: 'Shipments' },
+  { href: '/admin/doc-check',   icon: ScanLine,        label: 'Doc Check' },
+  { href: '/admin/cusdec',      icon: FileText,        label: 'CUSDEC' },
+  { href: '/admin/cdn',         icon: Truck,           label: 'CDN' },
+  { href: '/admin/documents',   icon: Package,         label: 'Documents' },
+  { href: '/admin/boat-note',   icon: Anchor,          label: 'Boat Notes' },
+  { href: '/admin/financials',  icon: DollarSign,      label: 'Financials' },
+  { href: '/admin/reports',     icon: BarChart2,       label: 'Reports' },
+  { href: '/admin/users',       icon: Users,           label: 'Users' },
+  { href: '/admin/logs',        icon: Shield,          label: 'Login Logs' },
+  { href: '/admin/settings',    icon: Settings,        label: 'Settings' },
 ]
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
