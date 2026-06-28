@@ -1,8 +1,11 @@
 node_modules/
 .next/
+.env
 .env.local
 .env*.local
 LOCAL_SETUP_NOTES.txt
+tokens-and-api-calls.txt
+deploy.bat
 next-env.d.ts
 
 .vercel
