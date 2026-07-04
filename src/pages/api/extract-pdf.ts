@@ -1,8 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { createClient } from '@supabase/supabase-js'
 import { detectType } from '@/lib/extractors'
 import { ocrPdf } from '@/lib/ocr'
+import { extractByGrid } from '@/lib/gridExtract'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
 // Maps extractors.ts's DocType values to the doc_type values used by documents.tsx/DB
 const DETECTED_TO_DOC_TYPE: Record<string, string> = {
@@ -250,10 +257,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const detected = detectType(text)
     const detectedDocType = DETECTED_TO_DOC_TYPE[detected] || ''
+    const resolvedType = docType || detectedDocType
 
     console.log(`[extract-pdf] docType=${docType} detected=${detected} ocrApplied=${ocrApplied} textLen=${text.length} preview="${text.slice(0,100).replace(/\n/g,' ')}"`)
 
-    if (isProbablyScanned(text)) {
+    // Prefer a saved Grid Mapper template for this doc type — cropping to the
+    // user-labelled boxes and OCR-ing each one directly from the PDF works even
+    // when whole-page text extraction below finds nothing (scanned/vector PDFs).
+    let fields: any[] = []
+    let gridUsed = false
+    if (resolvedType) {
+      const { data: template } = await supabaseAdmin
+        .from('pdf_templates')
+        .select('id, grid_config, field_map')
+        .eq('doc_type', resolvedType)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (template) {
+        try {
+          const gridFields = await extractByGrid(buffer, template.grid_config, template.field_map)
+          fields = gridFields.map(f => ({ key: `cell_${f.cellNum}`, label: f.label, value: f.value }))
+          gridUsed = true
+        } catch (e: any) {
+          console.error('[extract-pdf] grid extraction failed:', e.message)
+        }
+      }
+    }
+
+    if (!gridUsed && isProbablyScanned(text)) {
       return res.json({
         fields: [],
         rawText: text,
@@ -265,19 +298,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     }
 
-    const resolvedType = docType || detectedDocType
-    let fields: any[] = []
-    if (resolvedType === 'cusdec') {
-      const data = extractCusdecFields(text)
-      fields = toFieldArray(data, resolvedType)
-    } else if (resolvedType === 'cdn') {
-      const data = extractCdnFields(text)
-      fields = toFieldArray(data, resolvedType)
+    if (!gridUsed) {
+      if (resolvedType === 'cusdec') {
+        const data = extractCusdecFields(text)
+        fields = toFieldArray(data, resolvedType)
+      } else if (resolvedType === 'cdn') {
+        const data = extractCdnFields(text)
+        fields = toFieldArray(data, resolvedType)
+      }
     }
 
     const filled = fields.filter((f: any) => f.value).length
-    console.log(`[extract-pdf] filled ${filled}/${fields.length} fields`)
-    res.json({ fields, rawText: text, scanned: false, detectedDocType, ocrApplied })
+    console.log(`[extract-pdf] gridUsed=${gridUsed} filled ${filled}/${fields.length} fields`)
+    res.json({ fields, rawText: text, scanned: false, detectedDocType, ocrApplied, gridUsed })
   } catch (err: any) {
     console.error('[extract-pdf] error:', err)
     res.status(500).json({ error: err.message })
