@@ -503,7 +503,7 @@ export default function DocumentsPage() {
         {selectedItem && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6"
             onClick={() => setSelectedId(null)}>
-            <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+            <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
               onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                 <div className="min-w-0">
@@ -540,8 +540,8 @@ export default function DocumentsPage() {
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 bg-white">
                       <tr className="bg-gray-50">
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-14">Grid</th>
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-36">Field</th>
+                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-10">#</th>
+                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-40">Field</th>
                         <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
                       </tr>
                     </thead>
@@ -549,8 +549,8 @@ export default function DocumentsPage() {
                       {selectedItem.fields.map((f, i) => (
                         <tr key={i} className="border-t border-gray-50 hover:bg-gray-50">
                           <td className="px-2 py-1.5">
-                            <span className="inline-block text-white text-xs font-mono px-1.5 py-0.5 rounded"
-                              style={{ background: docDef(selectedItem.detectedType)?.color || '#6b7280' }}>{f.grid}</span>
+                            <span className="inline-flex items-center justify-center w-6 h-6 text-white text-xs font-bold rounded"
+                              style={{ background: docDef(selectedItem.detectedType)?.color || '#6b7280' }}>{i + 1}</span>
                           </td>
                           <td className="px-2 py-1.5 text-gray-500">{f.label}</td>
                           <td className="px-2 py-1.5">

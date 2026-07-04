@@ -232,6 +232,65 @@ function extractCusdecFields(text: string): Record<string, string> {
   return data
 }
 
+// Barcode (SLPA Cargo Management System slip) — common container-terminal patterns.
+// Fields the user hasn't seen matched yet stay blank for manual entry/edit in the UI.
+function extractBarcodeFields(text: string): Record<string, string> {
+  const data: Record<string, string> = {
+    container_no: '', seal_no: '', truck_no: '', driver_name: '',
+    gross_mass: '', tare_mass: '', net_mass: '', terminal: '',
+    vessel: '', voyage: '', date: '', time: '',
+  }
+
+  const containerM = text.match(/\b([A-Z]{4}\s?\d{6,7})\b/)
+  if (containerM) data.container_no = containerM[1].replace(/\s+/g, '')
+
+  const sealM = text.match(/seal\s*(?:no\.?)?\s*[:\-]?\s*([A-Z0-9]{6,})/i)
+  if (sealM) data.seal_no = sealM[1]
+
+  const grossM = text.match(/gross\s*(?:mass|weight)\s*[:\-]?\s*([\d,.]+)/i)
+  if (grossM) data.gross_mass = grossM[1]
+
+  const tareM = text.match(/tare\s*(?:mass|weight)\s*[:\-]?\s*([\d,.]+)/i)
+  if (tareM) data.tare_mass = tareM[1]
+
+  const netM = text.match(/net\s*(?:mass|weight)\s*[:\-]?\s*([\d,.]+)/i)
+  if (netM) data.net_mass = netM[1]
+
+  const dateM = text.match(/\b(\d{2}[./]\d{2}[./]\d{4})\b/)
+  if (dateM) data.date = dateM[1]
+
+  const timeM = text.match(/\b(\d{1,2}:\d{2}(?::\d{2})?)\b/)
+  if (timeM) data.time = timeM[1]
+
+  return data
+}
+
+// Boat Note (shipping note) — same field shape used by generate-boat-note.ts,
+// so a corrected value here lines up with what the rest of the app expects.
+function extractBoatNoteFields(text: string): Record<string, string> {
+  const data: Record<string, string> = {
+    shipper: '', consignee: '', entry_no: '', bl_no: '', slpa_no: '',
+    voyage: '', voyage_date: '', vessel: '', terminal: '', lorry_no: '',
+    trailer_no: '', driver_name: '', container_no: '', con_type: '',
+    seal_no: '', goods: '', gross_mass: '', cdn_no: '', pkg_no: '',
+    pkg_type: '', voc: '', coc: '', loading_port: '', discharge_port: '',
+  }
+
+  const containerM = text.match(/\b([A-Z]{4}\s?\d{6,7})\b/)
+  if (containerM) data.container_no = containerM[1].replace(/\s+/g, '')
+
+  const sealM = text.match(/seal\s*(?:no\.?)?\s*[:\-]?\s*([A-Z0-9]{6,})/i)
+  if (sealM) data.seal_no = sealM[1]
+
+  const grossM = text.match(/gross\s*(?:mass|weight)\s*(?:\(kg\))?\s*[:\-]?\s*([\d,.]+)/i)
+  if (grossM) data.gross_mass = grossM[1]
+
+  const blM = text.match(/\b(CMB[A-Z0-9]+|MAEU[0-9]+|[A-Z]{3,4}\d{8,})\b/)
+  if (blM) data.bl_no = blM[1]
+
+  return data
+}
+
 function toFieldArray(data: Record<string, string>, docType: string) {
   return Object.entries(data).map(([key, value]) => ({ key, label: key.replace(/_/g, ' ').toUpperCase(), value }))
 }
@@ -304,6 +363,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fields = toFieldArray(data, resolvedType)
       } else if (resolvedType === 'cdn') {
         const data = extractCdnFields(text)
+        fields = toFieldArray(data, resolvedType)
+      } else if (resolvedType === 'barcode') {
+        const data = extractBarcodeFields(text)
+        fields = toFieldArray(data, resolvedType)
+      } else if (resolvedType === 'boat_note') {
+        const data = extractBoatNoteFields(text)
         fields = toFieldArray(data, resolvedType)
       }
     }
