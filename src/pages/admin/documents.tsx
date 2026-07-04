@@ -216,6 +216,23 @@ export default function DocumentsPage() {
       })
       const sd = await sr.json()
       if (!sr.ok) throw new Error(sd.error || 'Save failed')
+
+      // Also mirror the extracted fields into the doc type's structured table
+      // (cusdec/cdn/barcode/boat_notes) — best-effort, doesn't block the save.
+      if (item.fields.length) {
+        try {
+          const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
+          const tr = await fetch('/api/save-to-table', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ doc_type: docType, data, drive_url: link }),
+          })
+          const td = await tr.json()
+          if (!tr.ok) logError('save-to-table', td.error || 'Table save failed')
+        } catch (e: any) {
+          logError('save-to-table', e.message)
+        }
+      }
+
       updateItem(item.id, { status: 'saved', driveLink: link })
       return true
     } catch (e: any) {
