@@ -122,25 +122,24 @@ export default function GridMapPage() {
       setTotalPages(pdf.numPages)
       setCurrentPage(1)
       setStage('adjusting')
-      // Wait for the canvas to actually mount (React needs a render pass after
-      // the stage change) instead of guessing a fixed delay — production
-      // builds can take longer than a hardcoded timeout to commit the DOM node.
-      const canvas = await waitForCanvas()
-      if (canvas) await renderPage(pdf, 1, canvas)
-      else throw new Error('Canvas element mounted karanna beri unaa')
+      // Rendering is triggered by the canvas ref callback below as soon as the
+      // node actually mounts — no timing guesswork, no race with React's render pass.
     } catch (err: any) {
       alert('Error: ' + err.message)
       setStage('idle')
     }
   }, [])
 
-  const waitForCanvas = useCallback(async (maxWaitMs = 3000): Promise<HTMLCanvasElement | null> => {
-    const start = Date.now()
-    while (Date.now() - start < maxWaitMs) {
-      if (canvasRef.current) return canvasRef.current
-      await new Promise(r => requestAnimationFrame(r))
+  // Callback ref: fires synchronously the instant the canvas DOM node mounts,
+  // so we render into it immediately instead of racing React's commit timing.
+  const canvasCallbackRef = useCallback((node: HTMLCanvasElement | null) => {
+    canvasRef.current = node
+    if (node && pdfDocRef.current) {
+      renderPage(pdfDocRef.current, 1, node).catch(err => {
+        console.error('renderPage failed:', err)
+        alert('PDF render error: ' + err.message)
+      })
     }
-    return null
   }, [])
 
   const goToPage = useCallback(async (p: number) => {
@@ -284,7 +283,7 @@ export default function GridMapPage() {
   // ── Shared: PDF canvas panel (used in both adjusting + mapping stages) ────
   const PdfPanel = ({ interactive }: { interactive: boolean }) => (
     <div className="relative w-full">
-      <canvas ref={interactive ? canvasRef : undefined} className="block w-full shadow-md"/>
+      <canvas ref={interactive ? canvasCallbackRef : undefined} className="block w-full shadow-md"/>
       {/* SVG grid overlay */}
       <svg
         ref={interactive ? svgRef : undefined}
