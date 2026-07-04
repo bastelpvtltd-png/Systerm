@@ -73,7 +73,7 @@ type Stage = 'idle' | 'loading' | 'adjusting' | 'mapping' | 'saved'
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function GridMapPage() {
-  const canvasRef    = useRef<HTMLCanvasElement>(null)
+  const canvasRef    = useRef<HTMLCanvasElement | null>(null)
   const svgRef       = useRef<SVGSVGElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pdfDocRef    = useRef<any>(null)
