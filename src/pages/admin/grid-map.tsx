@@ -122,12 +122,25 @@ export default function GridMapPage() {
       setTotalPages(pdf.numPages)
       setCurrentPage(1)
       setStage('adjusting')
-      await new Promise(r => setTimeout(r, 60))
-      if (canvasRef.current) await renderPage(pdf, 1, canvasRef.current)
+      // Wait for the canvas to actually mount (React needs a render pass after
+      // the stage change) instead of guessing a fixed delay — production
+      // builds can take longer than a hardcoded timeout to commit the DOM node.
+      const canvas = await waitForCanvas()
+      if (canvas) await renderPage(pdf, 1, canvas)
+      else throw new Error('Canvas element mounted karanna beri unaa')
     } catch (err: any) {
       alert('Error: ' + err.message)
       setStage('idle')
     }
+  }, [])
+
+  const waitForCanvas = useCallback(async (maxWaitMs = 3000): Promise<HTMLCanvasElement | null> => {
+    const start = Date.now()
+    while (Date.now() - start < maxWaitMs) {
+      if (canvasRef.current) return canvasRef.current
+      await new Promise(r => requestAnimationFrame(r))
+    }
+    return null
   }, [])
 
   const goToPage = useCallback(async (p: number) => {
