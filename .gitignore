@@ -9,3 +9,5 @@ deploy.bat
 next-env.d.ts
 
 .vercel
+tsconfig.tsbuildinfo
+*.traineddata

@@ -1,6 +1,18 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { detectType } from '@/lib/extractors'
+import { ocrPdf } from '@/lib/ocr'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
+
+// Maps extractors.ts's DocType values to the doc_type values used by documents.tsx/DB
+const DETECTED_TO_DOC_TYPE: Record<string, string> = {
+  cusdec: 'cusdec',
+  cdn: 'cdn',
+  barcode: 'barcode',
+  boatnote: 'boat_note',
+  partycopy: 'party_copy',
+  unknown: '',
+}
 
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   const pdfParse = require('pdf-parse')
@@ -224,31 +236,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!base64) return res.status(400).json({ error: 'No file data' })
 
     const buffer = Buffer.from(base64, 'base64')
-    const text = await extractTextFromPdf(buffer)
+    let text = await extractTextFromPdf(buffer)
+    let ocrApplied = false
 
-    console.log(`[extract-pdf] docType=${docType} textLen=${text.length} preview="${text.slice(0,100).replace(/\n/g,' ')}"`)
+    if (isProbablyScanned(text)) {
+      try {
+        const ocrText = await ocrPdf(buffer)
+        if (!isProbablyScanned(ocrText)) { text = ocrText; ocrApplied = true }
+      } catch (e: any) {
+        console.error('[extract-pdf] OCR failed:', e.message)
+      }
+    }
+
+    const detected = detectType(text)
+    const detectedDocType = DETECTED_TO_DOC_TYPE[detected] || ''
+
+    console.log(`[extract-pdf] docType=${docType} detected=${detected} ocrApplied=${ocrApplied} textLen=${text.length} preview="${text.slice(0,100).replace(/\n/g,' ')}"`)
 
     if (isProbablyScanned(text)) {
       return res.json({
         fields: [],
         rawText: text,
         scanned: true,
-        warning: 'This PDF appears to be a scanned image. Text extraction is not possible. Please use Excel import or manual entry.',
+        detectedDocType,
+        warning: ocrApplied
+          ? 'This PDF is a scanned image and OCR could not read enough text from it. Please review and select the type manually.'
+          : 'This PDF appears to be a scanned image and OCR could not run on it. Please select the type manually.',
       })
     }
 
+    const resolvedType = docType || detectedDocType
     let fields: any[] = []
-    if (docType === 'cusdec') {
+    if (resolvedType === 'cusdec') {
       const data = extractCusdecFields(text)
-      fields = toFieldArray(data, docType)
-    } else if (docType === 'cdn') {
+      fields = toFieldArray(data, resolvedType)
+    } else if (resolvedType === 'cdn') {
       const data = extractCdnFields(text)
-      fields = toFieldArray(data, docType)
+      fields = toFieldArray(data, resolvedType)
     }
 
     const filled = fields.filter((f: any) => f.value).length
     console.log(`[extract-pdf] filled ${filled}/${fields.length} fields`)
-    res.json({ fields, rawText: text, scanned: false })
+    res.json({ fields, rawText: text, scanned: false, detectedDocType, ocrApplied })
   } catch (err: any) {
     console.error('[extract-pdf] error:', err)
     res.status(500).json({ error: err.message })

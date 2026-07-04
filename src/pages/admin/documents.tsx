@@ -3,12 +3,28 @@ import AdminLayout from '@/components/admin/AdminLayout'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy,
   CheckCircle, Loader, Save, Eye, ExternalLink,
-  RefreshCw, AlertTriangle, X, ChevronRight, Receipt
+  RefreshCw, AlertTriangle, X, ChevronRight, Receipt,
+  Trash2, Pencil, Check, FileWarning
 } from 'lucide-react'
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
 type PdfField = { grid: string; label: string; value: string }
 type Panel = 'upload' | 'preview'
+type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
+
+interface UploadItem {
+  id: string
+  file: File
+  fileName: string
+  base64: string
+  status: ItemStatus
+  detectedType: DocType | ''
+  fields: PdfField[]
+  rawText: string
+  scanned: boolean
+  driveLink: string
+  error: string
+}
 
 interface ErrorLog { time: string; step: string; msg: string }
 interface DbRecord {
@@ -16,13 +32,13 @@ interface DbRecord {
   drive_url: string; extracted_data: Record<string, string> | null; created_at: string
 }
 
-const DOC_TYPES: { key: DocType; label: string; icon: any; color: string; canExtract: boolean }[] = [
-  { key: 'cusdec',     label: 'CUSDEC',       icon: FileText, color: '#1B3A5C', canExtract: true  },
-  { key: 'cdn',        label: 'CDN',           icon: Package,  color: '#22A87A', canExtract: true  },
-  { key: 'barcode',    label: 'Barcode',       icon: ScanLine, color: '#f59e0b', canExtract: false },
-  { key: 'boat_note',  label: 'Boat Note',     icon: Ship,     color: '#3b82f6', canExtract: false },
-  { key: 'party_copy', label: "Party's Copy",  icon: Copy,     color: '#8b5cf6', canExtract: false },
-  { key: 'bill',       label: 'Bill',          icon: Receipt,  color: '#ef4444', canExtract: false },
+const DOC_TYPES: { key: DocType; label: string; icon: any; color: string }[] = [
+  { key: 'cusdec',     label: 'CUSDEC',       icon: FileText, color: '#1B3A5C' },
+  { key: 'cdn',        label: 'CDN',           icon: Package,  color: '#22A87A' },
+  { key: 'barcode',    label: 'Barcode',       icon: ScanLine, color: '#f59e0b' },
+  { key: 'boat_note',  label: 'Boat Note',     icon: Ship,     color: '#3b82f6' },
+  { key: 'party_copy', label: "Party's Copy",  icon: Copy,     color: '#8b5cf6' },
+  { key: 'bill',       label: 'Bill',          icon: Receipt,  color: '#ef4444' },
 ]
 
 const TYPE_COLORS: Record<string, string> = {
@@ -30,40 +46,43 @@ const TYPE_COLORS: Record<string, string> = {
   boat_note: '#3b82f6', party_copy: '#8b5cf6', bill: '#ef4444',
 }
 
+function docDef(key: string) {
+  return DOC_TYPES.find(d => d.key === key)
+}
+
+function statusLabel(it: UploadItem) {
+  switch (it.status) {
+    case 'reading':    return 'Reading...'
+    case 'extracting': return 'Detecting type...'
+    case 'ready':       return it.scanned ? 'Scanned — select type' : 'Ready to save'
+    case 'saving':      return 'Saving...'
+    case 'saved':        return 'Saved'
+    case 'error':        return it.error || 'Error'
+  }
+}
+
 export default function DocumentsPage() {
-  const [panel, setPanel]           = useState<Panel>('upload')
-  const [activeType, setActiveType] = useState<DocType>('cusdec')
-  const [uploading, setUploading]   = useState(false)
-  const [extracting, setExtracting] = useState(false)
-  const [saving, setSaving]         = useState(false)
-  const [fields, setFields]         = useState<PdfField[]>([])
-  const [rawText, setRawText]       = useState('')
-  const [showRaw, setShowRaw]       = useState(false)
-  const [fileName, setFileName]     = useState('')
-  const [driveLink, setDriveLink]   = useState('')
-  const [savedOk, setSavedOk]       = useState(false)
-  const [statusMsg, setStatusMsg]   = useState('')
-  const [errors, setErrors]         = useState<ErrorLog[]>([])
+  const [panel, setPanel] = useState<Panel>('upload')
+  const [items, setItems] = useState<UploadItem[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [savingAll, setSavingAll] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [errors, setErrors] = useState<ErrorLog[]>([])
   const [showErrors, setShowErrors] = useState(false)
   // Preview state
-  const [records, setRecords]       = useState<DbRecord[]>([])
+  const [records, setRecords] = useState<DbRecord[]>([])
   const [loadingRecs, setLoadingRecs] = useState(false)
   const [selectedRec, setSelectedRec] = useState<DbRecord | null>(null)
   const [filterType, setFilterType] = useState<string>('all')
 
   const fileRef = useRef<HTMLInputElement>(null)
-  const activeDef = DOC_TYPES.find(d => d.key === activeType)!
 
   function logError(step: string, msg: string) {
     setErrors(prev => [{ time: new Date().toLocaleTimeString(), step, msg }, ...prev.slice(0, 49)])
   }
 
-  function clearUpload() {
-    setFields([]); setRawText(''); setFileName('')
-    setDriveLink(''); setSavedOk(false); setStatusMsg('')
-  }
-
-  // Load preview records
   const loadRecords = useCallback(async () => {
     setLoadingRecs(true)
     try {
@@ -80,120 +99,114 @@ export default function DocumentsPage() {
 
   useEffect(() => { if (panel === 'preview') loadRecords() }, [panel, loadRecords])
 
-  async function handleFile(file: File) {
-    clearUpload()
-    setUploading(true)
-    setFileName(file.name)
-    setStatusMsg('Uploading...')
+  function updateItem(id: string, patch: Partial<UploadItem>) {
+    setItems(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it))
+  }
 
+  async function handleFiles(fileList: FileList | null) {
+    if (!fileList || !fileList.length) return
+    const pdfFiles = Array.from(fileList).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'))
+    const newItems: UploadItem[] = pdfFiles.map(file => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file, fileName: file.name, base64: '', status: 'reading',
+      detectedType: '', fields: [], rawText: '', scanned: false, driveLink: '', error: '',
+    }))
+    if (!newItems.length) return
+    setItems(prev => [...prev, ...newItems])
+
+    for (const item of newItems) {
+      try {
+        const base64 = await fileToBase64(item.file)
+        updateItem(item.id, { base64, status: 'extracting' })
+        const res = await fetch('/api/extract-pdf', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64 }),
+        })
+        const json = await res.json()
+        if (!res.ok) throw new Error(json.error || 'Extraction failed')
+        updateItem(item.id, {
+          status: 'ready',
+          detectedType: (json.detectedDocType as DocType) || '',
+          fields: json.fields || [],
+          rawText: json.rawText || '',
+          scanned: !!json.scanned,
+        })
+        if (json.scanned) logError(item.fileName, json.warning || 'Scanned PDF — please select the type manually')
+      } catch (e: any) {
+        updateItem(item.id, { status: 'error', error: e.message })
+        logError(item.fileName, e.message)
+      }
+    }
+  }
+
+  function removeItem(id: string) {
+    setItems(prev => prev.filter(it => it.id !== id))
+    if (selectedId === id) setSelectedId(null)
+  }
+
+  function startRename(item: UploadItem, e?: React.MouseEvent) {
+    e?.stopPropagation()
+    setRenamingId(item.id)
+    setRenameValue(item.fileName)
+  }
+  function commitRename(id: string) {
+    updateItem(id, { fileName: renameValue.trim() || 'document.pdf' })
+    setRenamingId(null)
+  }
+
+  function updateItemField(id: string, idx: number, val: string) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, value: val } : f) }
+      : it))
+  }
+
+  async function saveOne(item: UploadItem): Promise<boolean> {
+    const docType = item.detectedType || 'cusdec'
+    updateItem(item.id, { status: 'saving' })
     try {
-      const base64 = await fileToBase64(file)
-
-      // 1. Upload to Drive/Storage
       let link = ''
       try {
         const dr = await fetch('/api/upload-to-drive', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64, fileName: file.name, mimeType: 'application/pdf' }),
+          body: JSON.stringify({ base64: item.base64, fileName: item.fileName, mimeType: 'application/pdf', docType }),
         })
         const dd = await dr.json()
-        if (dr.ok && dd.driveLink) {
-          link = dd.driveLink
-          setDriveLink(link)
-          setStatusMsg('✓ Uploaded to storage')
-        } else {
-          const errMsg = dd.error || 'Upload failed'
-          logError('upload-to-drive', errMsg)
-          setStatusMsg(`⚠ Storage: ${errMsg}`)
-        }
+        if (dr.ok && dd.driveLink) link = dd.driveLink
+        else logError(item.fileName, dd.error || 'Drive upload failed')
       } catch (e: any) {
-        logError('upload-to-drive', e.message)
-        setStatusMsg('⚠ Storage failed — continuing')
+        logError(item.fileName, e.message)
       }
 
-      // 2. Extract if canExtract
-      let extracted: PdfField[] = []
-      if (activeDef.canExtract) {
-        setExtracting(true)
-        setStatusMsg('Extracting data...')
-        try {
-          const res = await fetch('/api/extract-pdf', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ base64, docType: activeType }),
-          })
-          const json = await res.json()
-          if (!res.ok) throw new Error(json.error || 'Extraction failed')
-          if (json.scanned) {
-            logError('extract-pdf', json.warning || 'PDF is scanned image — cannot extract text')
-            setStatusMsg('⚠ Scanned PDF — no text extractable. Use "Import Excel" to load data.')
-          } else {
-            extracted = json.fields || []
-            setRawText(json.rawText || '')
-            setFields(extracted)
-            const filled = extracted.filter(f => f.value).length
-            setStatusMsg(`✓ Extracted ${filled}/${extracted.length} fields`)
-            if (filled === 0) logError('extract-pdf', '0 fields matched — PDF may be scanned. Use Excel import.')
-          }
-        } catch (e: any) {
-          logError('extract-pdf', e.message)
-          setStatusMsg(`✗ Extract failed: ${e.message}`)
-        }
-        setExtracting(false)
-      } else {
-        setStatusMsg(link ? '✓ Saved to storage' : '⚠ No storage link — ready to save')
-      }
-
-      // 3. Auto-save record to DB
-      try {
-        const sr = await fetch('/api/save-document', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            doc_type: activeType, file_name: file.name,
-            file_url: '', drive_url: link,
-            extracted_data: extracted.length
-              ? Object.fromEntries(extracted.map(f => [`grid_${f.grid}`, f.value]))
-              : null,
-          }),
-        })
-        const sd = await sr.json()
-        if (!sr.ok) { logError('save-document (auto)', sd.error); }
-        else setSavedOk(true)
-      } catch (e: any) { logError('save-document (auto)', e.message) }
-
-    } catch (e: any) {
-      logError('handleFile', e.message)
-      setStatusMsg(`✗ Error: ${e.message}`)
-    } finally { setUploading(false); setExtracting(false) }
-  }
-
-  async function handleSave() {
-    setSaving(true)
-    try {
-      const res = await fetch('/api/save-document', {
+      const sr = await fetch('/api/save-document', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          doc_type: activeType, file_name: fileName || 'manual',
-          file_url: '', drive_url: driveLink,
-          extracted_data: fields.length
-            ? Object.fromEntries(fields.map(f => [`grid_${f.grid}`, f.value]))
+          doc_type: docType, file_name: item.fileName, file_url: '', drive_url: link,
+          extracted_data: item.fields.length
+            ? Object.fromEntries(item.fields.map(f => [`grid_${f.grid}`, f.value]))
             : null,
         }),
       })
-      const d = await res.json()
-      if (!res.ok) { logError('save-document', d.error); setStatusMsg(`✗ Save failed: ${d.error}`) }
-      else { setSavedOk(true); setStatusMsg('✓ Saved to database') }
+      const sd = await sr.json()
+      if (!sr.ok) throw new Error(sd.error || 'Save failed')
+      updateItem(item.id, { status: 'saved', driveLink: link })
+      return true
     } catch (e: any) {
-      logError('save-document', e.message)
-      setStatusMsg(`✗ ${e.message}`)
-    } finally { setSaving(false) }
+      updateItem(item.id, { status: 'error', error: e.message })
+      logError(item.fileName, e.message)
+      return false
+    }
   }
 
-  function updateField(idx: number, val: string) {
-    setFields(prev => prev.map((f, i) => i === idx ? { ...f, value: val } : f))
+  async function handleSaveAll() {
+    setSavingAll(true)
+    const toSave = items.filter(it => it.status === 'ready' || it.status === 'error')
+    for (const item of toSave) await saveOne(item)
+    setSavingAll(false)
   }
 
-  const filledCount = fields.filter(f => f.value).length
-  const isProcessing = uploading || extracting
+  const selectedItem = items.find(it => it.id === selectedId) || null
+  const readyCount = items.filter(it => it.status === 'ready').length
+  const savedCount = items.filter(it => it.status === 'saved').length
 
   return (
     <AdminLayout>
@@ -205,7 +218,6 @@ export default function DocumentsPage() {
             <p className="text-gray-500 text-sm mt-0.5">Upload · Extract · Preview</p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Error Log toggle */}
             <button onClick={() => setShowErrors(v => !v)}
               className={`relative flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border transition-colors ${
                 errors.length ? 'border-red-200 text-red-600 bg-red-50 hover:bg-red-100' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
@@ -218,7 +230,6 @@ export default function DocumentsPage() {
                 </span>
               )}
             </button>
-            {/* Panel toggle */}
             <div className="flex bg-gray-100 rounded-lg p-0.5">
               {(['upload','preview'] as Panel[]).map(p => (
                 <button key={p} onClick={() => setPanel(p)}
@@ -230,7 +241,6 @@ export default function DocumentsPage() {
           </div>
         </div>
 
-        {/* Error Log Drawer */}
         {showErrors && (
           <div className="mb-4 card border-red-100 bg-red-50">
             <div className="flex items-center justify-between mb-2">
@@ -260,192 +270,105 @@ export default function DocumentsPage() {
 
         {/* === UPLOAD PANEL === */}
         {panel === 'upload' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
-            {/* Left — Upload zone */}
-            <div className="space-y-4">
-              {/* Doc Type Tabs */}
-              <div className="card p-3">
-                <div className="flex flex-wrap gap-1.5">
-                  {DOC_TYPES.map(d => {
-                    const Icon = d.icon
-                    return (
-                      <button key={d.key}
-                        onClick={() => { setActiveType(d.key); clearUpload() }}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                          activeType === d.key ? 'text-white border-transparent' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-                        }`}
-                        style={activeType === d.key ? { background: d.color } : {}}>
-                        <Icon size={13}/>
-                        {d.label}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* Upload Zone */}
-              <div className="card">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
-                    <activeDef.icon size={15} style={{ color: activeDef.color }}/>
-                    Upload {activeDef.label}
-                  </h2>
-                  {fileName && (
-                    <button onClick={clearUpload} className="text-gray-400 hover:text-gray-600"><X size={14}/></button>
-                  )}
-                </div>
-
-                <div
-                  onClick={() => { if (!isProcessing) fileRef.current?.click() }}
-                  className={`border-2 border-dashed rounded-xl p-7 text-center transition-colors ${
-                    isProcessing ? 'border-gray-100 cursor-default' : 'border-gray-200 cursor-pointer hover:bg-gray-50'
-                  }`}
-                  style={isProcessing ? {} : { borderColor: `${activeDef.color}40` }}>
-                  {isProcessing ? (
-                    <div className="flex flex-col items-center gap-2">
-                      <Loader size={28} className="animate-spin" style={{ color: activeDef.color }}/>
-                      <p className="text-xs text-gray-500">{statusMsg || 'Processing...'}</p>
-                    </div>
-                  ) : savedOk ? (
-                    <div className="flex flex-col items-center gap-2">
-                      <CheckCircle size={28} className="text-green-500"/>
-                      <p className="text-xs font-medium text-gray-700">{fileName}</p>
-                      <p className="text-xs text-gray-400">Click to upload another</p>
-                    </div>
-                  ) : fileName ? (
-                    <div className="flex flex-col items-center gap-2">
-                      <activeDef.icon size={28} style={{ color: activeDef.color }}/>
-                      <p className="text-xs font-medium text-gray-700">{fileName}</p>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center gap-3">
-                      <Upload size={28} className="text-gray-300"/>
-                      <div>
-                        <p className="text-sm font-medium text-gray-600">Click to upload {activeDef.label}</p>
-                        <p className="text-xs text-gray-400 mt-0.5">PDF · Auto-extracted & saved to Drive</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <input ref={fileRef} type="file" accept=".pdf" className="hidden"
-                  onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = '' }}/>
-
-                {/* Status */}
-                {statusMsg && !isProcessing && (
-                  <p className={`text-xs mt-2.5 font-medium ${
-                    statusMsg.startsWith('✓') ? 'text-green-600' :
-                    statusMsg.startsWith('⚠') ? 'text-amber-600' : 'text-red-600'
-                  }`}>{statusMsg}</p>
-                )}
-
-                {/* Drive link */}
-                {driveLink && (
-                  <a href={driveLink} target="_blank" rel="noreferrer"
-                    className="mt-2.5 flex items-center gap-1.5 text-xs text-blue-600 bg-blue-50 px-3 py-2 rounded-lg hover:bg-blue-100">
-                    <ExternalLink size={12}/> View file in storage
-                  </a>
-                )}
-
-                {/* Save button (for manual re-save after editing) */}
-                {fields.length > 0 && (
-                  <button onClick={handleSave} disabled={saving}
-                    className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-50"
-                    style={{ background: activeDef.color }}>
-                    {saving ? <Loader size={14} className="animate-spin"/> : <Save size={14}/>}
-                    {savedOk ? 'Re-save to DB' : 'Save to DB'}
-                  </button>
-                )}
-                {!activeDef.canExtract && fileName && !savedOk && (
-                  <button onClick={handleSave} disabled={saving}
-                    className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-50"
-                    style={{ background: activeDef.color }}>
-                    {saving ? <Loader size={14} className="animate-spin"/> : <Save size={14}/>}
-                    Save to DB
+            {/* Dropzone */}
+            <div className="lg:col-span-2 card">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-semibold text-gray-900 text-sm">Upload PDFs</h2>
+                {items.length > 0 && (
+                  <button onClick={handleSaveAll} disabled={savingAll || readyCount === 0}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white font-medium bg-[#1B3A5C] disabled:opacity-40">
+                    {savingAll ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}
+                    Save All ({readyCount})
                   </button>
                 )}
               </div>
 
-              {/* Raw Text (if extraction done) */}
-              {rawText && (
-                <div className="card">
-                  <button onClick={() => setShowRaw(v => !v)}
-                    className="flex items-center justify-between w-full text-xs text-gray-500">
-                    <span className="flex items-center gap-1.5"><Eye size={12}/> Raw PDF Text</span>
-                    <ChevronRight size={13} className={`transition-transform ${showRaw ? 'rotate-90' : ''}`}/>
-                  </button>
-                  {showRaw && (
-                    <pre className="mt-2 text-xs bg-gray-50 rounded-lg p-3 overflow-auto max-h-52 text-gray-600 whitespace-pre-wrap">{rawText}</pre>
-                  )}
+              <div
+                onClick={() => fileRef.current?.click()}
+                onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files) }}
+                className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
+                  dragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                }`}>
+                <div className="flex flex-col items-center gap-3">
+                  <Upload size={28} className="text-gray-300"/>
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">Click or drag PDFs here</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Multiple files supported — type auto-detected per file</p>
+                  </div>
                 </div>
+              </div>
+              <input ref={fileRef} type="file" accept=".pdf" multiple className="hidden"
+                onChange={e => { handleFiles(e.target.files); e.target.value = '' }}/>
+
+              {items.length > 0 && (
+                <p className="text-xs text-gray-400 mt-3">
+                  {items.length} file{items.length !== 1 ? 's' : ''} · {savedCount} saved · {readyCount} ready
+                </p>
               )}
             </div>
 
-            {/* Right — Extracted Fields */}
+            {/* Sidebar list */}
             <div className="card">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="font-semibold text-gray-900">
-                  {activeDef.canExtract ? 'Extracted Data' : 'Document Info'}
-                </h2>
-                {fields.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <div className="text-xs text-gray-400">{filledCount}/{fields.length} filled</div>
-                    <div className="w-16 h-1.5 bg-gray-100 rounded-full">
-                      <div className="h-1.5 rounded-full transition-all"
-                        style={{ width: `${(filledCount/fields.length)*100}%`, background: activeDef.color }}/>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {extracting ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-3">
-                  <Loader size={28} className="animate-spin" style={{ color: activeDef.color }}/>
-                  <p className="text-sm text-gray-400">Extracting fields...</p>
-                </div>
-              ) : fields.length > 0 ? (
-                <div className="overflow-auto max-h-[500px]">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-white">
-                      <tr className="bg-gray-50">
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-12">Grid</th>
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-36">Field</th>
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {fields.map((f, i) => (
-                        <tr key={i} className={`border-t border-gray-50 hover:bg-gray-50 ${!f.value ? 'opacity-60' : ''}`}>
-                          <td className="px-2 py-1.5">
-                            <span className="inline-block text-white text-xs font-mono px-1.5 py-0.5 rounded"
-                              style={{ background: activeDef.color }}>{f.grid}</span>
-                          </td>
-                          <td className="px-2 py-1.5 text-gray-500">{f.label}</td>
-                          <td className="px-2 py-1.5">
-                            <input value={f.value} onChange={e => updateField(i, e.target.value)}
-                              placeholder="—"
-                              className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800"
-                              style={{ '--tw-ring-color': activeDef.color } as any}/>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <h2 className="font-semibold text-gray-900 text-sm mb-3">
+                Uploaded ({items.length})
+              </h2>
+              {items.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-14 text-center">
+                  <FileText size={30} className="text-gray-200 mb-2"/>
+                  <p className="text-xs text-gray-400">No files yet</p>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-16 text-center">
-                  <activeDef.icon size={36} className="mb-3 text-gray-200"/>
-                  {activeDef.canExtract ? (
-                    <>
-                      <p className="text-sm text-gray-400">Upload a {activeDef.label} PDF</p>
-                      <p className="text-xs text-gray-300 mt-1">Data will be auto-extracted by grid number</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-sm text-gray-400">{activeDef.label}</p>
-                      <p className="text-xs text-gray-300 mt-1">Upload PDF → auto-saved to storage & DB</p>
-                    </>
-                  )}
+                <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
+                  {items.map(it => {
+                    const def = it.detectedType ? docDef(it.detectedType) : null
+                    const Icon = def?.icon || FileWarning
+                    const color = def?.color || '#9ca3af'
+                    return (
+                      <div key={it.id}
+                        onClick={() => it.status !== 'reading' && it.status !== 'extracting' && setSelectedId(it.id)}
+                        className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                          selectedId === it.id ? 'border-2' : 'border-gray-100 hover:bg-gray-50'
+                        }`}
+                        style={selectedId === it.id ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
+                        <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0" style={{ background: `${color}20` }}>
+                          {it.status === 'reading' || it.status === 'extracting' || it.status === 'saving'
+                            ? <Loader size={13} className="animate-spin" style={{ color }}/>
+                            : it.status === 'error'
+                              ? <AlertTriangle size={13} className="text-red-500"/>
+                              : it.status === 'saved'
+                                ? <CheckCircle size={13} className="text-green-500"/>
+                                : <Icon size={13} style={{ color }}/>}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          {renamingId === it.id ? (
+                            <input autoFocus value={renameValue}
+                              onClick={e => e.stopPropagation()}
+                              onChange={e => setRenameValue(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') commitRename(it.id); if (e.key === 'Escape') setRenamingId(null) }}
+                              onBlur={() => commitRename(it.id)}
+                              className="w-full text-xs border border-gray-300 rounded px-1.5 py-0.5"/>
+                          ) : (
+                            <p className="text-xs font-medium text-gray-800 truncate">{it.fileName}</p>
+                          )}
+                          <p className={`text-xs mt-0.5 truncate ${it.status === 'error' ? 'text-red-500' : 'text-gray-400'}`}>
+                            {statusLabel(it)}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button onClick={e => startRename(it, e)} className="text-gray-300 hover:text-gray-600 p-1">
+                            <Pencil size={12}/>
+                          </button>
+                          <button onClick={e => { e.stopPropagation(); removeItem(it.id) }} className="text-gray-300 hover:text-red-500 p-1">
+                            <Trash2 size={12}/>
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -455,8 +378,6 @@ export default function DocumentsPage() {
         {/* === PREVIEW PANEL === */}
         {panel === 'preview' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-
-            {/* Left — Records list */}
             <div className="card">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold text-gray-900">All Documents</h2>
@@ -480,7 +401,7 @@ export default function DocumentsPage() {
                 <div className="space-y-1.5 max-h-[500px] overflow-y-auto">
                   {records.map(rec => {
                     const color = TYPE_COLORS[rec.doc_type] || '#6b7280'
-                    const Def = DOC_TYPES.find(d => d.key === rec.doc_type)
+                    const Def = docDef(rec.doc_type)
                     const Icon = Def?.icon || FileText
                     return (
                       <button key={rec.id} onClick={() => setSelectedRec(rec)}
@@ -514,7 +435,6 @@ export default function DocumentsPage() {
               )}
             </div>
 
-            {/* Right — Detail view */}
             <div className="card">
               {!selectedRec ? (
                 <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -575,6 +495,94 @@ export default function DocumentsPage() {
                   )}
                 </>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* === Extracted-data popup modal === */}
+        {selectedItem && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6"
+            onClick={() => setSelectedId(null)}>
+            <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+              onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-gray-900 truncate">{selectedItem.fileName}</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">{statusLabel(selectedItem)}</p>
+                </div>
+                <button onClick={() => setSelectedId(null)} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
+                  <X size={18}/>
+                </button>
+              </div>
+
+              <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+                <span className="text-xs text-gray-500">Type:</span>
+                <select value={selectedItem.detectedType}
+                  onChange={e => updateItem(selectedItem.id, { detectedType: e.target.value as DocType })}
+                  className="text-xs font-medium border border-gray-200 rounded-md px-2 py-1 bg-white">
+                  <option value="">— select —</option>
+                  {DOC_TYPES.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
+                </select>
+                {selectedItem.driveLink && (
+                  <a href={selectedItem.driveLink} target="_blank" rel="noreferrer"
+                    className="ml-auto flex items-center gap-1 text-xs text-blue-600 hover:underline">
+                    <ExternalLink size={12}/> View in Drive
+                  </a>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-auto px-5 py-3">
+                {selectedItem.fields.length === 0 ? (
+                  <div className="text-center py-10 text-gray-400 text-sm">
+                    {selectedItem.scanned ? 'Scanned PDF — no fields extracted. Select type and save manually.' : 'No fields extracted for this document.'}
+                  </div>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="bg-gray-50">
+                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-14">Grid</th>
+                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-36">Field</th>
+                        <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedItem.fields.map((f, i) => (
+                        <tr key={i} className="border-t border-gray-50 hover:bg-gray-50">
+                          <td className="px-2 py-1.5">
+                            <span className="inline-block text-white text-xs font-mono px-1.5 py-0.5 rounded"
+                              style={{ background: docDef(selectedItem.detectedType)?.color || '#6b7280' }}>{f.grid}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-gray-500">{f.label}</td>
+                          <td className="px-2 py-1.5">
+                            <input value={f.value} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
+                              placeholder="—"
+                              className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800"/>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between px-5 py-4 border-t border-gray-100">
+                <button onClick={() => { removeItem(selectedItem.id) }}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
+                  <Trash2 size={13}/> Remove
+                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setSelectedId(null)}
+                    className="px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100">
+                    Close
+                  </button>
+                  <button onClick={() => saveOne(selectedItem)} disabled={selectedItem.status === 'saving'}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs text-white font-medium disabled:opacity-50"
+                    style={{ background: docDef(selectedItem.detectedType)?.color || '#1B3A5C' }}>
+                    {selectedItem.status === 'saving' ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}
+                    {selectedItem.status === 'saved' ? 'Re-save' : 'Save'}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

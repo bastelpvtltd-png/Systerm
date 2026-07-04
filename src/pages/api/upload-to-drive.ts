@@ -1,13 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { google } from 'googleapis'
 import { Readable } from 'stream'
+import { resolveUploadFolderId } from '@/lib/driveFolders'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   try {
-    const { base64, fileName, mimeType = 'application/pdf' } = req.body
+    const { base64, fileName, mimeType = 'application/pdf', docType } = req.body
     if (!base64 || !fileName) return res.status(400).json({ error: 'Missing base64 or fileName' })
 
     const clientId     = process.env.GOOGLE_CLIENT_ID || ''
@@ -25,10 +26,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const drive = google.drive({ version: 'v3', auth })
     const buffer = Buffer.from(base64, 'base64')
 
+    const targetFolderId = folderId
+      ? await resolveUploadFolderId(drive, folderId, docType)
+      : ''
+
     const uploaded = await drive.files.create({
       requestBody: {
         name: fileName,
-        parents: folderId ? [folderId] : undefined,
+        parents: targetFolderId ? [targetFolderId] : undefined,
       },
       media: { mimeType, body: Readable.from(buffer) },
       fields: 'id, webViewLink',
