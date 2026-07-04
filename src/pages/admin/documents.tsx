@@ -4,7 +4,7 @@ import {
   Upload, FileText, Package, ScanLine, Ship, Copy,
   CheckCircle, Loader, Save, Eye, ExternalLink,
   RefreshCw, AlertTriangle, X, ChevronRight, Receipt,
-  Trash2, Pencil, Check, FileWarning
+  Trash2, Pencil, Check, FileWarning, Plus
 } from 'lucide-react'
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
@@ -77,8 +77,8 @@ export default function DocumentsPage() {
   const [showErrors, setShowErrors] = useState(false)
   // Correction-box drawing (in the extracted-fields popup)
   const [activeFieldIdx, setActiveFieldIdx] = useState<number | null>(null)
-  const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null)
-  const [drawRect, setDrawRect] = useState<PctBox | null>(null)
+  const [drag, setDrag] = useState<{ fieldIdx: number; mode: 'draw' | 'move' | 'resize'; startMouse: { x: number; y: number }; startBox: PctBox } | null>(null)
+  const [liveBox, setLiveBox] = useState<PctBox | null>(null)
   const [extractingBox, setExtractingBox] = useState(false)
   const [savingFormat, setSavingFormat] = useState(false)
   const imageAreaRef = useRef<HTMLDivElement>(null)
@@ -239,31 +239,64 @@ export default function DocumentsPage() {
     return { x, y }
   }
 
-  function handleImageMouseDown(e: React.MouseEvent) {
+  // Mousedown on the empty PDF area (not on an existing box) starts drawing a
+  // brand-new box for the field currently selected via the "Fix" icon.
+  function handleContainerMouseDown(e: React.MouseEvent) {
     if (activeFieldIdx === null) return
-    setDrawStart(pctFromEvent(e))
-    setDrawRect(null)
-  }
-
-  function handleImageMouseMove(e: React.MouseEvent) {
-    if (!drawStart) return
     const p = pctFromEvent(e)
-    setDrawRect({
-      x: Math.min(drawStart.x, p.x), y: Math.min(drawStart.y, p.y),
-      w: Math.abs(p.x - drawStart.x), h: Math.abs(p.y - drawStart.y),
-    })
+    setDrag({ fieldIdx: activeFieldIdx, mode: 'draw', startMouse: p, startBox: { x: p.x, y: p.y, w: 0, h: 0 } })
+    setLiveBox({ x: p.x, y: p.y, w: 0, h: 0 })
   }
 
-  async function handleImageMouseUp() {
-    setDrawStart(null)
-    if (!drawRect || !selectedItem || activeFieldIdx === null || drawRect.w < 1 || drawRect.h < 1) {
-      setDrawRect(null)
+  // Mousedown directly on an existing (green) box moves it instead of drawing a new one.
+  function startMoveBox(e: React.MouseEvent, fieldIdx: number, box: PctBox) {
+    e.stopPropagation()
+    setDrag({ fieldIdx, mode: 'move', startMouse: pctFromEvent(e), startBox: box })
+    setLiveBox(box)
+  }
+
+  // Mousedown on a box's corner handle resizes it instead of moving it.
+  function startResizeBox(e: React.MouseEvent, fieldIdx: number, box: PctBox) {
+    e.stopPropagation()
+    setDrag({ fieldIdx, mode: 'resize', startMouse: pctFromEvent(e), startBox: box })
+    setLiveBox(box)
+  }
+
+  function handleContainerMouseMove(e: React.MouseEvent) {
+    if (!drag) return
+    const p = pctFromEvent(e)
+    if (drag.mode === 'draw') {
+      setLiveBox({
+        x: Math.min(drag.startMouse.x, p.x), y: Math.min(drag.startMouse.y, p.y),
+        w: Math.abs(p.x - drag.startMouse.x), h: Math.abs(p.y - drag.startMouse.y),
+      })
+    } else if (drag.mode === 'move') {
+      const dx = p.x - drag.startMouse.x, dy = p.y - drag.startMouse.y
+      setLiveBox({
+        x: Math.max(0, Math.min(100 - drag.startBox.w, drag.startBox.x + dx)),
+        y: Math.max(0, Math.min(100 - drag.startBox.h, drag.startBox.y + dy)),
+        w: drag.startBox.w, h: drag.startBox.h,
+      })
+    } else if (drag.mode === 'resize') {
+      const dx = p.x - drag.startMouse.x, dy = p.y - drag.startMouse.y
+      setLiveBox({
+        x: drag.startBox.x, y: drag.startBox.y,
+        w: Math.max(1, Math.min(100 - drag.startBox.x, drag.startBox.w + dx)),
+        h: Math.max(1, Math.min(100 - drag.startBox.y, drag.startBox.h + dy)),
+      })
+    }
+  }
+
+  async function handleContainerMouseUp() {
+    if (!drag || !liveBox || !selectedItem || liveBox.w < 1 || liveBox.h < 1) {
+      setDrag(null); setLiveBox(null)
       return
     }
-    const idx = activeFieldIdx
-    const box = drawRect
+    const idx = drag.fieldIdx
+    const box = liveBox
     const item = selectedItem
-    setDrawRect(null)
+    setDrag(null)
+    setLiveBox(null)
     setActiveFieldIdx(null)
     setExtractingBox(true)
     try {
@@ -281,6 +314,16 @@ export default function DocumentsPage() {
     } finally {
       setExtractingBox(false)
     }
+  }
+
+  function addCustomField() {
+    if (!selectedItem) return
+    const label = window.prompt('Aluth field eke nama danna (eg. Marks & Numbers):')
+    if (!label || !label.trim()) return
+    const slug = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+    const key = `custom_${slug || 'field'}_${Date.now().toString(36)}`
+    updateItem(selectedItem.id, { fields: [...selectedItem.fields, { key, label: label.trim(), value: '' }] })
+    setActiveFieldIdx(selectedItem.fields.length) // jump straight into draw mode for the new field
   }
 
   async function handleSaveFormat() {
@@ -644,35 +687,43 @@ export default function DocumentsPage() {
                     <div
                       ref={imageAreaRef}
                       className="relative w-full select-none"
-                      style={{ cursor: activeFieldIdx !== null ? 'crosshair' : 'default' }}
-                      onMouseDown={handleImageMouseDown}
-                      onMouseMove={handleImageMouseMove}
-                      onMouseUp={handleImageMouseUp}
-                      onMouseLeave={() => setDrawStart(null)}
+                      style={{ cursor: activeFieldIdx !== null && !drag ? 'crosshair' : 'default' }}
+                      onMouseDown={handleContainerMouseDown}
+                      onMouseMove={handleContainerMouseMove}
+                      onMouseUp={handleContainerMouseUp}
+                      onMouseLeave={() => { setDrag(null); setLiveBox(null) }}
                     >
                       <img src={`data:image/png;base64,${selectedItem.pageImage}`} className="w-full block" draggable={false}/>
-                      {/* Previously saved boxes for this session */}
                       {selectedItem.fields.map((f, i) => {
-                        const b = selectedItem.boxes[f.key]
-                        if (!b) return null
+                        const isDragging = drag?.fieldIdx === i
+                        const box = isDragging ? liveBox : selectedItem.boxes[f.key]
+                        if (!box) return null
+                        const isNewDraw = isDragging && drag?.mode === 'draw'
                         return (
-                          <div key={i} className="absolute border-2 border-green-500 bg-green-500/10 pointer-events-none"
-                            style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%` }}>
-                            <span className="absolute -top-4 left-0 text-[10px] font-bold text-green-700 bg-white/80 px-0.5 rounded">{i + 1}</span>
+                          <div key={i}
+                            onMouseDown={e => !isNewDraw && startMoveBox(e, i, box)}
+                            className={`absolute border-2 ${isNewDraw ? 'border-red-500 bg-red-500/10' : 'border-green-500 bg-green-500/10 cursor-move'}`}
+                            style={{ left: `${box.x}%`, top: `${box.y}%`, width: `${box.w}%`, height: `${box.h}%` }}>
+                            <span className="absolute -top-4 left-0 text-[10px] font-bold text-green-700 bg-white/80 px-0.5 rounded pointer-events-none">{i + 1}</span>
+                            {!isNewDraw && (
+                              <div onMouseDown={e => startResizeBox(e, i, box)}
+                                className="absolute -right-1 -bottom-1 w-3 h-3 bg-green-600 rounded-sm cursor-nwse-resize"/>
+                            )}
                           </div>
                         )
                       })}
-                      {/* Live drag rectangle */}
-                      {drawRect && (
-                        <div className="absolute border-2 border-red-500 bg-red-500/10 pointer-events-none"
-                          style={{ left: `${drawRect.x}%`, top: `${drawRect.y}%`, width: `${drawRect.w}%`, height: `${drawRect.h}%` }}/>
-                      )}
                     </div>
                   )}
                 </div>
 
                 {/* Right: numbered field list */}
                 <div className="flex-1 flex flex-col min-h-0">
+                  <div className="mb-2 flex-shrink-0 flex justify-end">
+                    <button onClick={addCustomField}
+                      className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded-md hover:bg-blue-50">
+                      <Plus size={13}/> Add Field
+                    </button>
+                  </div>
                   {/* Fixed above the scroll area so it stays visible while scrolling the field list */}
                   {activeFieldIdx !== null && (
                     <div className="mb-2 flex-shrink-0 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-center justify-between">
