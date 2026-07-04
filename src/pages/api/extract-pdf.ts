@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { detectType } from '@/lib/extractors'
 import { ocrPdf } from '@/lib/ocr'
 import { extractByGrid } from '@/lib/gridExtract'
+import { extractBox } from '@/lib/boxExtract'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
@@ -334,7 +335,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .limit(1)
         .maybeSingle()
 
-      if (template) {
+      if (template?.grid_config?.boxes) {
+        // Per-field arbitrary boxes (saved via the popup's "draw a correction box" flow)
+        try {
+          const boxes: Record<string, { x: number; y: number; w: number; h: number }> = template.grid_config.boxes
+          const labels: Record<string, string> = template.field_map || {}
+          fields = await Promise.all(
+            Object.entries(boxes).map(async ([key, box]) => ({
+              key, label: labels[key] || key, value: await extractBox(buffer, box),
+            }))
+          )
+          gridUsed = true
+        } catch (e: any) {
+          console.error('[extract-pdf] box extraction failed:', e.message)
+        }
+      } else if (template) {
+        // Uniform grid (saved via the Grid Mapper page)
         try {
           const gridFields = await extractByGrid(buffer, template.grid_config, template.field_map)
           fields = gridFields.map(f => ({ key: `cell_${f.cellNum}`, label: f.label, value: f.value }))

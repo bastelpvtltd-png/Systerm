@@ -8,9 +8,11 @@ import {
 } from 'lucide-react'
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
-type PdfField = { grid: string; label: string; value: string }
+type PdfField = { key: string; label: string; value: string }
 type Panel = 'upload' | 'preview'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
+
+interface PctBox { x: number; y: number; w: number; h: number }
 
 interface UploadItem {
   id: string
@@ -24,6 +26,8 @@ interface UploadItem {
   scanned: boolean
   driveLink: string
   error: string
+  pageImage?: string // base64 PNG of page 1, loaded lazily when the popup opens
+  boxes: Record<string, PctBox> // fieldKey -> user-drawn correction box
 }
 
 interface ErrorLog { time: string; step: string; msg: string }
@@ -71,6 +75,13 @@ export default function DocumentsPage() {
   const [dragOver, setDragOver] = useState(false)
   const [errors, setErrors] = useState<ErrorLog[]>([])
   const [showErrors, setShowErrors] = useState(false)
+  // Correction-box drawing (in the extracted-fields popup)
+  const [activeFieldIdx, setActiveFieldIdx] = useState<number | null>(null)
+  const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null)
+  const [drawRect, setDrawRect] = useState<PctBox | null>(null)
+  const [extractingBox, setExtractingBox] = useState(false)
+  const [savingFormat, setSavingFormat] = useState(false)
+  const imageAreaRef = useRef<HTMLDivElement>(null)
   // Preview state
   const [records, setRecords] = useState<DbRecord[]>([])
   const [loadingRecs, setLoadingRecs] = useState(false)
@@ -109,7 +120,7 @@ export default function DocumentsPage() {
     const newItems: UploadItem[] = pdfFiles.map(file => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       file, fileName: file.name, base64: '', status: 'reading',
-      detectedType: '', fields: [], rawText: '', scanned: false, driveLink: '', error: '',
+      detectedType: '', fields: [], rawText: '', scanned: false, driveLink: '', error: '', boxes: {},
     }))
     if (!newItems.length) return
     setItems(prev => [...prev, ...newItems])
@@ -182,7 +193,7 @@ export default function DocumentsPage() {
         body: JSON.stringify({
           doc_type: docType, file_name: item.fileName, file_url: '', drive_url: link,
           extracted_data: item.fields.length
-            ? Object.fromEntries(item.fields.map(f => [`grid_${f.grid}`, f.value]))
+            ? Object.fromEntries(item.fields.map(f => [`grid_${f.key}`, f.value]))
             : null,
         }),
       })
@@ -205,6 +216,97 @@ export default function DocumentsPage() {
   }
 
   const selectedItem = items.find(it => it.id === selectedId) || null
+
+  // Lazy-load the page-1 image the first time a document's popup is opened
+  useEffect(() => {
+    if (!selectedItem || selectedItem.pageImage || !selectedItem.base64) return
+    const id = selectedItem.id
+    fetch('/api/render-page', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64: selectedItem.base64 }),
+    })
+      .then(r => r.json())
+      .then(d => { if (d.png) updateItem(id, { pageImage: d.png }) })
+      .catch(e => logError('render-page', e.message))
+  }, [selectedItem?.id])
+
+  function pctFromEvent(e: React.MouseEvent) {
+    const el = imageAreaRef.current
+    if (!el) return { x: 0, y: 0 }
+    const rect = el.getBoundingClientRect()
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100))
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100))
+    return { x, y }
+  }
+
+  function handleImageMouseDown(e: React.MouseEvent) {
+    if (activeFieldIdx === null) return
+    setDrawStart(pctFromEvent(e))
+    setDrawRect(null)
+  }
+
+  function handleImageMouseMove(e: React.MouseEvent) {
+    if (!drawStart) return
+    const p = pctFromEvent(e)
+    setDrawRect({
+      x: Math.min(drawStart.x, p.x), y: Math.min(drawStart.y, p.y),
+      w: Math.abs(p.x - drawStart.x), h: Math.abs(p.y - drawStart.y),
+    })
+  }
+
+  async function handleImageMouseUp() {
+    setDrawStart(null)
+    if (!drawRect || !selectedItem || activeFieldIdx === null || drawRect.w < 1 || drawRect.h < 1) {
+      setDrawRect(null)
+      return
+    }
+    const idx = activeFieldIdx
+    const box = drawRect
+    const item = selectedItem
+    setDrawRect(null)
+    setActiveFieldIdx(null)
+    setExtractingBox(true)
+    try {
+      const res = await fetch('/api/extract-box', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64: item.base64, box }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Extract failed')
+      updateItemField(item.id, idx, d.text)
+      const fieldKey = item.fields[idx].key
+      updateItem(item.id, { boxes: { ...item.boxes, [fieldKey]: box } })
+    } catch (e: any) {
+      logError('extract-box', e.message)
+    } finally {
+      setExtractingBox(false)
+    }
+  }
+
+  async function handleSaveFormat() {
+    if (!selectedItem || !selectedItem.detectedType) { alert('Document type select karanna kalin'); return }
+    const boxEntries = Object.entries(selectedItem.boxes)
+    if (!boxEntries.length) { alert('Box ekakwath draw karala nane — field ekak select karala PDF eke box ekak drag karanna'); return }
+    setSavingFormat(true)
+    try {
+      const labels = Object.fromEntries(
+        selectedItem.fields.filter(f => selectedItem.boxes[f.key]).map(f => [f.key, f.label])
+      )
+      const res = await fetch('/api/save-field-boxes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Save failed')
+      alert(`Format saved for "${selectedItem.detectedType}" — future uploads will auto-use these boxes.`)
+    } catch (e: any) {
+      logError('save-field-boxes', e.message)
+      alert('Error: ' + e.message)
+    } finally {
+      setSavingFormat(false)
+    }
+  }
+
   const readyCount = items.filter(it => it.status === 'ready').length
   const savedCount = items.filter(it => it.status === 'saved').length
 
@@ -503,7 +605,7 @@ export default function DocumentsPage() {
         {selectedItem && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6"
             onClick={() => setSelectedId(null)}>
-            <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
+            <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden"
               onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                 <div className="min-w-0">
@@ -531,38 +633,97 @@ export default function DocumentsPage() {
                 )}
               </div>
 
-              <div className="flex-1 overflow-auto px-5 py-3">
-                {selectedItem.fields.length === 0 ? (
-                  <div className="text-center py-10 text-gray-400 text-sm">
-                    {selectedItem.scanned ? 'Scanned PDF — no fields extracted. Select type and save manually.' : 'No fields extracted for this document.'}
-                  </div>
-                ) : (
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-white">
-                      <tr className="bg-gray-50">
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-10">#</th>
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium w-40">Field</th>
-                        <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedItem.fields.map((f, i) => (
-                        <tr key={i} className="border-t border-gray-50 hover:bg-gray-50">
-                          <td className="px-2 py-1.5">
-                            <span className="inline-flex items-center justify-center w-6 h-6 text-white text-xs font-bold rounded"
-                              style={{ background: docDef(selectedItem.detectedType)?.color || '#6b7280' }}>{i + 1}</span>
-                          </td>
-                          <td className="px-2 py-1.5 text-gray-500">{f.label}</td>
-                          <td className="px-2 py-1.5">
-                            <input value={f.value} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
-                              placeholder="—"
-                              className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800"/>
-                          </td>
+              <div className="flex-1 overflow-hidden flex gap-4 px-5 py-3">
+                {/* Left: PDF page image with drawable correction box */}
+                <div className="w-[380px] flex-shrink-0 overflow-auto bg-gray-100 rounded-lg">
+                  {!selectedItem.pageImage ? (
+                    <div className="h-full flex items-center justify-center py-20">
+                      <Loader size={20} className="animate-spin text-gray-400"/>
+                    </div>
+                  ) : (
+                    <div
+                      ref={imageAreaRef}
+                      className="relative w-full select-none"
+                      style={{ cursor: activeFieldIdx !== null ? 'crosshair' : 'default' }}
+                      onMouseDown={handleImageMouseDown}
+                      onMouseMove={handleImageMouseMove}
+                      onMouseUp={handleImageMouseUp}
+                      onMouseLeave={() => setDrawStart(null)}
+                    >
+                      <img src={`data:image/png;base64,${selectedItem.pageImage}`} className="w-full block" draggable={false}/>
+                      {/* Previously saved boxes for this session */}
+                      {selectedItem.fields.map((f, i) => {
+                        const b = selectedItem.boxes[f.key]
+                        if (!b) return null
+                        return (
+                          <div key={i} className="absolute border-2 border-green-500 bg-green-500/10 pointer-events-none"
+                            style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%` }}>
+                            <span className="absolute -top-4 left-0 text-[10px] font-bold text-green-700 bg-white/80 px-0.5 rounded">{i + 1}</span>
+                          </div>
+                        )
+                      })}
+                      {/* Live drag rectangle */}
+                      {drawRect && (
+                        <div className="absolute border-2 border-red-500 bg-red-500/10 pointer-events-none"
+                          style={{ left: `${drawRect.x}%`, top: `${drawRect.y}%`, width: `${drawRect.w}%`, height: `${drawRect.h}%` }}/>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right: numbered field list */}
+                <div className="flex-1 overflow-auto">
+                  {activeFieldIdx !== null && (
+                    <div className="mb-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 flex items-center justify-between">
+                      <span>Field #{activeFieldIdx + 1} ekata correct box eka PDF image eke drag karala draw karanna</span>
+                      <button onClick={() => setActiveFieldIdx(null)} className="text-red-400 hover:text-red-600"><X size={13}/></button>
+                    </div>
+                  )}
+                  {extractingBox && (
+                    <div className="mb-2 text-xs text-blue-600 bg-blue-50 rounded-lg px-3 py-2 flex items-center gap-2">
+                      <Loader size={12} className="animate-spin"/> Box eka OCR karanawa...
+                    </div>
+                  )}
+                  {selectedItem.fields.length === 0 ? (
+                    <div className="text-center py-10 text-gray-400 text-sm">
+                      {selectedItem.scanned ? 'Scanned PDF — no fields extracted. Select type and save manually.' : 'No fields extracted for this document.'}
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-white">
+                        <tr className="bg-gray-50">
+                          <th className="text-left px-2 py-2 text-gray-500 font-medium w-10">#</th>
+                          <th className="text-left px-2 py-2 text-gray-500 font-medium w-36">Field</th>
+                          <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
+                          <th className="w-8"></th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                      </thead>
+                      <tbody>
+                        {selectedItem.fields.map((f, i) => (
+                          <tr key={i} className={`border-t border-gray-50 hover:bg-gray-50 ${activeFieldIdx === i ? 'bg-red-50' : ''}`}>
+                            <td className="px-2 py-1.5">
+                              <span className="inline-flex items-center justify-center w-6 h-6 text-white text-xs font-bold rounded"
+                                style={{ background: selectedItem.boxes[f.key] ? '#16a34a' : (docDef(selectedItem.detectedType)?.color || '#6b7280') }}>{i + 1}</span>
+                            </td>
+                            <td className="px-2 py-1.5 text-gray-500">{f.label}</td>
+                            <td className="px-2 py-1.5">
+                              <input value={f.value} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
+                                placeholder="—"
+                                className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800"/>
+                            </td>
+                            <td className="px-1 py-1.5">
+                              <button onClick={() => setActiveFieldIdx(activeFieldIdx === i ? null : i)}
+                                title="Draw correction box on the PDF image"
+                                className={`w-6 h-6 rounded flex items-center justify-center ${activeFieldIdx === i ? 'bg-red-500 text-white' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
+                                <ScanLine size={13}/>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center justify-between px-5 py-4 border-t border-gray-100">
@@ -571,6 +732,11 @@ export default function DocumentsPage() {
                   <Trash2 size={13}/> Remove
                 </button>
                 <div className="flex items-center gap-2">
+                  <button onClick={handleSaveFormat} disabled={savingFormat}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-green-700 border border-green-200 hover:bg-green-50 disabled:opacity-50">
+                    {savingFormat ? <Loader size={13} className="animate-spin"/> : <ScanLine size={13}/>}
+                    Save Format
+                  </button>
                   <button onClick={() => setSelectedId(null)}
                     className="px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100">
                     Close
