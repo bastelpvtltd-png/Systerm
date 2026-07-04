@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
+import { stripExcludeWords } from '@/lib/textClean'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy,
   CheckCircle, Loader, Save, Eye, ExternalLink,
@@ -8,7 +9,7 @@ import {
 } from 'lucide-react'
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
-type PdfField = { key: string; label: string; value: string }
+type PdfField = { key: string; label: string; value: string; excludeWords?: string }
 type Panel = 'upload' | 'preview'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
 
@@ -82,6 +83,7 @@ export default function DocumentsPage() {
   const [extractingBox, setExtractingBox] = useState(false)
   const [savingFormat, setSavingFormat] = useState(false)
   const imageAreaRef = useRef<HTMLDivElement>(null)
+  const fieldsScrollRef = useRef<HTMLDivElement>(null)
   // Preview state
   const [records, setRecords] = useState<DbRecord[]>([])
   const [loadingRecs, setLoadingRecs] = useState(false)
@@ -169,6 +171,20 @@ export default function DocumentsPage() {
   function updateItemField(id: string, idx: number, val: string) {
     setItems(prev => prev.map(it => it.id === id
       ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, value: val } : f) }
+      : it))
+  }
+
+  // Tracks the exclude-words text as the user types (no side effect yet).
+  function updateExcludeWordsText(id: string, idx: number, excludeWords: string) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, excludeWords } : f) }
+      : it))
+  }
+
+  // On blur/Enter, strip those words out of the current value once.
+  function commitExcludeWords(id: string, idx: number) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, value: stripExcludeWords(f.value, f.excludeWords) } : f) }
       : it))
   }
 
@@ -325,6 +341,10 @@ export default function DocumentsPage() {
     const key = `custom_${slug || 'field'}_${Date.now().toString(36)}`
     updateItem(selectedItem.id, { fields: [...selectedItem.fields, { key, label: label.trim(), value: '' }] })
     setActiveFieldIdx(selectedItem.fields.length) // jump straight into draw mode for the new field
+    // scroll the new row into view so the "draw a box" hint is obviously connected to it
+    requestAnimationFrame(() => {
+      fieldsScrollRef.current?.scrollTo({ top: fieldsScrollRef.current.scrollHeight, behavior: 'smooth' })
+    })
   }
 
   async function handleSaveFormat() {
@@ -333,12 +353,12 @@ export default function DocumentsPage() {
     if (!boxEntries.length) { alert('Box ekakwath draw karala nane — field ekak select karala PDF eke box ekak drag karanna'); return }
     setSavingFormat(true)
     try {
-      const labels = Object.fromEntries(
-        selectedItem.fields.filter(f => selectedItem.boxes[f.key]).map(f => [f.key, f.label])
-      )
+      const boxedFields = selectedItem.fields.filter(f => selectedItem.boxes[f.key])
+      const labels = Object.fromEntries(boxedFields.map(f => [f.key, f.label]))
+      const excludeWords = Object.fromEntries(boxedFields.filter(f => f.excludeWords?.trim()).map(f => [f.key, f.excludeWords]))
       const res = await fetch('/api/save-field-boxes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels }),
+        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Save failed')
@@ -737,7 +757,7 @@ export default function DocumentsPage() {
                       <Loader size={12} className="animate-spin"/> Box eka OCR karanawa...
                     </div>
                   )}
-                  <div className="flex-1 overflow-auto">
+                  <div ref={fieldsScrollRef} className="flex-1 overflow-auto">
                   {selectedItem.fields.length === 0 ? (
                     <div className="text-center py-10 text-gray-400 text-sm">
                       {selectedItem.scanned ? 'Scanned PDF — no fields extracted. Select type and save manually.' : 'No fields extracted for this document.'}
@@ -764,6 +784,12 @@ export default function DocumentsPage() {
                               <input value={f.value} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
                                 placeholder="—"
                                 className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800"/>
+                              <input value={f.excludeWords || ''}
+                                onChange={e => updateExcludeWordsText(selectedItem.id, i, e.target.value)}
+                                onBlur={() => commitExcludeWords(selectedItem.id, i)}
+                                onKeyDown={e => { if (e.key === 'Enter') commitExcludeWords(selectedItem.id, i) }}
+                                placeholder="exclude words (comma separated)..."
+                                className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5"/>
                             </td>
                             <td className="px-1 py-1.5">
                               <button onClick={() => setActiveFieldIdx(activeFieldIdx === i ? null : i)}
