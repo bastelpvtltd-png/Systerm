@@ -326,6 +326,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // when whole-page text extraction below finds nothing (scanned/vector PDFs).
     let fields: any[] = []
     let gridUsed = false
+    let appliedBoxes: Record<string, { x: number; y: number; w: number; h: number }> = {}
     if (resolvedType) {
       const { data: template } = await supabaseAdmin
         .from('pdf_templates')
@@ -345,6 +346,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               key, label: labels[key] || key, value: await extractBox(buffer, box),
             }))
           )
+          appliedBoxes = boxes
           gridUsed = true
         } catch (e: any) {
           console.error('[extract-pdf] box extraction failed:', e.message)
@@ -391,7 +393,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const filled = fields.filter((f: any) => f.value).length
     console.log(`[extract-pdf] gridUsed=${gridUsed} filled ${filled}/${fields.length} fields`)
-    res.json({ fields, rawText: text, scanned: false, detectedDocType, ocrApplied, gridUsed })
+    res.json({ fields, rawText: text, scanned: false, detectedDocType, ocrApplied, gridUsed, boxes: appliedBoxes })
   } catch (err: any) {
     console.error('[extract-pdf] error:', err)
     res.status(500).json({ error: err.message })

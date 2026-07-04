@@ -141,6 +141,7 @@ export default function DocumentsPage() {
           fields: json.fields || [],
           rawText: json.rawText || '',
           scanned: !!json.scanned,
+          boxes: json.boxes || {}, // auto-applied template boxes, if any — makes them editable right away
         })
         if (json.scanned) logError(item.fileName, json.warning || 'Scanned PDF — please select the type manually')
       } catch (e: any) {
