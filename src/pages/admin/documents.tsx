@@ -672,18 +672,20 @@ export default function DocumentsPage() {
                 </div>
 
                 {/* Right: numbered field list */}
-                <div className="flex-1 overflow-auto">
+                <div className="flex-1 flex flex-col min-h-0">
+                  {/* Fixed above the scroll area so it stays visible while scrolling the field list */}
                   {activeFieldIdx !== null && (
-                    <div className="mb-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 flex items-center justify-between">
-                      <span>Field #{activeFieldIdx + 1} ekata correct box eka PDF image eke drag karala draw karanna</span>
-                      <button onClick={() => setActiveFieldIdx(null)} className="text-red-400 hover:text-red-600"><X size={13}/></button>
+                    <div className="mb-2 flex-shrink-0 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-center justify-between">
+                      <span>Field #{activeFieldIdx + 1} ekata correct box eka <b>vamin thiyena PDF image eke</b> drag karala draw karanna</span>
+                      <button onClick={() => setActiveFieldIdx(null)} className="text-red-400 hover:text-red-600 flex-shrink-0 ml-2"><X size={13}/></button>
                     </div>
                   )}
                   {extractingBox && (
-                    <div className="mb-2 text-xs text-blue-600 bg-blue-50 rounded-lg px-3 py-2 flex items-center gap-2">
+                    <div className="mb-2 flex-shrink-0 text-xs text-blue-600 bg-blue-50 rounded-lg px-3 py-2 flex items-center gap-2">
                       <Loader size={12} className="animate-spin"/> Box eka OCR karanawa...
                     </div>
                   )}
+                  <div className="flex-1 overflow-auto">
                   {selectedItem.fields.length === 0 ? (
                     <div className="text-center py-10 text-gray-400 text-sm">
                       {selectedItem.scanned ? 'Scanned PDF — no fields extracted. Select type and save manually.' : 'No fields extracted for this document.'}
@@ -695,7 +697,7 @@ export default function DocumentsPage() {
                           <th className="text-left px-2 py-2 text-gray-500 font-medium w-10">#</th>
                           <th className="text-left px-2 py-2 text-gray-500 font-medium w-36">Field</th>
                           <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
-                          <th className="w-8"></th>
+                          <th className="w-10 text-center px-1 py-2 text-gray-500 font-medium">Fix</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -714,8 +716,12 @@ export default function DocumentsPage() {
                             <td className="px-1 py-1.5">
                               <button onClick={() => setActiveFieldIdx(activeFieldIdx === i ? null : i)}
                                 title="Draw correction box on the PDF image"
-                                className={`w-6 h-6 rounded flex items-center justify-center ${activeFieldIdx === i ? 'bg-red-500 text-white' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
-                                <ScanLine size={13}/>
+                                className={`w-7 h-7 rounded-md border flex items-center justify-center flex-shrink-0 ${
+                                  activeFieldIdx === i
+                                    ? 'bg-red-500 border-red-500 text-white'
+                                    : 'border-gray-200 text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50'
+                                }`}>
+                                <ScanLine size={14}/>
                               </button>
                             </td>
                           </tr>
@@ -723,6 +729,7 @@ export default function DocumentsPage() {
                       </tbody>
                     </table>
                   )}
+                  </div>
                 </div>
               </div>
 
