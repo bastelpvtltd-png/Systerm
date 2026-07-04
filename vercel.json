@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "src/pages/api/extract-pdf.ts": {
+      "includeFiles": "node_modules/tesseract.js-core/**"
+    }
+  }
+}
