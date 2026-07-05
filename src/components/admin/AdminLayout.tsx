@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Ship, Package,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
-  Database, Upload, CheckCircle, Loader, MessageSquare,
+  Database, CheckCircle, Loader, MessageSquare,
 } from 'lucide-react'
 
 // Single unified nav list — there is no separate admin/worker site anymore.
@@ -17,8 +17,7 @@ export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/my-tasks',         icon: CheckCircle,     label: 'My Tasks' },
   { href: '/admin/shipments',        icon: Ship,            label: 'Shipments' },
-  { href: '/admin/documents',        icon: Package,         label: 'Documents' },
-  { href: '/admin/documents-upload', icon: Upload,          label: 'Upload Docs' },
+  { href: '/admin/documents-upload', icon: Package,         label: 'Documents' },
   { href: '/admin/drive-files',      icon: Database,        label: 'Drive Files' },
   { href: '/admin/boat-note',        icon: Anchor,          label: 'Boat Notes' },
   { href: '/admin/messages',         icon: MessageSquare,   label: 'Messages' },
