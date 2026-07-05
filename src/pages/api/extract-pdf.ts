@@ -364,11 +364,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let fields: any[] = []
     let gridUsed = false
     let appliedBoxes: Record<string, { x: number; y: number; w: number; h: number }> = {}
+    // A scanned/photographed page renders at different proportions than the same
+    // doc type generated as native text — box coordinates calibrated for one
+    // don't line up on the other, so each variant gets its own saved template.
+    const variant = ocrApplied ? 'scanned' : 'native'
     if (resolvedType) {
       const { data: template } = await supabaseAdmin
         .from('pdf_templates')
         .select('id, grid_config, field_map')
         .eq('doc_type', resolvedType)
+        .eq('variant', variant)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
@@ -417,6 +422,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         rawText: text,
         scanned: true,
         detectedDocType,
+        variant,
         warning: ocrApplied
           ? 'This PDF is a scanned image and OCR could not read enough text from it. Please review and select the type manually.'
           : 'This PDF appears to be a scanned image and OCR could not run on it. Please select the type manually.',
@@ -438,7 +444,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const filled = fields.filter((f: any) => f.value).length
     console.log(`[extract-pdf] gridUsed=${gridUsed} filled ${filled}/${fields.length} fields`)
-    res.json({ fields, rawText: text, scanned: false, detectedDocType, ocrApplied, gridUsed, boxes: appliedBoxes })
+    res.json({ fields, rawText: text, scanned: false, detectedDocType, ocrApplied, gridUsed, boxes: appliedBoxes, variant })
   } catch (err: any) {
     console.error('[extract-pdf] error:', err)
     res.status(500).json({ error: err.message })

@@ -16,26 +16,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { doc_type, key } = req.body
     if (!doc_type || !key) return res.status(400).json({ error: 'doc_type and key required' })
 
-    const { data: template } = await supabaseAdmin
-      .from('pdf_templates')
-      .select('id, grid_config, field_map')
-      .eq('doc_type', doc_type)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // A delete removes the field for the doc type entirely — clean it out of
+    // both the native and scanned variant templates, whichever have it.
+    for (const v of ['native', 'scanned']) {
+      const { data: template } = await supabaseAdmin
+        .from('pdf_templates')
+        .select('id, grid_config, field_map')
+        .eq('doc_type', doc_type)
+        .eq('variant', v)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
 
-    if (template?.grid_config?.boxes?.[key]) {
-      const boxes = { ...template.grid_config.boxes }
-      delete boxes[key]
-      const fieldMap = { ...(template.field_map || {}) }
-      delete fieldMap[key]
-      const excludeWords = { ...(template.grid_config.excludeWords || {}) }
-      delete excludeWords[key]
-      const replacements = { ...(template.grid_config.replacements || {}) }
-      delete replacements[key]
-      await supabaseAdmin.from('pdf_templates')
-        .update({ grid_config: { boxes, excludeWords, replacements }, field_map: fieldMap })
-        .eq('id', template.id)
+      if (template?.grid_config?.boxes?.[key] !== undefined || template?.grid_config?.excludeWords?.[key] || template?.grid_config?.formulas?.[key]) {
+        const boxes = { ...template.grid_config.boxes }
+        delete boxes[key]
+        const fieldMap = { ...(template.field_map || {}) }
+        delete fieldMap[key]
+        const excludeWords = { ...(template.grid_config.excludeWords || {}) }
+        delete excludeWords[key]
+        const formulas = { ...(template.grid_config.formulas || {}) }
+        delete formulas[key]
+        await supabaseAdmin.from('pdf_templates')
+          .update({ grid_config: { boxes, excludeWords, formulas }, field_map: fieldMap })
+          .eq('id', template.id)
+      }
     }
 
     const table = DOC_TYPE_TABLE[doc_type]

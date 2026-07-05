@@ -36,6 +36,7 @@ interface UploadItem {
   pageImages: Record<number, string> // page index -> base64 PNG, loaded lazily per page
   numPages: number
   boxes: Record<string, PctBox> // fieldKey -> user-drawn correction box
+  variant: 'native' | 'scanned' // which template variant this PDF matched — layout differs between the two
 }
 
 interface ErrorLog { time: string; step: string; msg: string }
@@ -131,7 +132,7 @@ export default function DocumentsPage() {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       file, fileName: file.name, base64: '', status: 'reading',
       detectedType: '', fields: [], rawText: '', scanned: false, driveLink: '', error: '', boxes: {},
-      pageImages: {}, numPages: 1,
+      pageImages: {}, numPages: 1, variant: 'native',
     }))
     if (!newItems.length) return
     setItems(prev => [...prev, ...newItems])
@@ -153,6 +154,7 @@ export default function DocumentsPage() {
           rawText: json.rawText || '',
           scanned: !!json.scanned,
           boxes: json.boxes || {}, // auto-applied template boxes, if any — makes them editable right away
+          variant: json.variant === 'scanned' ? 'scanned' : 'native',
         })
         if (json.scanned) logError(item.fileName, json.warning || 'Scanned PDF — please select the type manually')
       } catch (e: any) {
@@ -198,9 +200,11 @@ export default function DocumentsPage() {
   async function commitFieldRules(id: string, idx: number) {
     let updatedField: PdfField | undefined
     let docType = ''
+    let variant: 'native' | 'scanned' = 'native'
     setItems(prev => prev.map(it => {
       if (it.id !== id) return it
       docType = it.detectedType
+      variant = it.variant
       return {
         ...it, fields: it.fields.map((f, i) => {
           if (i !== idx) return f
@@ -218,7 +222,7 @@ export default function DocumentsPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           doc_type: docType, key: updatedField.key, label: updatedField.label,
-          excludeWords: updatedField.excludeWords, formula: updatedField.formula,
+          excludeWords: updatedField.excludeWords, formula: updatedField.formula, variant,
         }),
       })
       const d = await res.json()
@@ -536,11 +540,11 @@ export default function DocumentsPage() {
       const formulas = Object.fromEntries(boxedFields.filter(f => f.formula?.trim()).map(f => [f.key, f.formula]))
       const res = await fetch('/api/save-field-boxes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords, formulas }),
+        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords, formulas, variant: selectedItem.variant }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Save failed')
-      alert(`Format saved for "${selectedItem.detectedType}" — future uploads will auto-use these boxes.`)
+      alert(`Format saved for "${selectedItem.detectedType}" (${selectedItem.variant === 'scanned' ? 'Scanned/OCR' : 'Native Text'}) — future uploads of this variant will auto-use these boxes.`)
     } catch (e: any) {
       logError('save-field-boxes', e.message)
       alert('Error: ' + e.message)
@@ -867,6 +871,13 @@ export default function DocumentsPage() {
                   <option value="">— select —</option>
                   {DOC_TYPES.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
                 </select>
+                <span
+                  title={selectedItem.variant === 'scanned'
+                    ? 'This PDF had no extractable text, so it was scanned as an image and OCR was used — its box template is stored separately from native-text PDFs of this type.'
+                    : 'This PDF had extractable native text — its box template is stored separately from scanned/OCR PDFs of this type.'}
+                  className={`text-[11px] font-semibold px-2 py-1 rounded-md ${selectedItem.variant === 'scanned' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                  {selectedItem.variant === 'scanned' ? '📷 Scanned / OCR' : '📄 Native Text'}
+                </span>
                 {selectedItem.driveLink && (
                   <a href={selectedItem.driveLink} target="_blank" rel="noreferrer"
                     className="ml-auto flex items-center gap-1 text-xs text-blue-600 hover:underline">

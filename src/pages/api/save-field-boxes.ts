@@ -13,20 +13,23 @@ const supabaseAdmin = createClient(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   try {
-    const { doc_type, boxes, labels, excludeWords, formulas } = req.body
+    const { doc_type, boxes, labels, excludeWords, formulas, variant } = req.body
     if (!doc_type || !boxes || !labels)
       return res.status(400).json({ error: 'doc_type, boxes, labels required' })
+    const v = variant === 'scanned' ? 'scanned' : 'native'
 
     const { data: existing } = await supabaseAdmin
       .from('pdf_templates')
       .select('id')
       .eq('doc_type', doc_type)
+      .eq('variant', v)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
 
     const payload = {
       doc_type,
+      variant: v,
       grid_config: { boxes, excludeWords: excludeWords || {}, formulas: formulas || {} },
       field_map: labels,
     }
