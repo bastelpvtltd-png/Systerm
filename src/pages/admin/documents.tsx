@@ -91,6 +91,7 @@ export default function DocumentsPage() {
   const [liveBox, setLiveBox] = useState<PctBox | null>(null)
   const [extractingBox, setExtractingBox] = useState(false)
   const [savingFormat, setSavingFormat] = useState(false)
+  const [copyingBoxes, setCopyingBoxes] = useState(false)
   const imageAreaRef = useRef<HTMLDivElement>(null)
   const fieldsScrollRef = useRef<HTMLDivElement>(null)
   // Preview state
@@ -550,6 +551,49 @@ export default function DocumentsPage() {
       alert('Error: ' + e.message)
     } finally {
       setSavingFormat(false)
+    }
+  }
+
+  // Native and scanned copies of the same doc_type are usually laid out the
+  // same way, just shifted/scaled — copying the other variant's saved boxes in
+  // gives the user a starting point to drag into place instead of redrawing
+  // every field from scratch.
+  async function copyBoxesFromOtherVariant() {
+    if (!selectedItem || !selectedItem.detectedType) { alert('Document type select karanna kalin'); return }
+    const otherVariant = selectedItem.variant === 'scanned' ? 'native' : 'scanned'
+    setCopyingBoxes(true)
+    try {
+      const res = await fetch('/api/copy-field-boxes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: selectedItem.detectedType, fromVariant: otherVariant, toVariant: selectedItem.variant }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Copy failed')
+
+      const boxes: Record<string, PctBox> = d.boxes || {}
+      const labels: Record<string, string> = d.labels || {}
+      const excludeWords: Record<string, string> = d.excludeWords || {}
+      const formulas: Record<string, string> = d.formulas || {}
+
+      setItems(prev => prev.map(it => {
+        if (it.id !== selectedItem.id) return it
+        const existingByKey = new Map(it.fields.map(f => [f.key, f]))
+        const fields = it.fields.map(f => boxes[f.key]
+          ? { ...f, label: labels[f.key] || f.label, excludeWords: excludeWords[f.key] ?? f.excludeWords, formula: formulas[f.key] ?? f.formula }
+          : f)
+        for (const key of Object.keys(boxes)) {
+          if (!existingByKey.has(key)) {
+            fields.push({ key, label: labels[key] || key, value: '', excludeWords: excludeWords[key], formula: formulas[key] })
+          }
+        }
+        return { ...it, boxes, fields }
+      }))
+      alert(`${otherVariant === 'scanned' ? 'Scanned/OCR' : 'Native Text'} variant eke boxes ${boxes && Object.keys(boxes).length} copy kalā — dhan positions adjust karanna PDF eke box tika drag karala.`)
+    } catch (e: any) {
+      logError('copy-field-boxes', e.message)
+      alert('Error: ' + e.message)
+    } finally {
+      setCopyingBoxes(false)
     }
   }
 
@@ -1062,6 +1106,12 @@ export default function DocumentsPage() {
                   <Trash2 size={13}/> Remove
                 </button>
                 <div className="flex items-center gap-2">
+                  <button onClick={copyBoxesFromOtherVariant} disabled={copyingBoxes || !selectedItem.detectedType}
+                    title={`Copy the ${selectedItem.variant === 'scanned' ? 'Native Text' : 'Scanned/OCR'} variant's saved boxes here, then drag them into place`}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-blue-700 border border-blue-200 hover:bg-blue-50 disabled:opacity-50">
+                    {copyingBoxes ? <Loader size={13} className="animate-spin"/> : <Copy size={13}/>}
+                    Copy from {selectedItem.variant === 'scanned' ? 'Native' : 'Scanned'}
+                  </button>
                   <button onClick={handleSaveFormat} disabled={savingFormat}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-green-700 border border-green-200 hover:bg-green-50 disabled:opacity-50">
                     {savingFormat ? <Loader size={13} className="animate-spin"/> : <ScanLine size={13}/>}
