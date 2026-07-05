@@ -13,7 +13,7 @@ type PdfField = { key: string; label: string; value: string; excludeWords?: stri
 type Panel = 'upload' | 'preview'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
 
-interface PctBox { x: number; y: number; w: number; h: number }
+interface PctBox { x: number; y: number; w: number; h: number; page?: number } // page is 0-indexed
 
 interface UploadItem {
   id: string
@@ -27,7 +27,8 @@ interface UploadItem {
   scanned: boolean
   driveLink: string
   error: string
-  pageImage?: string // base64 PNG of page 1, loaded lazily when the popup opens
+  pageImages: Record<number, string> // page index -> base64 PNG, loaded lazily per page
+  numPages: number
   boxes: Record<string, PctBox> // fieldKey -> user-drawn correction box
 }
 
@@ -78,6 +79,7 @@ export default function DocumentsPage() {
   const [showErrors, setShowErrors] = useState(false)
   // Correction-box drawing (in the extracted-fields popup)
   const [activeFieldIdx, setActiveFieldIdx] = useState<number | null>(null)
+  const [viewPage, setViewPage] = useState(0)
   const [drag, setDrag] = useState<{ fieldIdx: number; mode: 'draw' | 'move' | 'resize'; startMouse: { x: number; y: number }; startBox: PctBox } | null>(null)
   const [liveBox, setLiveBox] = useState<PctBox | null>(null)
   const [extractingBox, setExtractingBox] = useState(false)
@@ -123,6 +125,7 @@ export default function DocumentsPage() {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       file, fileName: file.name, base64: '', status: 'reading',
       detectedType: '', fields: [], rawText: '', scanned: false, driveLink: '', error: '', boxes: {},
+      pageImages: {}, numPages: 1,
     }))
     if (!newItems.length) return
     setItems(prev => [...prev, ...newItems])
@@ -251,18 +254,26 @@ export default function DocumentsPage() {
 
   const selectedItem = items.find(it => it.id === selectedId) || null
 
-  // Lazy-load the page-1 image the first time a document's popup is opened
+  // Reset to page 1 whenever a different document's popup is opened
+  useEffect(() => { setViewPage(0) }, [selectedId])
+
+  // Lazy-load the currently-viewed page's image (cached per page once fetched)
   useEffect(() => {
-    if (!selectedItem || selectedItem.pageImage || !selectedItem.base64) return
+    if (!selectedItem || selectedItem.pageImages[viewPage] || !selectedItem.base64) return
     const id = selectedItem.id
     fetch('/api/render-page', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ base64: selectedItem.base64 }),
+      body: JSON.stringify({ base64: selectedItem.base64, page: viewPage }),
     })
       .then(r => r.json())
-      .then(d => { if (d.png) updateItem(id, { pageImage: d.png }) })
+      .then(d => {
+        if (d.png) updateItem(id, {
+          pageImages: { ...(items.find(it => it.id === id)?.pageImages || {}), [viewPage]: d.png },
+          numPages: d.numPages || 1,
+        })
+      })
       .catch(e => logError('render-page', e.message))
-  }, [selectedItem?.id])
+  }, [selectedItem?.id, viewPage])
 
   function pctFromEvent(e: React.MouseEvent) {
     const el = imageAreaRef.current
@@ -278,8 +289,9 @@ export default function DocumentsPage() {
   function handleContainerMouseDown(e: React.MouseEvent) {
     if (activeFieldIdx === null) return
     const p = pctFromEvent(e)
-    setDrag({ fieldIdx: activeFieldIdx, mode: 'draw', startMouse: p, startBox: { x: p.x, y: p.y, w: 0, h: 0 } })
-    setLiveBox({ x: p.x, y: p.y, w: 0, h: 0 })
+    const start = { x: p.x, y: p.y, w: 0, h: 0, page: viewPage }
+    setDrag({ fieldIdx: activeFieldIdx, mode: 'draw', startMouse: p, startBox: start })
+    setLiveBox(start)
   }
 
   // Mousedown directly on an existing (green) box moves it instead of drawing a new one.
@@ -303,13 +315,14 @@ export default function DocumentsPage() {
       setLiveBox({
         x: Math.min(drag.startMouse.x, p.x), y: Math.min(drag.startMouse.y, p.y),
         w: Math.abs(p.x - drag.startMouse.x), h: Math.abs(p.y - drag.startMouse.y),
+        page: drag.startBox.page,
       })
     } else if (drag.mode === 'move') {
       const dx = p.x - drag.startMouse.x, dy = p.y - drag.startMouse.y
       setLiveBox({
         x: Math.max(0, Math.min(100 - drag.startBox.w, drag.startBox.x + dx)),
         y: Math.max(0, Math.min(100 - drag.startBox.h, drag.startBox.y + dy)),
-        w: drag.startBox.w, h: drag.startBox.h,
+        w: drag.startBox.w, h: drag.startBox.h, page: drag.startBox.page,
       })
     } else if (drag.mode === 'resize') {
       const dx = p.x - drag.startMouse.x, dy = p.y - drag.startMouse.y
@@ -317,6 +330,7 @@ export default function DocumentsPage() {
         x: drag.startBox.x, y: drag.startBox.y,
         w: Math.max(1, Math.min(100 - drag.startBox.x, drag.startBox.w + dx)),
         h: Math.max(1, Math.min(100 - drag.startBox.y, drag.startBox.h + dy)),
+        page: drag.startBox.page,
       })
     }
   }
@@ -716,42 +730,53 @@ export default function DocumentsPage() {
 
               <div className="flex-1 overflow-hidden flex gap-4 px-5 py-3">
                 {/* Left: PDF page image with drawable correction box */}
-                <div className="w-[380px] flex-shrink-0 overflow-auto bg-gray-100 rounded-lg">
-                  {!selectedItem.pageImage ? (
-                    <div className="h-full flex items-center justify-center py-20">
-                      <Loader size={20} className="animate-spin text-gray-400"/>
-                    </div>
-                  ) : (
-                    <div
-                      ref={imageAreaRef}
-                      className="relative w-full select-none"
-                      style={{ cursor: activeFieldIdx !== null && !drag ? 'crosshair' : 'default' }}
-                      onMouseDown={handleContainerMouseDown}
-                      onMouseMove={handleContainerMouseMove}
-                      onMouseUp={handleContainerMouseUp}
-                      onMouseLeave={() => { setDrag(null); setLiveBox(null) }}
-                    >
-                      <img src={`data:image/png;base64,${selectedItem.pageImage}`} className="w-full block" draggable={false}/>
-                      {selectedItem.fields.map((f, i) => {
-                        const isDragging = drag?.fieldIdx === i
-                        const box = isDragging ? liveBox : selectedItem.boxes[f.key]
-                        if (!box) return null
-                        const isNewDraw = isDragging && drag?.mode === 'draw'
-                        return (
-                          <div key={i}
-                            onMouseDown={e => !isNewDraw && startMoveBox(e, i, box)}
-                            className={`absolute border-2 ${isNewDraw ? 'border-red-500 bg-red-500/10' : 'border-green-500 bg-green-500/10 cursor-move'}`}
-                            style={{ left: `${box.x}%`, top: `${box.y}%`, width: `${box.w}%`, height: `${box.h}%` }}>
-                            <span className="absolute -top-4 left-0 text-[10px] font-bold text-green-700 bg-white/80 px-0.5 rounded pointer-events-none">{i + 1}</span>
-                            {!isNewDraw && (
-                              <div onMouseDown={e => startResizeBox(e, i, box)}
-                                className="absolute -right-1 -bottom-1 w-3 h-3 bg-green-600 rounded-sm cursor-nwse-resize"/>
-                            )}
-                          </div>
-                        )
-                      })}
+                <div className="w-[380px] flex-shrink-0 flex flex-col">
+                  {selectedItem.numPages > 1 && (
+                    <div className="flex-shrink-0 flex items-center justify-center gap-3 mb-2 text-xs">
+                      <button onClick={() => setViewPage(p => Math.max(0, p - 1))} disabled={viewPage === 0}
+                        className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">← Prev</button>
+                      <span className="text-gray-500 font-medium">Page {viewPage + 1} / {selectedItem.numPages}</span>
+                      <button onClick={() => setViewPage(p => Math.min(selectedItem.numPages - 1, p + 1))} disabled={viewPage >= selectedItem.numPages - 1}
+                        className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">Next →</button>
                     </div>
                   )}
+                  <div className="flex-1 overflow-auto bg-gray-100 rounded-lg">
+                    {!selectedItem.pageImages[viewPage] ? (
+                      <div className="h-full flex items-center justify-center py-20">
+                        <Loader size={20} className="animate-spin text-gray-400"/>
+                      </div>
+                    ) : (
+                      <div
+                        ref={imageAreaRef}
+                        className="relative w-full select-none"
+                        style={{ cursor: activeFieldIdx !== null && !drag ? 'crosshair' : 'default' }}
+                        onMouseDown={handleContainerMouseDown}
+                        onMouseMove={handleContainerMouseMove}
+                        onMouseUp={handleContainerMouseUp}
+                        onMouseLeave={() => { setDrag(null); setLiveBox(null) }}
+                      >
+                        <img src={`data:image/png;base64,${selectedItem.pageImages[viewPage]}`} className="w-full block" draggable={false}/>
+                        {selectedItem.fields.map((f, i) => {
+                          const isDragging = drag?.fieldIdx === i
+                          const box = isDragging ? liveBox : selectedItem.boxes[f.key]
+                          if (!box || (box.page || 0) !== viewPage) return null
+                          const isNewDraw = isDragging && drag?.mode === 'draw'
+                          return (
+                            <div key={i}
+                              onMouseDown={e => !isNewDraw && startMoveBox(e, i, box)}
+                              className={`absolute border-2 ${isNewDraw ? 'border-red-500 bg-red-500/10' : 'border-green-500 bg-green-500/10 cursor-move'}`}
+                              style={{ left: `${box.x}%`, top: `${box.y}%`, width: `${box.w}%`, height: `${box.h}%` }}>
+                              <span className="absolute -top-4 left-0 text-[10px] font-bold text-green-700 bg-white/80 px-0.5 rounded pointer-events-none">{i + 1}</span>
+                              {!isNewDraw && (
+                                <div onMouseDown={e => startResizeBox(e, i, box)}
+                                  className="absolute -right-1 -bottom-1 w-3 h-3 bg-green-600 rounded-sm cursor-nwse-resize"/>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Right: numbered field list */}
