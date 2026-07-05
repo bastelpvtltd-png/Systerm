@@ -88,6 +88,11 @@ export default function DocumentsPage() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [savingAll, setSavingAll] = useState(false)
+  // Which popup content to show when an item is opened — 'simple' (rename/
+  // view/save/delete only) from the "Uploaded" list, or 'full' (box drawing,
+  // field table, Save Format, Copy variant) from the admin-only "Admin Edit"
+  // list. Same underlying items, two different ways to open them.
+  const [popupMode, setPopupMode] = useState<'simple' | 'full'>('simple')
   const [dragOver, setDragOver] = useState(false)
   const [errors, setErrors] = useState<ErrorLog[]>([])
   const [showErrors, setShowErrors] = useState(false)
@@ -669,8 +674,8 @@ export default function DocumentsPage() {
 
         {/* === UPLOAD PANEL === */}
         {panel === 'upload' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            <div className="lg:col-span-2 card">
+          <div className="space-y-5">
+            <div className="card">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-semibold text-gray-900 text-sm">Upload PDFs</h2>
                 {items.length > 0 && (
@@ -708,63 +713,121 @@ export default function DocumentsPage() {
               )}
             </div>
 
-            <div className="card">
-              <h2 className="font-semibold text-gray-900 text-sm mb-3">
-                Uploaded ({items.length})
-              </h2>
-              {items.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-14 text-center">
-                  <FileText size={30} className="text-gray-200 mb-2"/>
-                  <p className="text-xs text-gray-400">No files yet</p>
-                </div>
-              ) : (
-                <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
-                  {items.map(it => {
-                    const def = it.detectedType ? docDef(it.detectedType) : null
-                    const Icon = def?.icon || FileWarning
-                    const color = def?.color || '#9ca3af'
-                    return (
-                      <div key={it.id}
-                        onClick={() => it.status !== 'reading' && it.status !== 'extracting' && setSelectedId(it.id)}
-                        className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${
-                          selectedId === it.id ? 'border-2' : 'border-gray-100 hover:bg-gray-50'
-                        }`}
-                        style={selectedId === it.id ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
-                        <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0" style={{ background: `${color}20` }}>
-                          {it.status === 'reading' || it.status === 'extracting' || it.status === 'saving'
-                            ? <Loader size={13} className="animate-spin" style={{ color }}/>
-                            : it.status === 'error'
-                              ? <AlertTriangle size={13} className="text-red-500"/>
-                              : it.status === 'saved'
-                                ? <CheckCircle size={13} className="text-green-500"/>
-                                : <Icon size={13} style={{ color }}/>}
+            <div className={`grid grid-cols-1 ${isAdmin ? 'md:grid-cols-2' : ''} gap-5`}>
+              {/* "Uploaded" — rename + view only, opens the simple full-screen viewer */}
+              <div className="card">
+                <h2 className="font-semibold text-gray-900 text-sm mb-3">
+                  Uploaded ({items.length})
+                </h2>
+                {items.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-14 text-center">
+                    <FileText size={30} className="text-gray-200 mb-2"/>
+                    <p className="text-xs text-gray-400">No files yet</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
+                    {items.map(it => {
+                      const def = it.detectedType ? docDef(it.detectedType) : null
+                      const Icon = def?.icon || FileWarning
+                      const color = def?.color || '#9ca3af'
+                      const openable = it.status !== 'reading' && it.status !== 'extracting'
+                      return (
+                        <div key={it.id}
+                          onClick={() => openable && (setPopupMode('simple'), setSelectedId(it.id))}
+                          className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                            selectedId === it.id ? 'border-2' : 'border-gray-100 hover:bg-gray-50'
+                          }`}
+                          style={selectedId === it.id ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
+                          <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0" style={{ background: `${color}20` }}>
+                            {it.status === 'reading' || it.status === 'extracting' || it.status === 'saving'
+                              ? <Loader size={13} className="animate-spin" style={{ color }}/>
+                              : it.status === 'error'
+                                ? <AlertTriangle size={13} className="text-red-500"/>
+                                : it.status === 'saved'
+                                  ? <CheckCircle size={13} className="text-green-500"/>
+                                  : <Icon size={13} style={{ color }}/>}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            {renamingId === it.id ? (
+                              <input autoFocus value={renameValue}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => setRenameValue(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') commitRename(it.id); if (e.key === 'Escape') setRenamingId(null) }}
+                                onBlur={() => commitRename(it.id)}
+                                className="w-full text-xs border border-gray-300 rounded px-1.5 py-0.5"/>
+                            ) : (
+                              <p className="text-xs font-medium text-gray-800 truncate">{it.fileName}</p>
+                            )}
+                            <p className={`text-xs mt-0.5 truncate ${it.status === 'error' ? 'text-red-500' : 'text-gray-400'}`}>
+                              {statusLabel(it)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <button onClick={e => startRename(it, e)} title="Rename" className="text-gray-300 hover:text-gray-600 p-1">
+                              <Pencil size={12}/>
+                            </button>
+                            <button onClick={e => { e.stopPropagation(); openable && (setPopupMode('simple'), setSelectedId(it.id)) }}
+                              title="View" className="text-gray-300 hover:text-blue-600 p-1">
+                              <Eye size={12}/>
+                            </button>
+                            <button onClick={e => { e.stopPropagation(); removeItem(it.id) }} title="Delete" className="text-gray-300 hover:text-red-500 p-1">
+                              <Trash2 size={12}/>
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          {renamingId === it.id ? (
-                            <input autoFocus value={renameValue}
-                              onClick={e => e.stopPropagation()}
-                              onChange={e => setRenameValue(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter') commitRename(it.id); if (e.key === 'Escape') setRenamingId(null) }}
-                              onBlur={() => commitRename(it.id)}
-                              className="w-full text-xs border border-gray-300 rounded px-1.5 py-0.5"/>
-                          ) : (
-                            <p className="text-xs font-medium text-gray-800 truncate">{it.fileName}</p>
-                          )}
-                          <p className={`text-xs mt-0.5 truncate ${it.status === 'error' ? 'text-red-500' : 'text-gray-400'}`}>
-                            {statusLabel(it)}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          <button onClick={e => startRename(it, e)} className="text-gray-300 hover:text-gray-600 p-1">
-                            <Pencil size={12}/>
-                          </button>
-                          <button onClick={e => { e.stopPropagation(); removeItem(it.id) }} className="text-gray-300 hover:text-red-500 p-1">
-                            <Trash2 size={12}/>
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  })}
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* "Admin Edit" — same items, full box/template editor (admins only) */}
+              {isAdmin && (
+                <div className="card">
+                  <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
+                    Admin Edit ({items.length})
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">Full edit</span>
+                  </h2>
+                  {items.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-14 text-center">
+                      <ScanLine size={30} className="text-gray-200 mb-2"/>
+                      <p className="text-xs text-gray-400">No files yet</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
+                      {items.map(it => {
+                        const def = it.detectedType ? docDef(it.detectedType) : null
+                        const Icon = def?.icon || FileWarning
+                        const color = def?.color || '#9ca3af'
+                        const openable = it.status !== 'reading' && it.status !== 'extracting'
+                        return (
+                          <div key={it.id}
+                            onClick={() => openable && (setPopupMode('full'), setSelectedId(it.id))}
+                            className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                              selectedId === it.id && popupMode === 'full' ? 'border-2' : 'border-gray-100 hover:bg-gray-50'
+                            }`}
+                            style={selectedId === it.id && popupMode === 'full' ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
+                            <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0" style={{ background: `${color}20` }}>
+                              {it.status === 'reading' || it.status === 'extracting' || it.status === 'saving'
+                                ? <Loader size={13} className="animate-spin" style={{ color }}/>
+                                : it.status === 'error'
+                                  ? <AlertTriangle size={13} className="text-red-500"/>
+                                  : it.status === 'saved'
+                                    ? <CheckCircle size={13} className="text-green-500"/>
+                                    : <Icon size={13} style={{ color }}/>}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-gray-800 truncate">{it.fileName}</p>
+                              <p className={`text-xs mt-0.5 truncate ${it.status === 'error' ? 'text-red-500' : 'text-gray-400'}`}>
+                                {statusLabel(it)} · {Object.keys(it.boxes).length} box{Object.keys(it.boxes).length === 1 ? '' : 'es'}
+                              </p>
+                            </div>
+                            <ScanLine size={13} className="text-gray-300 flex-shrink-0"/>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -921,11 +984,11 @@ export default function DocumentsPage() {
           </div>
         )}
 
-        {/* === Document popup — full editor for admins, simple view/save for everyone else === */}
-        {selectedItem && (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6"
+        {/* === Document popup — full editor when opened from "Admin Edit", simple view/save when opened from "Uploaded" === */}
+        {selectedItem && (() => { const showFullEditor = isAdmin && popupMode === 'full'; return (
+          <div className={`fixed inset-0 bg-black/40 flex items-center justify-center z-50 ${showFullEditor ? 'p-6' : 'p-0 sm:p-6'}`}
             onClick={() => setSelectedId(null)}>
-            <div className={`bg-white rounded-2xl w-full flex flex-col overflow-hidden ${isAdmin ? 'max-w-6xl max-h-[90vh]' : 'max-w-lg max-h-[85vh]'}`}
+            <div className={`bg-white sm:rounded-2xl w-full flex flex-col overflow-hidden ${showFullEditor ? 'max-w-6xl max-h-[90vh] rounded-2xl' : 'h-full sm:h-auto sm:max-w-lg sm:max-h-[85vh]'}`}
               onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                 <div className="min-w-0">
@@ -960,7 +1023,7 @@ export default function DocumentsPage() {
                 )}
               </div>
 
-              {isAdmin ? (
+              {showFullEditor ? (
                 <>
                   <div className="flex-1 overflow-hidden flex gap-4 px-5 py-3">
                     {/* Left: PDF page image with drawable correction box */}
@@ -1163,9 +1226,9 @@ export default function DocumentsPage() {
                 </>
               ) : (
                 <>
-                  <div className="flex-1 overflow-auto bg-gray-100 p-3 flex items-center justify-center">
+                  <div className="flex-1 overflow-auto bg-gray-100 sm:p-3 flex items-center justify-center min-h-0">
                     {selectedItem.pageImages[viewPage] ? (
-                      <img src={`data:image/png;base64,${selectedItem.pageImages[viewPage]}`} className="max-w-full max-h-full rounded shadow" alt="PDF page"/>
+                      <img src={`data:image/png;base64,${selectedItem.pageImages[viewPage]}`} className="w-full h-full sm:w-auto sm:h-auto object-contain sm:rounded sm:shadow" alt="PDF page"/>
                     ) : (
                       <Loader size={20} className="animate-spin text-gray-400"/>
                     )}
@@ -1201,7 +1264,7 @@ export default function DocumentsPage() {
               )}
             </div>
           </div>
-        )}
+        ) })()}
       </div>
     </AdminLayout>
   )
