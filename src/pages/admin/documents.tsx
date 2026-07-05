@@ -373,6 +373,8 @@ export default function DocumentsPage() {
     const label = window.prompt('Aluth field eke nama danna (eg. Marks & Numbers):')
     if (!label || !label.trim()) return
     const key = `custom_${slugify(label)}_${Date.now().toString(36)}`
+    const docType = selectedItem.detectedType || '(document type select karala nane)'
+    if (!confirm(`"${label.trim()}" field eka add kalama, box eka draw karala Save Format kaloth "${docType}" table ekata aluth column ekak ("${key}") add wenawa. Continue karanna da?`)) return
     updateItem(selectedItem.id, { fields: [...selectedItem.fields, { key, label: label.trim(), value: '' }] })
     setActiveFieldIdx(selectedItem.fields.length) // jump straight into draw mode for the new field
     // scroll the new row into view so the "draw a box" hint is obviously connected to it
@@ -401,7 +403,16 @@ export default function DocumentsPage() {
     }))
   }
 
-  function deleteField(id: string, idx: number) {
+  async function deleteField(id: string, idx: number) {
+    const item = items.find(it => it.id === id)
+    if (!item) return
+    const field = item.fields[idx]
+    const docType = item.detectedType
+    const warning = docType
+      ? `"${field.label}" field eka delete kalama, "${docType}" table eke "${field.key}" column ekath (thibba nam) delete wenawa — meka undo karanna bæ. Continue karanna da?`
+      : `"${field.label}" field eka delete karanna da?`
+    if (!confirm(warning)) return
+
     setItems(prev => prev.map(it => {
       if (it.id !== id) return it
       const removedKey = it.fields[idx].key
@@ -410,6 +421,19 @@ export default function DocumentsPage() {
       return { ...it, fields: it.fields.filter((_, i) => i !== idx), boxes }
     }))
     if (activeFieldIdx === idx) setActiveFieldIdx(null)
+
+    if (docType) {
+      try {
+        const res = await fetch('/api/delete-field', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ doc_type: docType, key: field.key }),
+        })
+        const d = await res.json()
+        if (!res.ok) logError('delete-field', d.error || 'Column delete failed')
+      } catch (e: any) {
+        logError('delete-field', e.message)
+      }
+    }
   }
 
   async function handleSaveFormat() {

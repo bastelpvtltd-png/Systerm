@@ -51,6 +51,17 @@ export async function ensureColumns(table: string, keys: string[]): Promise<void
   }
 }
 
+// Structural columns that must never be dropped even if a matching field key
+// somehow appears (id/created_at/etc. predate the dynamic column system).
+const PROTECTED_COLUMNS = new Set(['id', 'shipment_id', 'created_at', 'pdf_url', 'status', 'details', 'cusdec_no', 'cdn_no', 'boat_note_no'])
+
+export async function dropColumn(table: string, key: string): Promise<void> {
+  if (!ACCESS_TOKEN || !PROJECT_REF) return
+  const validKey = /^[a-z_][a-z0-9_]*$/
+  if (!key || !validKey.test(key) || PROTECTED_COLUMNS.has(key)) return
+  await runManagementQuery(`alter table public."${table}" drop column if exists "${key}"`)
+}
+
 // Writes one document's extracted fields into its structured table.
 // boat_notes keeps a jsonb `details` blob (matches its existing schema);
 // cusdec/cdn/barcode get one real column per field.

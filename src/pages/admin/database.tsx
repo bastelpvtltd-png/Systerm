@@ -28,8 +28,7 @@ export default function DatabasePage() {
   const [savingId, setSavingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deletingAll, setDeletingAll] = useState(false)
-
-  const columns = rows.length ? Object.keys(rows[0]) : []
+  const [columns, setColumns] = useState<string[]>([])
 
   const load = useCallback(async () => {
     setLoading(true); setError(''); setDrafts({})
@@ -38,6 +37,7 @@ export default function DatabasePage() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Load failed')
       setRows(d.rows || [])
+      setColumns(d.columns?.length ? d.columns : (d.rows?.length ? Object.keys(d.rows[0]) : []))
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -148,8 +148,8 @@ export default function DatabasePage() {
         <div className="card overflow-auto" style={{ maxHeight: '70vh' }}>
           {loading ? (
             <div className="flex justify-center py-16"><Loader size={22} className="animate-spin text-gray-400"/></div>
-          ) : rows.length === 0 ? (
-            <div className="text-center py-16 text-gray-400 text-sm">No rows in "{table}"</div>
+          ) : columns.length === 0 ? (
+            <div className="text-center py-16 text-gray-400 text-sm">No columns found for "{table}"</div>
           ) : (
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-gray-50 z-10">
@@ -161,6 +161,9 @@ export default function DatabasePage() {
                 </tr>
               </thead>
               <tbody>
+                {rows.length === 0 && (
+                  <tr><td colSpan={columns.length + 1} className="text-center py-10 text-gray-400">No rows in "{table}" yet</td></tr>
+                )}
                 {rows.map(row => {
                   const draft = draftFor(row)
                   const dirty = !!drafts[row.id]

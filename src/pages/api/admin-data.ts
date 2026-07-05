@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { getTableColumns } from '@/lib/docTables'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,7 +19,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { data, error } = await supabaseAdmin
         .from(table).select('*').order('created_at', { ascending: false }).limit(300)
       if (error) return res.status(400).json({ error: error.message })
-      return res.json({ rows: data })
+      // Column list from the schema, not just from row 0 — so headers still
+      // show (e.g. all of cusdec's columns) even when the table has no rows yet.
+      let columns: string[] = data?.length ? Object.keys(data[0]) : []
+      try {
+        const schemaCols = await getTableColumns(table)
+        if (schemaCols.length) columns = schemaCols
+      } catch { /* management API not configured — fall back to row-derived columns */ }
+      return res.json({ rows: data, columns })
     }
 
     if (req.method === 'PATCH') {
