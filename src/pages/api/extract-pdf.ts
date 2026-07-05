@@ -374,18 +374,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .maybeSingle()
 
       if (template?.grid_config?.boxes) {
-        // Per-field arbitrary boxes (saved via the popup's "draw a correction box" flow)
+        // Per-field arbitrary boxes (saved via the popup's "draw a correction box" flow).
+        // Only some of the doc type's columns may have a box saved yet — the rest of the
+        // table's columns must still show up (blank), not disappear just because they
+        // haven't been boxed. Only an actual field delete should remove one from the list.
         try {
           const boxes: Record<string, { x: number; y: number; w: number; h: number }> = template.grid_config.boxes
           const labels: Record<string, string> = template.field_map || {}
           const excludeWords: Record<string, string> = template.grid_config.excludeWords || {}
           const replacements: Record<string, string> = template.grid_config.replacements || {}
-          fields = await Promise.all(
+          const boxedFields = await Promise.all(
             Object.entries(boxes).map(async ([key, box]) => ({
               key, label: labels[key] || key,
               value: applyTextRules(await extractBox(buffer, box), replacements[key], excludeWords[key]),
             }))
           )
+          const boxedByKey = new Map(boxedFields.map(f => [f.key, f]))
+          const schemaFields = await buildFieldsFromSchema(resolvedType, {})
+          fields = schemaFields.map(f => boxedByKey.get(f.key) || f)
+          for (const bf of boxedFields) if (!fields.find(f => f.key === bf.key)) fields.push(bf)
+
           appliedBoxes = boxes
           gridUsed = true
         } catch (e: any) {

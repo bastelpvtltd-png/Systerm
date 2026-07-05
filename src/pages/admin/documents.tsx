@@ -5,7 +5,7 @@ import {
   Upload, FileText, Package, ScanLine, Ship, Copy,
   CheckCircle, Loader, Save, Eye, ExternalLink,
   RefreshCw, AlertTriangle, X, ChevronRight, Receipt,
-  Trash2, Pencil, Check, FileWarning, Plus
+  Trash2, Pencil, Check, FileWarning, Plus, Lock, Unlock
 } from 'lucide-react'
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
@@ -14,6 +14,7 @@ type PdfField = {
   rawValue?: string // last OCR/API text, before exclude-words/replacements — lets edits to those rules be reversible
   excludeWords?: string
   replacements?: string // "find=>replace, find=>replace" — fixes consistent OCR misreads
+  locked?: boolean // when true, this field can't be edited/re-drawn/deleted until unlocked
 }
 type Panel = 'upload' | 'preview'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
@@ -429,6 +430,7 @@ export default function DocumentsPage() {
     setItems(prev => prev.map(it => {
       if (it.id !== id) return it
       const oldField = it.fields[idx]
+      if (oldField.locked) return it
       const newKey = slugify(newLabel)
       const fields = it.fields.map((f, i) => i === idx ? { ...f, label: newLabel.trim(), key: newKey } : f)
       const boxes = { ...it.boxes }
@@ -440,10 +442,17 @@ export default function DocumentsPage() {
     }))
   }
 
+  function toggleLock(id: string, idx: number) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, locked: !f.locked } : f) }
+      : it))
+  }
+
   async function deleteField(id: string, idx: number) {
     const item = items.find(it => it.id === id)
     if (!item) return
     const field = item.fields[idx]
+    if (field.locked) { alert('Meka field eka locked wela thiyenawa — mudalin unlock karanna.'); return }
     const docType = item.detectedType
     const warning = docType
       ? `"${field.label}" field eka delete kalama, "${docType}" table eke "${field.key}" column ekath (thibba nam) delete wenawa — meka undo karanna bæ. Continue karanna da?`
@@ -909,34 +918,35 @@ export default function DocumentsPage() {
                           <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
                           <th className="w-10 text-center px-1 py-2 text-gray-500 font-medium">Fix</th>
                           <th className="w-8"></th>
+                          <th className="w-8"></th>
                         </tr>
                       </thead>
                       <tbody>
                         {selectedItem.fields.map((f, i) => (
-                          <tr key={i} className={`border-t border-gray-50 hover:bg-gray-50 ${activeFieldIdx === i ? 'bg-red-50' : ''}`}>
+                          <tr key={i} className={`border-t border-gray-50 hover:bg-gray-50 ${activeFieldIdx === i ? 'bg-red-50' : ''} ${f.locked ? 'bg-gray-50' : ''}`}>
                             <td className="px-2 py-1.5">
                               <span className="inline-flex items-center justify-center w-6 h-6 text-white text-xs font-bold rounded"
                                 style={{ background: selectedItem.boxes[f.key] ? '#16a34a' : (docDef(selectedItem.detectedType)?.color || '#6b7280') }}>{i + 1}</span>
                             </td>
                             <td className="px-2 py-1.5">
-                              <input defaultValue={f.label} key={f.key}
+                              <input defaultValue={f.label} key={f.key} disabled={f.locked}
                                 onBlur={e => renameField(selectedItem.id, i, e.target.value)}
                                 onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
                                 title="Column name — rename to match the target table's column"
-                                className="w-full bg-transparent text-gray-600 font-medium border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5"/>
+                                className="w-full bg-transparent text-gray-600 font-medium border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 disabled:text-gray-400"/>
                             </td>
                             <td className="px-2 py-1.5">
-                              <input value={f.value} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
+                              <input value={f.value} disabled={f.locked} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
                                 placeholder="—"
-                                className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800"/>
-                              <input value={f.excludeWords || ''}
+                                className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800 disabled:text-gray-400"/>
+                              <input value={f.excludeWords || ''} disabled={f.locked}
                                 onChange={e => updateFieldRuleText(selectedItem.id, i, { excludeWords: e.target.value })}
                                 onBlur={() => commitFieldRules(selectedItem.id, i)}
                                 onKeyDown={e => { if (e.key === 'Enter') commitFieldRules(selectedItem.id, i) }}
                                 title="Words to remove from the value — reversible, doesn't touch the original OCR text"
                                 placeholder="exclude words (comma separated)..."
                                 className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5"/>
-                              <input value={f.replacements || ''}
+                              <input value={f.replacements || ''} disabled={f.locked}
                                 onChange={e => updateFieldRuleText(selectedItem.id, i, { replacements: e.target.value })}
                                 onBlur={() => commitFieldRules(selectedItem.id, i)}
                                 onKeyDown={e => { if (e.key === 'Enter') commitFieldRules(selectedItem.id, i) }}
@@ -945,9 +955,10 @@ export default function DocumentsPage() {
                                 className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5"/>
                             </td>
                             <td className="px-1 py-1.5">
-                              <button onClick={() => setActiveFieldIdx(activeFieldIdx === i ? null : i)}
-                                title="Draw correction box on the PDF image"
-                                className={`w-7 h-7 rounded-md border flex items-center justify-center flex-shrink-0 ${
+                              <button onClick={() => !f.locked && setActiveFieldIdx(activeFieldIdx === i ? null : i)}
+                                disabled={f.locked}
+                                title={f.locked ? 'Unlock first to draw a box' : 'Draw correction box on the PDF image'}
+                                className={`w-7 h-7 rounded-md border flex items-center justify-center flex-shrink-0 disabled:opacity-40 ${
                                   activeFieldIdx === i
                                     ? 'bg-red-500 border-red-500 text-white'
                                     : 'border-gray-200 text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50'
@@ -956,9 +967,19 @@ export default function DocumentsPage() {
                               </button>
                             </td>
                             <td className="px-1 py-1.5">
+                              <button onClick={() => toggleLock(selectedItem.id, i)}
+                                title={f.locked ? 'Unlock this field' : 'Lock this field (prevents edit/delete/redraw)'}
+                                className={`w-7 h-7 rounded-md border flex items-center justify-center flex-shrink-0 ${
+                                  f.locked ? 'bg-amber-100 border-amber-300 text-amber-600' : 'border-gray-200 text-gray-300 hover:text-amber-500 hover:border-amber-300 hover:bg-amber-50'
+                                }`}>
+                                {f.locked ? <Lock size={13}/> : <Unlock size={13}/>}
+                              </button>
+                            </td>
+                            <td className="px-1 py-1.5">
                               <button onClick={() => deleteField(selectedItem.id, i)}
-                                title="Delete this field"
-                                className="w-7 h-7 rounded-md border border-gray-200 text-gray-300 hover:text-red-500 hover:border-red-300 hover:bg-red-50 flex items-center justify-center flex-shrink-0">
+                                disabled={f.locked}
+                                title={f.locked ? 'Unlock first to delete' : 'Delete this field'}
+                                className="w-7 h-7 rounded-md border border-gray-200 text-gray-300 hover:text-red-500 hover:border-red-300 hover:bg-red-50 flex items-center justify-center flex-shrink-0 disabled:opacity-40">
                                 <Trash2 size={13}/>
                               </button>
                             </td>
