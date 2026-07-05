@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { supabase } from '@/lib/supabase'
 import {
-  LayoutDashboard, Ship, FileText, Package,
+  LayoutDashboard, Ship, Package,
   BarChart2, Users, Settings, LogOut,
-  ChevronLeft, ChevronRight, Shield, DollarSign, Anchor, ScanLine,
-  Truck, Copy, Grid, Database, Upload, CheckCircle, Loader,
+  ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
+  Database, Upload, CheckCircle, Loader, MessageSquare,
 } from 'lucide-react'
 
 // Single unified nav list — there is no separate admin/worker site anymore.
@@ -17,13 +17,11 @@ export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/my-tasks',         icon: CheckCircle,     label: 'My Tasks' },
   { href: '/admin/shipments',        icon: Ship,            label: 'Shipments' },
-  { href: '/admin/doc-check',        icon: ScanLine,        label: 'Doc Check' },
-  { href: '/admin/grid-map',         icon: Grid,            label: 'Grid Mapper' },
-  { href: '/admin/cusdec',           icon: FileText,        label: 'CUSDEC' },
-  { href: '/admin/cdn',              icon: Truck,           label: 'CDN' },
   { href: '/admin/documents',        icon: Package,         label: 'Documents' },
   { href: '/admin/documents-upload', icon: Upload,          label: 'Upload Docs' },
+  { href: '/admin/drive-files',      icon: Database,        label: 'Drive Files' },
   { href: '/admin/boat-note',        icon: Anchor,          label: 'Boat Notes' },
+  { href: '/admin/messages',         icon: MessageSquare,   label: 'Messages' },
   { href: '/admin/database',         icon: Database,        label: 'Database' },
   { href: '/admin/financials',       icon: DollarSign,      label: 'Financials' },
   { href: '/admin/reports',          icon: BarChart2,       label: 'Reports' },
@@ -31,6 +29,25 @@ export const TAB_ITEMS = [
   { href: '/admin/logs',             icon: Shield,          label: 'Login Logs' },
   { href: '/admin/settings',         icon: Settings,        label: 'Settings' },
 ]
+
+// Finer-grained pieces inside a tab — the Dashboard's stat cards, for example,
+// can each be individually granted instead of all-or-nothing with the tab.
+// Keys are namespaced "section:<page>.<piece>" so they never collide with a
+// tab href, and live in the same allowed_tabs array.
+export const SECTION_ITEMS = [
+  { key: 'section:dashboard.total-shipments', group: 'Dashboard', label: 'Total Shipments card' },
+  { key: 'section:dashboard.cusdec-pending',  group: 'Dashboard', label: 'CUSDEC Pending card' },
+  { key: 'section:dashboard.boatnote-pending',group: 'Dashboard', label: 'Boat Note Pending card' },
+  { key: 'section:dashboard.cdn-pending',     group: 'Dashboard', label: 'CDN Pending card' },
+  { key: 'section:dashboard.release-pending', group: 'Dashboard', label: 'Export Release Pending card' },
+  { key: 'section:dashboard.pending-summary', group: 'Dashboard', label: 'Pending Work Summary panel' },
+]
+
+interface PermissionValue { isAdmin: boolean; has: (key: string) => boolean }
+const PermissionContext = createContext<PermissionValue>({ isAdmin: false, has: () => false })
+export function usePermission() {
+  return useContext(PermissionContext)
+}
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -87,8 +104,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }
 
   const visibleItems = isAdmin ? TAB_ITEMS : TAB_ITEMS.filter(t => allowedTabs.includes(t.href))
+  const permValue: PermissionValue = { isAdmin, has: (key: string) => isAdmin || allowedTabs.includes(key) }
 
   return (
+    <PermissionContext.Provider value={permValue}>
     <div className="flex min-h-screen">
       {/* Sidebar */}
       <aside className={`sidebar flex flex-col transition-all duration-300 ${collapsed ? 'w-16' : 'w-56'}`}>
@@ -118,6 +137,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
         {/* Collapse + Logout */}
         <div className="p-2 border-t border-white/10 space-y-1">
+          <Link href="/profile"
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+              router.pathname === '/profile' ? 'bg-brand-green text-white' : 'text-blue-100 hover:bg-white/10'
+            }`}>
+            <Users size={18} className="flex-shrink-0"/>
+            {!collapsed && <span>My Profile</span>}
+          </Link>
           <button onClick={handleLogout}
             className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm text-red-300 hover:bg-white/10">
             <LogOut size={18}/>
@@ -136,5 +162,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {children}
       </main>
     </div>
+    </PermissionContext.Provider>
   )
 }

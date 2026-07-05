@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import AdminLayout from '@/components/admin/AdminLayout'
+import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { supabase } from '@/lib/supabase'
 import { Ship, FileText, Package, Clock, CheckCircle, AlertCircle, DollarSign } from 'lucide-react'
 
@@ -37,13 +37,22 @@ export default function AdminDashboard() {
     load()
   }, [])
 
+  const { has } = usePermission()
+
   const stats = [
-    { label: 'Total Shipments',      value: summary.totalShipments, icon: Ship,        color: '#1B3A5C' },
-    { label: 'CUSDEC Pending',       value: summary.pendingCusdec,  icon: FileText,    color: '#f59e0b' },
-    { label: 'Boat Note Pending',    value: summary.pendingBoatNote,icon: Package,     color: '#3b82f6' },
-    { label: 'CDN Pending',          value: summary.pendingCdn,     icon: Clock,       color: '#8b5cf6' },
-    { label: 'Export Release Pending',value: summary.pendingRelease,icon: AlertCircle, color: '#ef4444' },
-  ]
+    { key: 'section:dashboard.total-shipments',  label: 'Total Shipments',       value: summary.totalShipments, icon: Ship,        color: '#1B3A5C' },
+    { key: 'section:dashboard.cusdec-pending',   label: 'CUSDEC Pending',        value: summary.pendingCusdec,  icon: FileText,    color: '#f59e0b' },
+    { key: 'section:dashboard.boatnote-pending', label: 'Boat Note Pending',     value: summary.pendingBoatNote,icon: Package,     color: '#3b82f6' },
+    { key: 'section:dashboard.cdn-pending',      label: 'CDN Pending',           value: summary.pendingCdn,     icon: Clock,       color: '#8b5cf6' },
+    { key: 'section:dashboard.release-pending',  label: 'Export Release Pending',value: summary.pendingRelease, icon: AlertCircle, color: '#ef4444' },
+  ].filter(s => has(s.key))
+
+  const summaryRows = [
+    { key: 'section:dashboard.cusdec-pending',   label: 'CUSDEC Pending',        count: summary.pendingCusdec,  color: 'yellow' },
+    { key: 'section:dashboard.boatnote-pending', label: 'Boat Note Pending',     count: summary.pendingBoatNote,color: 'blue' },
+    { key: 'section:dashboard.cdn-pending',      label: 'CDN Pending',           count: summary.pendingCdn,     color: 'purple' },
+    { key: 'section:dashboard.release-pending',  label: 'Export Release Pending',count: summary.pendingRelease, color: 'red' },
+  ].filter(s => has(s.key))
 
   return (
     <AdminLayout>
@@ -54,40 +63,39 @@ export default function AdminDashboard() {
         </div>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
-          {stats.map(({label, value, icon: Icon, color}) => (
-            <div key={label} className="card">
-              <div className="flex items-center justify-between mb-3">
-                <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{background: color+'20'}}>
-                  <Icon size={18} style={{color}}/>
+        {stats.length > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+            {stats.map(({label, value, icon: Icon, color}) => (
+              <div key={label} className="card">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{background: color+'20'}}>
+                    <Icon size={18} style={{color}}/>
+                  </div>
                 </div>
-              </div>
-              <div className="text-2xl font-bold text-gray-900">{value}</div>
-              <div className="text-xs text-gray-500 mt-1">{label}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Pending Work Summary */}
-        <div className="card">
-          <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Clock size={18} className="text-brand-green"/>
-            Pending Work Summary
-          </h2>
-          <div className="space-y-3">
-            {[
-              { label: 'CUSDEC Pending',        count: summary.pendingCusdec,  color: 'yellow' },
-              { label: 'Boat Note Pending',     count: summary.pendingBoatNote,color: 'blue' },
-              { label: 'CDN Pending',           count: summary.pendingCdn,     color: 'purple' },
-              { label: 'Export Release Pending',count: summary.pendingRelease, color: 'red' },
-            ].map(({label, count, color}) => (
-              <div key={label} className="flex items-center justify-between py-2 border-b border-gray-50">
-                <span className="text-sm text-gray-700">{label}</span>
-                <span className={`badge-pending text-${color}-800 bg-${color}-100`}>{count} pending</span>
+                <div className="text-2xl font-bold text-gray-900">{value}</div>
+                <div className="text-xs text-gray-500 mt-1">{label}</div>
               </div>
             ))}
           </div>
-        </div>
+        )}
+
+        {/* Pending Work Summary */}
+        {has('section:dashboard.pending-summary') && summaryRows.length > 0 && (
+          <div className="card">
+            <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <Clock size={18} className="text-brand-green"/>
+              Pending Work Summary
+            </h2>
+            <div className="space-y-3">
+              {summaryRows.map(({label, count, color}) => (
+                <div key={label} className="flex items-center justify-between py-2 border-b border-gray-50">
+                  <span className="text-sm text-gray-700">{label}</span>
+                  <span className={`badge-pending text-${color}-800 bg-${color}-100`}>{count} pending</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </AdminLayout>
   )

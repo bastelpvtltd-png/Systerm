@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import AdminLayout, { TAB_ITEMS } from '@/components/admin/AdminLayout'
+import AdminLayout, { TAB_ITEMS, SECTION_ITEMS } from '@/components/admin/AdminLayout'
 import { supabase } from '@/lib/supabase'
 import { Users, Plus, Edit2, X, Save } from 'lucide-react'
 
@@ -20,6 +20,8 @@ export default function UsersPage() {
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string|null>(null)
   const [form, setForm] = useState(emptyForm)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
 
   useEffect(() => { fetchUsers() }, [])
 
@@ -36,22 +38,32 @@ export default function UsersPage() {
   }
 
   async function handleSave() {
+    setSaving(true)
+    setSaveError('')
     const patch = {
       username: form.username, full_name: form.full_name, position: form.position,
       is_admin: form.is_admin, allowed_tabs: form.allowed_tabs,
     }
-    if (editId) {
-      await supabase.from('profiles').update(patch).eq('id', editId)
-    } else {
-      // Create auth user then profile
-      const email = `${form.username}@exportsys.local`
-      const { data: authData } = await supabase.auth.admin?.createUser?.({ email, password: form.password, email_confirm: true }) ?? {}
-      if (authData?.user) {
-        await supabase.from('profiles').insert({ id: authData.user.id, ...patch })
+    try {
+      if (editId) {
+        const { error } = await supabase.from('profiles').update(patch).eq('id', editId)
+        if (error) throw error
+      } else {
+        if (!form.password) throw new Error('Password required for a new account')
+        const res = await fetch('/api/create-user', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...patch, password: form.password }),
+        })
+        const d = await res.json()
+        if (!res.ok) throw new Error(d.error || 'Account creation failed')
       }
+      setModal(false)
+      fetchUsers()
+    } catch (e: any) {
+      setSaveError(e.message)
+    } finally {
+      setSaving(false)
     }
-    setModal(false)
-    fetchUsers()
   }
 
   return (
@@ -62,7 +74,7 @@ export default function UsersPage() {
             <h1 className="text-2xl font-bold flex items-center gap-2"><Users size={22} className="text-brand-green"/>Users</h1>
             <p className="text-gray-500 text-sm">Manage accounts and which tabs each person can access</p>
           </div>
-          <button onClick={() => { setForm(emptyForm); setEditId(null); setModal(true) }} className="btn-primary flex items-center gap-2">
+          <button onClick={() => { setForm(emptyForm); setEditId(null); setSaveError(''); setModal(true) }} className="btn-primary flex items-center gap-2">
             <Plus size={16}/>Add User
           </button>
         </div>
@@ -93,7 +105,7 @@ export default function UsersPage() {
                         username: u.username, full_name: u.full_name, position: u.position || '',
                         password: '', is_admin: !!u.is_admin, allowed_tabs: u.allowed_tabs || [],
                       })
-                      setEditId(u.id); setModal(true)
+                      setEditId(u.id); setSaveError(''); setModal(true)
                     }}
                       className="p-1.5 rounded hover:bg-blue-50 text-blue-600"><Edit2 size={14}/></button>
                   </td>
@@ -138,11 +150,27 @@ export default function UsersPage() {
                   </div>
                 </div>
               )}
+
+              {!form.is_admin && form.allowed_tabs.includes('/admin') && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Dashboard cards this user can see</label>
+                  <div className="space-y-1 max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                    {SECTION_ITEMS.map(s => (
+                      <label key={s.key} className="flex items-center gap-2 text-sm py-1 px-1 rounded hover:bg-gray-50">
+                        <input type="checkbox" checked={form.allowed_tabs.includes(s.key)} onChange={() => toggleTab(s.key)}/>
+                        {s.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {saveError && <p className="text-xs text-red-600">{saveError}</p>}
             </div>
             <div className="flex gap-3 p-6 border-t flex-shrink-0">
               <button onClick={() => setModal(false)} className="btn-secondary flex-1">Cancel</button>
-              <button onClick={handleSave} className="btn-primary flex-1 flex items-center justify-center gap-2">
-                <Save size={16}/>Save
+              <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-50">
+                <Save size={16}/>{saving ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>

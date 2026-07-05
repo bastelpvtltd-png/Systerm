@@ -11,6 +11,8 @@ const TABLES = [
   { key: 'boat_notes', label: 'Boat Notes' },
   { key: 'uploaded_documents', label: 'Uploaded Documents' },
   { key: 'pdf_templates', label: 'PDF Templates' },
+  { key: 'messages', label: 'Messages' },
+  { key: 'profiles', label: 'Users (Profiles)' },
 ]
 
 type Row = Record<string, any>

@@ -8,7 +8,7 @@ const supabaseAdmin = createClient(
 )
 
 // Whitelisted so this endpoint can't be pointed at arbitrary/system tables.
-const ALLOWED_TABLES = ['cusdec', 'cdn', 'barcode', 'boat_notes', 'uploaded_documents', 'pdf_templates']
+const ALLOWED_TABLES = ['cusdec', 'cdn', 'barcode', 'boat_notes', 'uploaded_documents', 'pdf_templates', 'messages', 'profiles']
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const table = String(req.query.table || '')
