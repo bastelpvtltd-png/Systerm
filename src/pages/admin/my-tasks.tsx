@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useRouter } from 'next/router'
-import { CheckCircle, Clock, User } from 'lucide-react'
-import WorkerLayout from '@/components/worker/WorkerLayout'
+import AdminLayout from '@/components/admin/AdminLayout'
+import { CheckCircle } from 'lucide-react'
 
 interface Task {
   id: string
@@ -13,26 +12,14 @@ interface Task {
   shipments?: { shipment_no: string }
 }
 
-interface Profile {
-  username: string
-  full_name: string
-  role: string
-}
-
-export default function WorkerDashboard() {
-  const router = useRouter()
-  const [profile, setProfile] = useState<Profile|null>(null)
+export default function MyTasksPage() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [tab, setTab] = useState<'pending'|'done'>('pending')
 
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/'); return }
-
-      const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-      setProfile(prof)
-
+      if (!user) return
       const { data: t } = await supabase.from('worker_tasks')
         .select('*, shipments(shipment_no)')
         .eq('assigned_to', user.id)
@@ -50,15 +37,11 @@ export default function WorkerDashboard() {
   const filtered = tasks.filter(t => t.status === tab)
 
   return (
-    <WorkerLayout>
+    <AdminLayout>
       <div className="p-6 max-w-3xl mx-auto">
-        <div className="flex items-center gap-2 mb-1">
-          <h1 className="text-xl font-bold">My Tasks</h1>
-          <span className="flex items-center gap-1 text-xs text-gray-400"><User size={12}/>{profile?.full_name || profile?.username}</span>
-        </div>
+        <h1 className="text-xl font-bold mb-1">My Tasks</h1>
         <p className="text-gray-500 text-sm mb-6">{tasks.filter(t=>t.status==='pending').length} pending tasks</p>
 
-        {/* Tabs */}
         <div className="flex gap-2 mb-4">
           {(['pending','done'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
@@ -71,7 +54,6 @@ export default function WorkerDashboard() {
           ))}
         </div>
 
-        {/* Tasks */}
         <div className="space-y-3">
           {filtered.map(task => (
             <div key={task.id} className="card flex items-center justify-between">
@@ -100,6 +82,6 @@ export default function WorkerDashboard() {
           )}
         </div>
       </div>
-    </WorkerLayout>
+    </AdminLayout>
   )
 }

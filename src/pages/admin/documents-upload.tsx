@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/router'
-import { supabase } from '@/lib/supabase'
-import WorkerLayout from '@/components/worker/WorkerLayout'
+import AdminLayout from '@/components/admin/AdminLayout'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
   Trash2, Pencil, FileWarning,
 } from 'lucide-react'
 
-// Reduced-access clone of admin/documents.tsx for regular users: upload, rename,
-// see the auto-detected type, correct it if wrong, save, or delete — no box
-// drawing or extraction-template editing (that stays an admin-only tool).
+// Reduced-access clone of admin/documents.tsx: upload, rename, see the
+// auto-detected type, correct it if wrong, save, or delete — no box drawing
+// or extraction-template editing (that stays on the full Documents tab).
+// Who can see this tab at all is controlled per-user via allowed_tabs
+// (see AdminLayout + admin/users.tsx), not by a separate admin/worker site.
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
@@ -64,8 +64,7 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
-export default function WorkerDocumentsPage() {
-  const router = useRouter()
+export default function DocumentsUploadPage() {
   const [items, setItems] = useState<UploadItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -74,10 +73,6 @@ export default function WorkerDocumentsPage() {
   const [viewPage, setViewPage] = useState(0)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => { if (!user) router.push('/') })
-  }, [])
 
   function updateItem(id: string, patch: Partial<UploadItem>) {
     setItems(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it))
@@ -199,7 +194,7 @@ export default function WorkerDocumentsPage() {
   const readyCount = items.filter(it => it.status === 'ready').length
 
   return (
-    <WorkerLayout>
+    <AdminLayout>
       <div className="p-6 max-w-5xl mx-auto">
         <div className="flex items-center gap-2 mb-1">
           <h1 className="text-xl font-bold text-gray-900">Documents</h1>
@@ -301,7 +296,7 @@ export default function WorkerDocumentsPage() {
         </div>
       </div>
 
-      {/* Simple view/save popup — no box drawing or field editing (admin-only tools) */}
+      {/* Simple view/save popup — no box drawing or field editing (that stays on the full Documents tab) */}
       {selectedItem && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
           onClick={() => setSelectedId(null)}>
@@ -374,6 +369,6 @@ export default function WorkerDocumentsPage() {
           </div>
         </div>
       )}
-    </WorkerLayout>
+    </AdminLayout>
   )
 }

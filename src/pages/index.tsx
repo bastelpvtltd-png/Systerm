@@ -50,13 +50,7 @@ export default function LoginPage() {
       return
     }
 
-    const { data: prof } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', data.user.id)
-      .single()
-
-    router.push(prof?.role === 'admin' ? '/admin' : '/worker')
+    router.push('/admin')
   }
 
   return (
