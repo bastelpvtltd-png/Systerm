@@ -34,8 +34,19 @@ export async function extractBox(buffer: Buffer, box: PctBox): Promise<string> {
   const worker = await createWorker('eng', 1, { cachePath: CACHE_PATH })
   try {
     const { data } = await worker.recognize(png)
-    return data.text.replace(/\s+/g, ' ').trim()
+    return cleanOcrText(data.text)
   } finally {
     await worker.terminate()
   }
+}
+
+// Tidies up whitespace within each line (OCR often inserts extra spaces/tabs)
+// without collapsing the line breaks themselves — a box spanning an address
+// or multi-line field should keep the same line layout as the original text.
+function cleanOcrText(text: string): string {
+  return text
+    .split('\n')
+    .map(line => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n')
 }

@@ -8,7 +8,13 @@ export function stripExcludeWords(text: string, excludeWordsCsv: string | undefi
     const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     result = result.replace(new RegExp(escaped, 'gi'), '')
   }
-  return result.replace(/\s+/g, ' ').trim()
+  // Collapse repeated spaces/tabs within each line, but keep the line breaks —
+  // a multi-line box (e.g. an address) should keep its original line layout.
+  return result
+    .split('\n')
+    .map(line => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n')
 }
 
 // Fixes consistent OCR misreads (e.g. "0" read for "O", wrong case) — rules
