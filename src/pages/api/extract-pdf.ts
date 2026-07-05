@@ -44,7 +44,7 @@ function extractCdnFields(text: string): Record<string, string> {
     lorry_no: '', trailer_no: '', loading_port: '', discharge_port: '',
     vessel: '', voc: '', coc: '', cusdec_number: '', container_no: '',
     con_type: '', seal_no: '', goods_description: '', gross_mass: '',
-    pkg_no: '', pkg_type: '', cdn_no: '', volume: '', marks: '',
+    pkg_no: '', pkg_type: '', cdn_no: '', volume: '', marks: '', temperature: '',
   }
 
   // Driver: line before "13. Location of Goods"
@@ -167,9 +167,10 @@ function extractCdnFields(text: string): Record<string, string> {
 // CUSDEC extraction — ported from Python main1.py CUSDEC section
 function extractCusdecFields(text: string): Record<string, string> {
   const data: Record<string, string> = {
-    number: '', date: '', exporter: '', consignee: '', total_packages: '',
-    country_of_export: '', vessel: '', voyage_no: '', discharging: '',
-    location_of_goods: '', amount: '', hs_code: '', gross_mass: '', net_mass: '', bl_no: '',
+    code: '', number: '', date: '', exporter: '', consignee: '', total_packages: '',
+    cty_of_last: '', country_of_export: '', cap: '', vessel: '', voyage_no: '', discharging: '',
+    location_of_goods: '', delivery_terms: '', amount: '', pkges: '', type: '', description: '',
+    hs_code: '', gross_mass: '', net_mass: '', preference: '', procedure_code: '', bl_no: '',
   }
 
   // Office ref → number
@@ -293,8 +294,18 @@ function extractBoatNoteFields(text: string): Record<string, string> {
   return data
 }
 
+// Nicer labels for keys whose plain "KEY_NAME -> KEY NAME" uppercasing wouldn't
+// read naturally, matching the exact column names the user wants to see.
+const LABEL_OVERRIDES: Record<string, string> = {
+  cap: 'C.A.P.', hs_code: '(HS) Code', cty_of_last: 'Cty of Last',
+  voyage_no: 'Voyage No./Date', bl_no: 'BL No.', pkges: 'PKGES',
+  gross_mass: 'Gross Mass (KG)', net_mass: 'Net Mass (KG)',
+}
+
 function toFieldArray(data: Record<string, string>, docType: string) {
-  return Object.entries(data).map(([key, value]) => ({ key, label: key.replace(/_/g, ' ').toUpperCase(), value }))
+  return Object.entries(data).map(([key, value]) => ({
+    key, label: LABEL_OVERRIDES[key] || key.replace(/_/g, ' ').toUpperCase(), value,
+  }))
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
