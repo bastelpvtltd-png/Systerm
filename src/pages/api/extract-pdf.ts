@@ -382,11 +382,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const boxes: Record<string, { x: number; y: number; w: number; h: number }> = template.grid_config.boxes
           const labels: Record<string, string> = template.field_map || {}
           const excludeWords: Record<string, string> = template.grid_config.excludeWords || {}
-          const replacements: Record<string, string> = template.grid_config.replacements || {}
+          const formulas: Record<string, string> = template.grid_config.formulas || {}
           const boxedFields = await Promise.all(
             Object.entries(boxes).map(async ([key, box]) => ({
               key, label: labels[key] || key,
-              value: applyTextRules(await extractBox(buffer, box), replacements[key], excludeWords[key]),
+              value: applyTextRules(await extractBox(buffer, box), formulas[key], excludeWords[key]),
             }))
           )
           const boxedByKey = new Map(boxedFields.map(f => [f.key, f]))

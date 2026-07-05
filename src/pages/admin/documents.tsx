@@ -11,9 +11,9 @@ import {
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
 type PdfField = {
   key: string; label: string; value: string
-  rawValue?: string // last OCR/API text, before exclude-words/replacements — lets edits to those rules be reversible
+  rawValue?: string // last OCR/API text, before exclude-words/formula — lets edits to those rules be reversible
   excludeWords?: string
-  replacements?: string // "find=>replace, find=>replace" — fixes consistent OCR misreads
+  formula?: string // Excel-like slicing code, e.g. "LINE(2)|AFTER(:)" — lets 2 fields share one box's raw text
   locked?: boolean // when true, this field can't be edited/re-drawn/deleted until unlocked
 }
 type Panel = 'upload' | 'preview'
@@ -185,15 +185,16 @@ export default function DocumentsPage() {
       : it))
   }
 
-  // Tracks exclude-words/replacements text as the user types (no side effect yet).
-  function updateFieldRuleText(id: string, idx: number, patch: Partial<Pick<PdfField, 'excludeWords' | 'replacements'>>) {
+  // Tracks exclude-words/formula text as the user types (no side effect yet).
+  function updateFieldRuleText(id: string, idx: number, patch: Partial<Pick<PdfField, 'excludeWords' | 'formula'>>) {
     setItems(prev => prev.map(it => it.id === id
       ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, ...patch } : f) }
       : it))
   }
 
   // On blur/Enter, recompute value from rawValue — non-destructive, so
-  // removing an exclude-word or replacement rule brings that text back.
+  // removing an exclude-word or changing the formula brings that text back
+  // and re-slices it fresh.
   async function commitFieldRules(id: string, idx: number) {
     let updatedField: PdfField | undefined
     let docType = ''
@@ -203,7 +204,7 @@ export default function DocumentsPage() {
       return {
         ...it, fields: it.fields.map((f, i) => {
           if (i !== idx) return f
-          updatedField = { ...f, value: applyTextRules(f.rawValue ?? f.value, f.replacements, f.excludeWords) }
+          updatedField = { ...f, value: applyTextRules(f.rawValue ?? f.value, f.formula, f.excludeWords) }
           return updatedField
         }),
       }
@@ -217,7 +218,7 @@ export default function DocumentsPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           doc_type: docType, key: updatedField.key, label: updatedField.label,
-          excludeWords: updatedField.excludeWords, replacements: updatedField.replacements,
+          excludeWords: updatedField.excludeWords, formula: updatedField.formula,
         }),
       })
       const d = await res.json()
@@ -227,15 +228,31 @@ export default function DocumentsPage() {
     }
   }
 
-  // Applies any exclude-words/replacements the field already has configured
-  // to freshly-OCR'd text (a new draw or re-draw), while keeping the untouched
-  // raw text around so later rule edits stay reversible.
+  // Applies any exclude-words/formula the field already has configured to
+  // freshly-OCR'd text (a new draw, re-draw, or a box shared from another
+  // field), while keeping the untouched raw text around so rule edits stay
+  // reversible and so a sibling field sharing the box can re-slice it too.
   function setFieldFromOcr(id: string, idx: number, rawText: string) {
     setItems(prev => prev.map(it => it.id === id
       ? { ...it, fields: it.fields.map((f, i) => i === idx
-          ? { ...f, rawValue: rawText, value: applyTextRules(rawText, f.replacements, f.excludeWords) }
+          ? { ...f, rawValue: rawText, value: applyTextRules(rawText, f.formula, f.excludeWords) }
           : f) }
       : it))
+  }
+
+  // "Use the same box as field #N" — copies that field's box + raw OCR text
+  // over, so this field can apply its own formula to the identical crop
+  // instead of drawing a duplicate box (e.g. VOC/COC both living in one cell).
+  async function useSharedBox(id: string, idx: number, sourceIdx: number) {
+    const item = items.find(it => it.id === id)
+    if (!item || sourceIdx < 0) return
+    const sourceField = item.fields[sourceIdx]
+    const sourceBox = item.boxes[sourceField.key]
+    if (!sourceBox) return
+    const targetKey = item.fields[idx].key
+    updateItem(id, { boxes: { ...item.boxes, [targetKey]: sourceBox } })
+    setFieldFromOcr(id, idx, sourceField.rawValue ?? sourceField.value)
+    await commitFieldRules(id, idx)
   }
 
   async function saveOne(item: UploadItem): Promise<boolean> {
@@ -516,10 +533,10 @@ export default function DocumentsPage() {
       const boxedFields = selectedItem.fields.filter(f => selectedItem.boxes[f.key])
       const labels = Object.fromEntries(boxedFields.map(f => [f.key, f.label]))
       const excludeWords = Object.fromEntries(boxedFields.filter(f => f.excludeWords?.trim()).map(f => [f.key, f.excludeWords]))
-      const replacements = Object.fromEntries(boxedFields.filter(f => f.replacements?.trim()).map(f => [f.key, f.replacements]))
+      const formulas = Object.fromEntries(boxedFields.filter(f => f.formula?.trim()).map(f => [f.key, f.formula]))
       const res = await fetch('/api/save-field-boxes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords, replacements }),
+        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords, formulas }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Save failed')
@@ -971,13 +988,24 @@ export default function DocumentsPage() {
                                 title="Words to remove from the value — reversible, doesn't touch the original OCR text"
                                 placeholder="exclude words (comma separated)..."
                                 className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5"/>
-                              <input value={f.replacements || ''} disabled={f.locked}
-                                onChange={e => updateFieldRuleText(selectedItem.id, i, { replacements: e.target.value })}
+                              <input value={f.formula || ''} disabled={f.locked}
+                                onChange={e => updateFieldRuleText(selectedItem.id, i, { formula: e.target.value })}
                                 onBlur={() => commitFieldRules(selectedItem.id, i)}
                                 onKeyDown={e => { if (e.key === 'Enter') commitFieldRules(selectedItem.id, i) }}
-                                title="Fix consistent OCR misreads — format: wrong=>right, wrong=>right"
-                                placeholder="fix OCR: wrong=>right, wrong=>right..."
-                                className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5"/>
+                                title="Excel-like code to slice this field's value out of the box text. Steps chain with | — LINE(n), LEFT(n), RIGHT(n), MID(start,len), AFTER(text), BEFORE(text), TRIM(). e.g. LINE(2)|AFTER(:)"
+                                placeholder="code: e.g. LINE(2)|AFTER(:)..."
+                                className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5 font-mono"/>
+                              {selectedItem.fields.some((of, oi) => oi !== i && selectedItem.boxes[of.key]) && (
+                                <select value="" disabled={f.locked}
+                                  onChange={e => { const si = Number(e.target.value); if (!Number.isNaN(si)) useSharedBox(selectedItem.id, i, si) }}
+                                  title="Copy another field's box so this field can slice its own value from that same crop"
+                                  className="w-full bg-transparent text-[10px] text-blue-400 focus:outline-none focus:text-blue-600 mt-0.5">
+                                  <option value="">use same box as...</option>
+                                  {selectedItem.fields.map((of, oi) => oi !== i && selectedItem.boxes[of.key] && (
+                                    <option key={oi} value={oi}>#{oi + 1} {of.label}</option>
+                                  ))}
+                                </select>
+                              )}
                             </td>
                             <td className="px-1 py-1.5">
                               <button onClick={() => !f.locked && setActiveFieldIdx(activeFieldIdx === i ? null : i)}

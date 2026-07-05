@@ -13,7 +13,7 @@ const supabaseAdmin = createClient(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   try {
-    const { doc_type, boxes, labels, excludeWords, replacements } = req.body
+    const { doc_type, boxes, labels, excludeWords, formulas } = req.body
     if (!doc_type || !boxes || !labels)
       return res.status(400).json({ error: 'doc_type, boxes, labels required' })
 
@@ -27,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const payload = {
       doc_type,
-      grid_config: { boxes, excludeWords: excludeWords || {}, replacements: replacements || {} },
+      grid_config: { boxes, excludeWords: excludeWords || {}, formulas: formulas || {} },
       field_map: labels,
     }
 

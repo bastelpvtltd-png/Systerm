@@ -12,7 +12,7 @@ const supabaseAdmin = createClient(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   try {
-    const { doc_type, key, label, excludeWords, replacements } = req.body
+    const { doc_type, key, label, excludeWords, formula } = req.body
     if (!doc_type || !key) return res.status(400).json({ error: 'doc_type and key required' })
 
     const { data: existing } = await supabaseAdmin
@@ -26,15 +26,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const gridConfig = existing?.grid_config || { boxes: {} }
     const fieldMap = { ...(existing?.field_map || {}) }
     const excludeWordsMap = { ...(gridConfig.excludeWords || {}) }
-    const replacementsMap = { ...(gridConfig.replacements || {}) }
+    const formulasMap = { ...(gridConfig.formulas || {}) }
 
     if (label) fieldMap[key] = label
     if (excludeWords?.trim()) excludeWordsMap[key] = excludeWords; else delete excludeWordsMap[key]
-    if (replacements?.trim()) replacementsMap[key] = replacements; else delete replacementsMap[key]
+    if (formula?.trim()) formulasMap[key] = formula; else delete formulasMap[key]
 
     const payload = {
       doc_type,
-      grid_config: { ...gridConfig, excludeWords: excludeWordsMap, replacements: replacementsMap },
+      grid_config: { ...gridConfig, excludeWords: excludeWordsMap, formulas: formulasMap },
       field_map: fieldMap,
     }
 

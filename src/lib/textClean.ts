@@ -17,23 +17,55 @@ export function stripExcludeWords(text: string, excludeWordsCsv: string | undefi
     .join('\n')
 }
 
-// Fixes consistent OCR misreads (e.g. "0" read for "O", wrong case) — rules
-// are "find=>replace" pairs separated by commas, e.g. "0=>O, rn=>m".
-export function applyReplacements(text: string, rulesCsv: string | undefined): string {
-  if (!rulesCsv || !rulesCsv.trim()) return text
+// A tiny Excel-formula-like language for slicing a value out of a box's raw
+// OCR text — lets two fields point at the same box (one crop, OCR'd once)
+// and each pull a different piece out of it. Steps chain with "|", e.g.
+// "LINE(2)|AFTER(:)" takes the 2nd line, then everything after the colon.
+// Supported: LINE(n), LEFT(n), RIGHT(n), MID(start,len), AFTER(text),
+// BEFORE(text), TRIM().
+export function applyFormula(text: string, formula: string | undefined): string {
+  if (!formula || !formula.trim()) return text
   let result = text
-  for (const rule of rulesCsv.split(',').map(r => r.trim()).filter(Boolean)) {
-    const arrow = rule.indexOf('=>')
-    if (arrow === -1) continue
-    const find = rule.slice(0, arrow).trim()
-    const replace = rule.slice(arrow + 2).trim()
-    if (find) result = result.split(find).join(replace)
+  for (const step of formula.split('|').map(s => s.trim()).filter(Boolean)) {
+    const m = step.match(/^([A-Za-z]+)\((.*)\)$/)
+    if (!m) continue
+    const fn = m[1].toUpperCase()
+    const args = m[2].length ? m[2].split(',').map(a => a.trim().replace(/^["']|["']$/g, '')) : []
+    try {
+      switch (fn) {
+        case 'LINE': {
+          const lines = result.split('\n')
+          result = lines[parseInt(args[0], 10) - 1] ?? ''
+          break
+        }
+        case 'LEFT': result = result.slice(0, parseInt(args[0], 10)); break
+        case 'RIGHT': result = result.slice(-parseInt(args[0], 10)); break
+        case 'MID': {
+          const start = parseInt(args[0], 10) - 1
+          result = result.slice(start, start + parseInt(args[1], 10))
+          break
+        }
+        case 'AFTER': {
+          const idx = result.indexOf(args[0])
+          if (idx !== -1) result = result.slice(idx + args[0].length)
+          break
+        }
+        case 'BEFORE': {
+          const idx = result.indexOf(args[0])
+          if (idx !== -1) result = result.slice(0, idx)
+          break
+        }
+        case 'TRIM': result = result.trim(); break
+        default: break
+      }
+    } catch { /* bad step — leave result as-is and keep going */ }
   }
-  return result
+  return result.trim()
 }
 
-// Both corrections applied in one pass, in a fixed order: fix OCR misreads
-// first, then strip noise words — so exclude-word matching sees corrected text.
-export function applyTextRules(rawText: string, replacementsCsv: string | undefined, excludeWordsCsv: string | undefined): string {
-  return stripExcludeWords(applyReplacements(rawText, replacementsCsv), excludeWordsCsv)
+// Both corrections applied in one pass: the formula slices out the relevant
+// piece of the (possibly shared) box text first, then exclude-words cleans
+// up any remaining noise from that slice.
+export function applyTextRules(rawText: string, formula: string | undefined, excludeWordsCsv: string | undefined): string {
+  return stripExcludeWords(applyFormula(rawText, formula), excludeWordsCsv)
 }
