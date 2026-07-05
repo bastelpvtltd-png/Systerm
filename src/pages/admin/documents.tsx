@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
-import { stripExcludeWords } from '@/lib/textClean'
+import { applyTextRules } from '@/lib/textClean'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy,
   CheckCircle, Loader, Save, Eye, ExternalLink,
@@ -9,7 +9,12 @@ import {
 } from 'lucide-react'
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
-type PdfField = { key: string; label: string; value: string; excludeWords?: string }
+type PdfField = {
+  key: string; label: string; value: string
+  rawValue?: string // last OCR/API text, before exclude-words/replacements — lets edits to those rules be reversible
+  excludeWords?: string
+  replacements?: string // "find=>replace, find=>replace" — fixes consistent OCR misreads
+}
 type Panel = 'upload' | 'preview'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
 
@@ -143,7 +148,7 @@ export default function DocumentsPage() {
         updateItem(item.id, {
           status: 'ready',
           detectedType: (json.detectedDocType as DocType) || '',
-          fields: json.fields || [],
+          fields: (json.fields || []).map((f: PdfField) => ({ ...f, rawValue: f.value })),
           rawText: json.rawText || '',
           scanned: !!json.scanned,
           boxes: json.boxes || {}, // auto-applied template boxes, if any — makes them editable right away
@@ -171,23 +176,39 @@ export default function DocumentsPage() {
     setRenamingId(null)
   }
 
+  // Manual edits become the new baseline (rawValue too), so later exclude-word/
+  // replacement changes recompute from what the user actually typed.
   function updateItemField(id: string, idx: number, val: string) {
     setItems(prev => prev.map(it => it.id === id
-      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, value: val } : f) }
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, value: val, rawValue: val } : f) }
       : it))
   }
 
-  // Tracks the exclude-words text as the user types (no side effect yet).
-  function updateExcludeWordsText(id: string, idx: number, excludeWords: string) {
+  // Tracks exclude-words/replacements text as the user types (no side effect yet).
+  function updateFieldRuleText(id: string, idx: number, patch: Partial<Pick<PdfField, 'excludeWords' | 'replacements'>>) {
     setItems(prev => prev.map(it => it.id === id
-      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, excludeWords } : f) }
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, ...patch } : f) }
       : it))
   }
 
-  // On blur/Enter, strip those words out of the current value once.
-  function commitExcludeWords(id: string, idx: number) {
+  // On blur/Enter, recompute value from rawValue — non-destructive, so
+  // removing an exclude-word or replacement rule brings that text back.
+  function commitFieldRules(id: string, idx: number) {
     setItems(prev => prev.map(it => it.id === id
-      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, value: stripExcludeWords(f.value, f.excludeWords) } : f) }
+      ? { ...it, fields: it.fields.map((f, i) => i === idx
+          ? { ...f, value: applyTextRules(f.rawValue ?? f.value, f.replacements, f.excludeWords) }
+          : f) }
+      : it))
+  }
+
+  // Applies any exclude-words/replacements the field already has configured
+  // to freshly-OCR'd text (a new draw or re-draw), while keeping the untouched
+  // raw text around so later rule edits stay reversible.
+  function setFieldFromOcr(id: string, idx: number, rawText: string) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx
+          ? { ...f, rawValue: rawText, value: applyTextRules(rawText, f.replacements, f.excludeWords) }
+          : f) }
       : it))
   }
 
@@ -354,7 +375,7 @@ export default function DocumentsPage() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Extract failed')
-      updateItemField(item.id, idx, d.text)
+      setFieldFromOcr(item.id, idx, d.text)
       const fieldKey = item.fields[idx].key
       updateItem(item.id, { boxes: { ...item.boxes, [fieldKey]: box } })
     } catch (e: any) {
@@ -461,9 +482,10 @@ export default function DocumentsPage() {
       const boxedFields = selectedItem.fields.filter(f => selectedItem.boxes[f.key])
       const labels = Object.fromEntries(boxedFields.map(f => [f.key, f.label]))
       const excludeWords = Object.fromEntries(boxedFields.filter(f => f.excludeWords?.trim()).map(f => [f.key, f.excludeWords]))
+      const replacements = Object.fromEntries(boxedFields.filter(f => f.replacements?.trim()).map(f => [f.key, f.replacements]))
       const res = await fetch('/api/save-field-boxes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords }),
+        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords, replacements }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Save failed')
@@ -908,10 +930,18 @@ export default function DocumentsPage() {
                                 placeholder="—"
                                 className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800"/>
                               <input value={f.excludeWords || ''}
-                                onChange={e => updateExcludeWordsText(selectedItem.id, i, e.target.value)}
-                                onBlur={() => commitExcludeWords(selectedItem.id, i)}
-                                onKeyDown={e => { if (e.key === 'Enter') commitExcludeWords(selectedItem.id, i) }}
+                                onChange={e => updateFieldRuleText(selectedItem.id, i, { excludeWords: e.target.value })}
+                                onBlur={() => commitFieldRules(selectedItem.id, i)}
+                                onKeyDown={e => { if (e.key === 'Enter') commitFieldRules(selectedItem.id, i) }}
+                                title="Words to remove from the value — reversible, doesn't touch the original OCR text"
                                 placeholder="exclude words (comma separated)..."
+                                className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5"/>
+                              <input value={f.replacements || ''}
+                                onChange={e => updateFieldRuleText(selectedItem.id, i, { replacements: e.target.value })}
+                                onBlur={() => commitFieldRules(selectedItem.id, i)}
+                                onKeyDown={e => { if (e.key === 'Enter') commitFieldRules(selectedItem.id, i) }}
+                                title="Fix consistent OCR misreads — format: wrong=>right, wrong=>right"
+                                placeholder="fix OCR: wrong=>right, wrong=>right..."
                                 className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5"/>
                             </td>
                             <td className="px-1 py-1.5">

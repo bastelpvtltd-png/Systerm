@@ -4,7 +4,7 @@ import { detectType } from '@/lib/extractors'
 import { ocrPdf } from '@/lib/ocr'
 import { extractByGrid } from '@/lib/gridExtract'
 import { extractBox } from '@/lib/boxExtract'
-import { stripExcludeWords } from '@/lib/textClean'
+import { applyTextRules } from '@/lib/textClean'
 import { DOC_TYPE_TABLE, getTableColumns } from '@/lib/docTables'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
@@ -379,10 +379,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const boxes: Record<string, { x: number; y: number; w: number; h: number }> = template.grid_config.boxes
           const labels: Record<string, string> = template.field_map || {}
           const excludeWords: Record<string, string> = template.grid_config.excludeWords || {}
+          const replacements: Record<string, string> = template.grid_config.replacements || {}
           fields = await Promise.all(
             Object.entries(boxes).map(async ([key, box]) => ({
               key, label: labels[key] || key,
-              value: stripExcludeWords(await extractBox(buffer, box), excludeWords[key]),
+              value: applyTextRules(await extractBox(buffer, box), replacements[key], excludeWords[key]),
             }))
           )
           appliedBoxes = boxes

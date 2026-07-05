@@ -31,8 +31,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       delete fieldMap[key]
       const excludeWords = { ...(template.grid_config.excludeWords || {}) }
       delete excludeWords[key]
+      const replacements = { ...(template.grid_config.replacements || {}) }
+      delete replacements[key]
       await supabaseAdmin.from('pdf_templates')
-        .update({ grid_config: { boxes, excludeWords }, field_map: fieldMap })
+        .update({ grid_config: { boxes, excludeWords, replacements }, field_map: fieldMap })
         .eq('id', template.id)
     }
 
