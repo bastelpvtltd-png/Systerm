@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { detectType } from '@/lib/extractors'
 import { ocrPdf } from '@/lib/ocr'
 import { extractByGrid } from '@/lib/gridExtract'
-import { extractBox } from '@/lib/boxExtract'
+import { extractBoxes } from '@/lib/boxExtract'
 import { applyTextRules } from '@/lib/textClean'
 import { DOC_TYPE_TABLE, getTableColumns } from '@/lib/docTables'
 
@@ -388,12 +388,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const labels: Record<string, string> = template.field_map || {}
           const excludeWords: Record<string, string> = template.grid_config.excludeWords || {}
           const formulas: Record<string, string> = template.grid_config.formulas || {}
-          const boxedFields = await Promise.all(
-            Object.entries(boxes).map(async ([key, box]) => ({
-              key, label: labels[key] || key,
-              value: applyTextRules(await extractBox(buffer, box), formulas[key], excludeWords[key]),
-            }))
-          )
+          const rawBoxTexts = await extractBoxes(buffer, boxes)
+          const boxedFields = Object.entries(boxes).map(([key, box]) => ({
+            key, label: labels[key] || key,
+            value: applyTextRules(rawBoxTexts[key], formulas[key], excludeWords[key]),
+          }))
           const boxedByKey = new Map(boxedFields.map(f => [f.key, f]))
           const schemaFields = await buildFieldsFromSchema(resolvedType, {})
           fields = schemaFields.map(f => boxedByKey.get(f.key) || f)
