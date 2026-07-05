@@ -5,6 +5,7 @@ import { ocrPdf } from '@/lib/ocr'
 import { extractByGrid } from '@/lib/gridExtract'
 import { extractBox } from '@/lib/boxExtract'
 import { stripExcludeWords } from '@/lib/textClean'
+import { DOC_TYPE_TABLE, getTableColumns } from '@/lib/docTables'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
@@ -308,6 +309,30 @@ function toFieldArray(data: Record<string, string>, docType: string) {
   }))
 }
 
+// Structural columns that exist for app bookkeeping, not as an extractable field.
+const NON_FIELD_COLUMNS = new Set([
+  'id', 'shipment_id', 'created_at', 'pdf_url', 'status',
+  'xml_data', 'cusdec_no', 'cdn_no', 'details', 'boat_note_no',
+])
+
+// The doc type's real table is the source of truth for which fields show up —
+// add/delete a field in the popup literally adds/drops a column there, so the
+// field list here must always reflect exactly what that table currently has.
+async function buildFieldsFromSchema(resolvedType: string, regexData: Record<string, string>) {
+  const table = DOC_TYPE_TABLE[resolvedType]
+  if (!table || table === 'boat_notes') return toFieldArray(regexData, resolvedType) // jsonb-backed, no per-column schema
+  try {
+    const columns = (await getTableColumns(table)).filter(c => !NON_FIELD_COLUMNS.has(c))
+    if (!columns.length) return toFieldArray(regexData, resolvedType) // management API not configured
+    return columns.map(key => ({
+      key, label: LABEL_OVERRIDES[key] || key.replace(/_/g, ' ').toUpperCase(), value: regexData[key] || '',
+    }))
+  } catch (e: any) {
+    console.error('[extract-pdf] schema lookup failed, falling back to regex field list:', e.message)
+    return toFieldArray(regexData, resolvedType)
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   try {
@@ -391,14 +416,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!gridUsed) {
       if (resolvedType === 'cusdec') {
-        const data = extractCusdecFields(text)
-        fields = toFieldArray(data, resolvedType)
+        fields = await buildFieldsFromSchema(resolvedType, extractCusdecFields(text))
       } else if (resolvedType === 'cdn') {
-        const data = extractCdnFields(text)
-        fields = toFieldArray(data, resolvedType)
+        fields = await buildFieldsFromSchema(resolvedType, extractCdnFields(text))
       } else if (resolvedType === 'barcode') {
-        const data = extractBarcodeFields(text)
-        fields = toFieldArray(data, resolvedType)
+        fields = await buildFieldsFromSchema(resolvedType, extractBarcodeFields(text))
       } else if (resolvedType === 'boat_note') {
         const data = extractBoatNoteFields(text)
         fields = toFieldArray(data, resolvedType)

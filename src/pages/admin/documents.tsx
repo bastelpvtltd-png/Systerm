@@ -368,19 +368,35 @@ export default function DocumentsPage() {
     return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'field'
   }
 
-  function addCustomField() {
+  async function addCustomField() {
     if (!selectedItem) return
-    const label = window.prompt('Aluth field eke nama danna (eg. Marks & Numbers):')
+    const label = window.prompt('Aluth field eke nama danna (eg. Marks & Numbers) — meka thamai database column name eka:')
     if (!label || !label.trim()) return
-    const key = `custom_${slugify(label)}_${Date.now().toString(36)}`
-    const docType = selectedItem.detectedType || '(document type select karala nane)'
-    if (!confirm(`"${label.trim()}" field eka add kalama, box eka draw karala Save Format kaloth "${docType}" table ekata aluth column ekak ("${key}") add wenawa. Continue karanna da?`)) return
+    let key = slugify(label)
+    const existingKeys = new Set(selectedItem.fields.map(f => f.key))
+    let n = 2
+    while (existingKeys.has(key)) { key = `${slugify(label)}_${n++}` } // avoid clashing with an existing field
+    const docType = selectedItem.detectedType
+    if (!docType) { alert('Document type select karanna kalin'); return }
+    if (!confirm(`"${label.trim()}" field eka add kalama, "${docType}" table ekata aluth column ekak ("${key}") ekamama add wenawa. Continue karanna da?`)) return
+
     updateItem(selectedItem.id, { fields: [...selectedItem.fields, { key, label: label.trim(), value: '' }] })
     setActiveFieldIdx(selectedItem.fields.length) // jump straight into draw mode for the new field
     // scroll the new row into view so the "draw a box" hint is obviously connected to it
     requestAnimationFrame(() => {
       fieldsScrollRef.current?.scrollTo({ top: fieldsScrollRef.current.scrollHeight, behavior: 'smooth' })
     })
+
+    try {
+      const res = await fetch('/api/ensure-column', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: docType, key }),
+      })
+      const d = await res.json()
+      if (!res.ok) logError('ensure-column', d.error || 'Column create failed')
+    } catch (e: any) {
+      logError('ensure-column', e.message)
+    }
   }
 
   // Renaming changes both the display label and the underlying key (which is
