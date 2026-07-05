@@ -936,9 +936,9 @@ export default function DocumentsPage() {
                                 className="w-full bg-transparent text-gray-600 font-medium border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 disabled:text-gray-400"/>
                             </td>
                             <td className="px-2 py-1.5">
-                              <input value={f.value} disabled={f.locked} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
-                                placeholder="—"
-                                className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800 disabled:text-gray-400"/>
+                              <textarea value={f.value} disabled={f.locked} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
+                                placeholder="—" rows={f.value.includes('\n') ? Math.min(4, f.value.split('\n').length) : 1}
+                                className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800 disabled:text-gray-400 resize-none leading-tight"/>
                               <input value={f.excludeWords || ''} disabled={f.locked}
                                 onChange={e => updateFieldRuleText(selectedItem.id, i, { excludeWords: e.target.value })}
                                 onBlur={() => commitFieldRules(selectedItem.id, i)}
