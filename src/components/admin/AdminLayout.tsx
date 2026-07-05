@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Ship, FileText, Package,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor, ScanLine,
-  Truck, Copy, Grid,
+  Truck, Copy, Grid, Database,
 } from 'lucide-react'
 
 const navItems = [
@@ -18,6 +18,7 @@ const navItems = [
   { href: '/admin/cdn',         icon: Truck,           label: 'CDN' },
   { href: '/admin/documents',   icon: Package,         label: 'Documents' },
   { href: '/admin/boat-note',   icon: Anchor,          label: 'Boat Notes' },
+  { href: '/admin/database',    icon: Database,        label: 'Database' },
   { href: '/admin/financials',  icon: DollarSign,      label: 'Financials' },
   { href: '/admin/reports',     icon: BarChart2,       label: 'Reports' },
   { href: '/admin/users',       icon: Users,           label: 'Users' },
