@@ -364,18 +364,52 @@ export default function DocumentsPage() {
     }
   }
 
+  function slugify(label: string): string {
+    return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'field'
+  }
+
   function addCustomField() {
     if (!selectedItem) return
     const label = window.prompt('Aluth field eke nama danna (eg. Marks & Numbers):')
     if (!label || !label.trim()) return
-    const slug = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-    const key = `custom_${slug || 'field'}_${Date.now().toString(36)}`
+    const key = `custom_${slugify(label)}_${Date.now().toString(36)}`
     updateItem(selectedItem.id, { fields: [...selectedItem.fields, { key, label: label.trim(), value: '' }] })
     setActiveFieldIdx(selectedItem.fields.length) // jump straight into draw mode for the new field
     // scroll the new row into view so the "draw a box" hint is obviously connected to it
     requestAnimationFrame(() => {
       fieldsScrollRef.current?.scrollTo({ top: fieldsScrollRef.current.scrollHeight, behavior: 'smooth' })
     })
+  }
+
+  // Renaming changes both the display label and the underlying key (which is
+  // what save-to-table.ts uses as the DB column name) — lets the user match
+  // an existing table's exact column name instead of whatever the regex/OCR
+  // step first called it.
+  function renameField(id: string, idx: number, newLabel: string) {
+    if (!newLabel.trim()) return
+    setItems(prev => prev.map(it => {
+      if (it.id !== id) return it
+      const oldField = it.fields[idx]
+      const newKey = slugify(newLabel)
+      const fields = it.fields.map((f, i) => i === idx ? { ...f, label: newLabel.trim(), key: newKey } : f)
+      const boxes = { ...it.boxes }
+      if (oldField.key !== newKey && boxes[oldField.key]) {
+        boxes[newKey] = boxes[oldField.key]
+        delete boxes[oldField.key]
+      }
+      return { ...it, fields, boxes }
+    }))
+  }
+
+  function deleteField(id: string, idx: number) {
+    setItems(prev => prev.map(it => {
+      if (it.id !== id) return it
+      const removedKey = it.fields[idx].key
+      const boxes = { ...it.boxes }
+      delete boxes[removedKey]
+      return { ...it, fields: it.fields.filter((_, i) => i !== idx), boxes }
+    }))
+    if (activeFieldIdx === idx) setActiveFieldIdx(null)
   }
 
   async function handleSaveFormat() {
@@ -812,6 +846,7 @@ export default function DocumentsPage() {
                           <th className="text-left px-2 py-2 text-gray-500 font-medium w-36">Field</th>
                           <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
                           <th className="w-10 text-center px-1 py-2 text-gray-500 font-medium">Fix</th>
+                          <th className="w-8"></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -821,7 +856,13 @@ export default function DocumentsPage() {
                               <span className="inline-flex items-center justify-center w-6 h-6 text-white text-xs font-bold rounded"
                                 style={{ background: selectedItem.boxes[f.key] ? '#16a34a' : (docDef(selectedItem.detectedType)?.color || '#6b7280') }}>{i + 1}</span>
                             </td>
-                            <td className="px-2 py-1.5 text-gray-500">{f.label}</td>
+                            <td className="px-2 py-1.5">
+                              <input defaultValue={f.label} key={f.key}
+                                onBlur={e => renameField(selectedItem.id, i, e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                                title="Column name — rename to match the target table's column"
+                                className="w-full bg-transparent text-gray-600 font-medium border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5"/>
+                            </td>
                             <td className="px-2 py-1.5">
                               <input value={f.value} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
                                 placeholder="—"
@@ -842,6 +883,13 @@ export default function DocumentsPage() {
                                     : 'border-gray-200 text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50'
                                 }`}>
                                 <ScanLine size={14}/>
+                              </button>
+                            </td>
+                            <td className="px-1 py-1.5">
+                              <button onClick={() => deleteField(selectedItem.id, i)}
+                                title="Delete this field"
+                                className="w-7 h-7 rounded-md border border-gray-200 text-gray-300 hover:text-red-500 hover:border-red-300 hover:bg-red-50 flex items-center justify-center flex-shrink-0">
+                                <Trash2 size={13}/>
                               </button>
                             </td>
                           </tr>
