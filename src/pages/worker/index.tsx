@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/router'
-import { LogOut, CheckCircle, Clock, Ship, User } from 'lucide-react'
+import { CheckCircle, Clock, User } from 'lucide-react'
+import WorkerLayout from '@/components/worker/WorkerLayout'
 
 interface Task {
   id: string
@@ -49,29 +50,12 @@ export default function WorkerDashboard() {
   const filtered = tasks.filter(t => t.status === tab)
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="text-white px-6 py-4 flex items-center justify-between" style={{background:'linear-gradient(90deg,#0D1B2A,#1B3A5C)'}}>
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{background:'#22A87A'}}>
-            <Ship size={16} color="white"/>
-          </div>
-          <span className="font-bold">Export System</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 text-sm text-blue-200">
-            <User size={14}/>
-            <span>{profile?.full_name || profile?.username}</span>
-          </div>
-          <button onClick={async () => { await supabase.auth.signOut(); router.push('/') }}
-            className="flex items-center gap-1 text-red-300 text-sm hover:text-red-200">
-            <LogOut size={14}/>Logout
-          </button>
-        </div>
-      </header>
-
+    <WorkerLayout>
       <div className="p-6 max-w-3xl mx-auto">
-        <h1 className="text-xl font-bold mb-1">My Tasks</h1>
+        <div className="flex items-center gap-2 mb-1">
+          <h1 className="text-xl font-bold">My Tasks</h1>
+          <span className="flex items-center gap-1 text-xs text-gray-400"><User size={12}/>{profile?.full_name || profile?.username}</span>
+        </div>
         <p className="text-gray-500 text-sm mb-6">{tasks.filter(t=>t.status==='pending').length} pending tasks</p>
 
         {/* Tabs */}
@@ -116,6 +100,6 @@ export default function WorkerDashboard() {
           )}
         </div>
       </div>
-    </div>
+    </WorkerLayout>
   )
 }

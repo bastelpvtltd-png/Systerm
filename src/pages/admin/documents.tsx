@@ -606,7 +606,10 @@ export default function DocumentsPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Documents</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold text-gray-900">Documents</h1>
+              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700">Admin</span>
+            </div>
             <p className="text-gray-500 text-sm mt-0.5">Upload · Extract · Preview</p>
           </div>
           <div className="flex items-center gap-2">
