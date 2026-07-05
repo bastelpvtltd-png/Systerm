@@ -194,12 +194,37 @@ export default function DocumentsPage() {
 
   // On blur/Enter, recompute value from rawValue — non-destructive, so
   // removing an exclude-word or replacement rule brings that text back.
-  function commitFieldRules(id: string, idx: number) {
-    setItems(prev => prev.map(it => it.id === id
-      ? { ...it, fields: it.fields.map((f, i) => i === idx
-          ? { ...f, value: applyTextRules(f.rawValue ?? f.value, f.replacements, f.excludeWords) }
-          : f) }
-      : it))
+  async function commitFieldRules(id: string, idx: number) {
+    let updatedField: PdfField | undefined
+    let docType = ''
+    setItems(prev => prev.map(it => {
+      if (it.id !== id) return it
+      docType = it.detectedType
+      return {
+        ...it, fields: it.fields.map((f, i) => {
+          if (i !== idx) return f
+          updatedField = { ...f, value: applyTextRules(f.rawValue ?? f.value, f.replacements, f.excludeWords) }
+          return updatedField
+        }),
+      }
+    }))
+    // Persist immediately — these rules shouldn't need a box or a "Save Format"
+    // click to survive; they belong to the doc type permanently from the moment
+    // they're typed.
+    if (!docType || !updatedField) return
+    try {
+      const res = await fetch('/api/save-field-rules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          doc_type: docType, key: updatedField.key, label: updatedField.label,
+          excludeWords: updatedField.excludeWords, replacements: updatedField.replacements,
+        }),
+      })
+      const d = await res.json()
+      if (!res.ok) logError('save-field-rules', d.error || 'Rule save failed')
+    } catch (e: any) {
+      logError('save-field-rules', e.message)
+    }
   }
 
   // Applies any exclude-words/replacements the field already has configured
