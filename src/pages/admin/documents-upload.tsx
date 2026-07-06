@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
-  Trash2, Pencil, FileWarning, Eye,
+  Trash2, Pencil, FileWarning, Eye, RefreshCw,
 } from 'lucide-react'
 
 // Separate, reduced-access tab: upload, rename, see the auto-detected type,
@@ -40,6 +40,16 @@ const DOC_TYPES: { key: DocType; label: string; icon: any; color: string }[] = [
   { key: 'bill',       label: 'Bill',          icon: Receipt,  color: '#ef4444' },
 ]
 
+const TYPE_COLORS: Record<string, string> = {
+  cusdec: '#1B3A5C', cdn: '#22A87A', barcode: '#f59e0b',
+  boat_note: '#3b82f6', party_copy: '#8b5cf6', bill: '#ef4444',
+}
+
+interface DbRecord {
+  id: string; doc_type: string; file_name: string
+  drive_url: string; extracted_data: Record<string, string> | null; created_at: string
+}
+
 function docDef(key: string) {
   return DOC_TYPES.find(d => d.key === key)
 }
@@ -75,6 +85,8 @@ function DocumentsUploadContent() {
   const { has } = usePermission()
   const canUpload = has('section:documents-upload.upload')
   const canSeeUploaded = has('section:documents-upload.uploaded')
+  const canPreview = has('section:documents-upload.preview')
+  const [panel, setPanel] = useState<'upload' | 'preview'>('upload')
   const [items, setItems] = useState<UploadItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -83,6 +95,50 @@ function DocumentsUploadContent() {
   const [viewPage, setViewPage] = useState(0)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  // "All Documents" preview — same underlying upload/save flow, just showing
+  // what's already been saved to Drive+DB (by anyone), not this session's list.
+  const [records, setRecords] = useState<DbRecord[]>([])
+  const [loadingRecs, setLoadingRecs] = useState(false)
+  const [selectedRec, setSelectedRec] = useState<DbRecord | null>(null)
+  const [filterType, setFilterType] = useState('all')
+  const [recPage, setRecPage] = useState(0)
+  const [recPageImages, setRecPageImages] = useState<Record<string, Record<number, string>>>({})
+  const [recNumPages, setRecNumPages] = useState(1)
+  const [recLoadingImg, setRecLoadingImg] = useState(false)
+
+  const loadRecords = useCallback(async () => {
+    setLoadingRecs(true)
+    try {
+      const url = filterType === 'all' ? '/api/list-documents' : `/api/list-documents?doc_type=${filterType}`
+      const res = await fetch(url)
+      if (res.ok) { const d = await res.json(); setRecords(d.records || []) }
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoadingRecs(false)
+    }
+  }, [filterType])
+
+  useEffect(() => { if (panel === 'preview') loadRecords() }, [panel, loadRecords])
+  useEffect(() => { setRecPage(0) }, [selectedRec?.id])
+  useEffect(() => {
+    if (!selectedRec || !selectedRec.drive_url) return
+    if (recPageImages[selectedRec.id]?.[recPage]) return
+    setRecLoadingImg(true)
+    fetch('/api/render-drive-page', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driveUrl: selectedRec.drive_url, page: recPage }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.png) {
+          setRecPageImages(prev => ({ ...prev, [selectedRec.id]: { ...(prev[selectedRec.id] || {}), [recPage]: d.png } }))
+          setRecNumPages(d.numPages || 1)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setRecLoadingImg(false))
+  }, [selectedRec?.id, selectedRec?.drive_url, recPage])
 
   function updateItem(id: string, patch: Partial<UploadItem>) {
     setItems(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it))
@@ -206,9 +262,21 @@ function DocumentsUploadContent() {
   return (
     <>
       <div className="p-6 max-w-5xl mx-auto">
-        <div className="flex items-center gap-2 mb-1">
-          <h1 className="text-xl font-bold text-gray-900">Documents</h1>
-          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-blue-100 text-blue-700">Upload</span>
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold text-gray-900">Documents</h1>
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-blue-100 text-blue-700">Upload</span>
+          </div>
+          {canPreview && (
+            <div className="flex bg-gray-100 rounded-lg p-0.5">
+              {(['upload', 'preview'] as const).map(p => (
+                <button key={p} onClick={() => setPanel(p)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors capitalize ${
+                    panel === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}>{p}</button>
+              ))}
+            </div>
+          )}
         </div>
         <p className="text-gray-500 text-sm mb-5">Upload a PDF, check its detected type, rename or remove it, then save.</p>
 
@@ -219,6 +287,7 @@ function DocumentsUploadContent() {
           </div>
         )}
 
+        {panel === 'upload' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {canUpload && (
           <div className={canSeeUploaded ? 'lg:col-span-2 card' : 'lg:col-span-3 card'}>
@@ -312,6 +381,115 @@ function DocumentsUploadContent() {
           </div>
           )}
         </div>
+        )}
+
+        {/* All Documents preview — same upload/save flow, saved documents from anyone */}
+        {panel === 'preview' && canPreview && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="card">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-semibold text-gray-900">All Documents</h2>
+                <div className="flex items-center gap-2">
+                  <select value={filterType} onChange={e => setFilterType(e.target.value)}
+                    className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-600">
+                    <option value="all">All types</option>
+                    {DOC_TYPES.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
+                  </select>
+                  <button onClick={loadRecords} className="text-gray-400 hover:text-gray-700">
+                    <RefreshCw size={14}/>
+                  </button>
+                </div>
+              </div>
+
+              {loadingRecs ? (
+                <div className="flex justify-center py-10"><Loader size={20} className="animate-spin text-gray-400"/></div>
+              ) : records.length === 0 ? (
+                <div className="text-center py-10 text-gray-400 text-sm">No documents found</div>
+              ) : (
+                <div className="space-y-1.5 max-h-[500px] overflow-y-auto">
+                  {records.map(rec => {
+                    const color = TYPE_COLORS[rec.doc_type] || '#6b7280'
+                    const Def = docDef(rec.doc_type)
+                    const Icon = Def?.icon || FileText
+                    return (
+                      <button key={rec.id} onClick={() => setSelectedRec(rec)}
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${
+                          selectedRec?.id === rec.id ? 'border-2' : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                        }`}
+                        style={selectedRec?.id === rec.id ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${color}20` }}>
+                          <Icon size={15} style={{ color }}/>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">{rec.file_name}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-xs px-1.5 py-0.5 rounded font-medium" style={{ background: `${color}20`, color }}>
+                              {rec.doc_type.replace('_', ' ').toUpperCase()}
+                            </span>
+                            <span className="text-xs text-gray-400">{new Date(rec.created_at).toLocaleDateString('en-GB')}</span>
+                          </div>
+                        </div>
+                        {rec.drive_url && <ExternalLink size={13} className="text-gray-300 flex-shrink-0"/>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="card">
+              {!selectedRec ? (
+                <div className="flex flex-col items-center justify-center py-20 text-center">
+                  <Eye size={36} className="text-gray-200 mb-3"/>
+                  <p className="text-sm text-gray-400">Select a document to preview</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h2 className="font-semibold text-gray-900 truncate max-w-[260px]">{selectedRec.file_name}</h2>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {selectedRec.doc_type.replace('_', ' ').toUpperCase()} · {new Date(selectedRec.created_at).toLocaleString('en-GB')}
+                      </p>
+                    </div>
+                    {selectedRec.drive_url && (
+                      <a href={selectedRec.drive_url} target="_blank" rel="noreferrer"
+                        className="flex items-center gap-1.5 text-xs text-white px-3 py-1.5 rounded-lg flex-shrink-0 ml-2"
+                        style={{ background: TYPE_COLORS[selectedRec.doc_type] || '#1B3A5C' }}>
+                        <ExternalLink size={12}/> Open in Drive
+                      </a>
+                    )}
+                  </div>
+
+                  {selectedRec.drive_url ? (
+                    <div className="mb-4">
+                      <div className="bg-gray-100 rounded-lg flex items-center justify-center min-h-[300px] overflow-auto">
+                        {recLoadingImg && !recPageImages[selectedRec.id]?.[recPage] ? (
+                          <Loader size={20} className="animate-spin text-gray-400"/>
+                        ) : recPageImages[selectedRec.id]?.[recPage] ? (
+                          <img src={`data:image/png;base64,${recPageImages[selectedRec.id][recPage]}`} className="max-w-full rounded" alt="Document page"/>
+                        ) : (
+                          <span className="text-xs text-gray-400">Could not render this page</span>
+                        )}
+                      </div>
+                      {recNumPages > 1 && (
+                        <div className="flex items-center justify-center gap-3 mt-2 text-xs">
+                          <button onClick={() => setRecPage(p => Math.max(0, p - 1))} disabled={recPage === 0}
+                            className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">← Prev</button>
+                          <span className="text-gray-500 font-medium">Page {recPage + 1} / {recNumPages}</span>
+                          <button onClick={() => setRecPage(p => Math.min(recNumPages - 1, p + 1))} disabled={recPage >= recNumPages - 1}
+                            className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">Next →</button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-6 text-gray-400 text-xs mb-2">No file link stored for this record</div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Simple view/save popup — no box drawing or field editing (that stays on the full Documents tab) */}

@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Ship, Package, Upload,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
-  Database, CheckCircle, Loader, MessageSquare,
+  Database, Loader, MessageSquare,
 } from 'lucide-react'
 
 // Single unified nav list — there is no separate admin/worker site anymore.
@@ -19,7 +19,6 @@ import {
 // regular users via allowed_tabs.
 export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/admin/my-tasks',         icon: CheckCircle,     label: 'My Tasks' },
   { href: '/admin/shipments',        icon: Ship,            label: 'Shipments' },
   { href: '/admin/documents',        icon: Package,         label: 'Documents' },
   { href: '/admin/documents-upload', icon: Upload,          label: 'Upload Docs' },
@@ -54,6 +53,7 @@ export const SECTION_ITEMS = [
   // Upload Docs
   { key: 'section:documents-upload.upload',   tabHref: '/admin/documents-upload', label: 'Upload PDFs card' },
   { key: 'section:documents-upload.uploaded', tabHref: '/admin/documents-upload', label: 'Uploaded list card' },
+  { key: 'section:documents-upload.preview',  tabHref: '/admin/documents-upload', label: 'All Documents preview panel' },
   // Settings
   { key: 'section:settings.general',  tabHref: '/admin/settings', label: 'General Info tab' },
   { key: 'section:settings.database', tabHref: '/admin/settings', label: 'Document Records tab' },
