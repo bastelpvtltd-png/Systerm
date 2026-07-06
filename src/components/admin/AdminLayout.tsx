@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { supabase } from '@/lib/supabase'
 import {
-  LayoutDashboard, Ship, Package,
+  LayoutDashboard, Ship, Package, Upload,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
   Database, CheckCircle, Loader, MessageSquare,
@@ -13,11 +13,16 @@ import {
 // Everyone signs into this same area; is_admin accounts see every tab, and
 // everyone else sees only whichever hrefs are in their profile's allowed_tabs
 // (granted per-user from the Users page), so access is per-tab, not per-role.
+// "Documents" (full box/template editor) and "Upload Docs" (simple
+// upload/rename/view/save/delete) are deliberately two separate tabs —
+// admin keeps Documents for themselves and hands out Upload Docs to
+// regular users via allowed_tabs.
 export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/my-tasks',         icon: CheckCircle,     label: 'My Tasks' },
   { href: '/admin/shipments',        icon: Ship,            label: 'Shipments' },
-  { href: '/admin/documents-upload', icon: Package,         label: 'Documents' },
+  { href: '/admin/documents',        icon: Package,         label: 'Documents' },
+  { href: '/admin/documents-upload', icon: Upload,          label: 'Upload Docs' },
   { href: '/admin/drive-files',      icon: Database,        label: 'Drive Files' },
   { href: '/admin/boat-note',        icon: Anchor,          label: 'Boat Notes' },
   { href: '/admin/messages',         icon: MessageSquare,   label: 'Messages' },
