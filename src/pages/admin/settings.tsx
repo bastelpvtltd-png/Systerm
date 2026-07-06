@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import AdminLayout from '@/components/admin/AdminLayout'
+import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { Settings, Database, Trash2, Loader, RefreshCw, ExternalLink, AlertTriangle } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
@@ -15,7 +15,10 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 export default function SettingsPage() {
-  const [tab, setTab]             = useState<Tab>('general')
+  const { has } = usePermission()
+  const canGeneral = has('section:settings.general')
+  const canDatabase = has('section:settings.database')
+  const [tab, setTab]             = useState<Tab>(canGeneral ? 'general' : 'database')
   const [records, setRecords]     = useState<DbRecord[]>([])
   const [loading, setLoading]     = useState(false)
   const [deleting, setDeleting]   = useState<string | null>(null)
@@ -53,7 +56,9 @@ export default function SettingsPage() {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit">
-          {([['general', Settings, 'General'], ['database', Database, 'Database']] as const).map(([key, Icon, label]) => (
+          {([['general', Settings, 'General'], ['database', Database, 'Database']] as const)
+            .filter(([key]) => key === 'general' ? canGeneral : canDatabase)
+            .map(([key, Icon, label]) => (
             <button key={key} onClick={() => setTab(key)}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 tab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
@@ -64,7 +69,7 @@ export default function SettingsPage() {
         </div>
 
         {/* General tab */}
-        {tab === 'general' && (
+        {tab === 'general' && canGeneral && (
           <div className="card max-w-xl">
             <h2 className="font-semibold text-gray-900 mb-4">System Info</h2>
             <div className="space-y-3 text-sm">
@@ -89,7 +94,7 @@ export default function SettingsPage() {
         )}
 
         {/* Database tab — admin only */}
-        {tab === 'database' && (
+        {tab === 'database' && canDatabase && (
           <div className="card">
             <div className="flex items-center justify-between mb-4">
               <div>

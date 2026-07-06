@@ -37,14 +37,39 @@ export const TAB_ITEMS = [
 // Finer-grained pieces inside a tab — the Dashboard's stat cards, for example,
 // can each be individually granted instead of all-or-nothing with the tab.
 // Keys are namespaced "section:<page>.<piece>" so they never collide with a
-// tab href, and live in the same allowed_tabs array.
+// tab href, and live in the same allowed_tabs array. tabHref ties each
+// section back to the tab it lives on, so the Users page can show "which
+// cards on THIS tab" once that tab itself is granted.
 export const SECTION_ITEMS = [
-  { key: 'section:dashboard.total-shipments', group: 'Dashboard', label: 'Total Shipments card' },
-  { key: 'section:dashboard.cusdec-pending',  group: 'Dashboard', label: 'CUSDEC Pending card' },
-  { key: 'section:dashboard.boatnote-pending',group: 'Dashboard', label: 'Boat Note Pending card' },
-  { key: 'section:dashboard.cdn-pending',     group: 'Dashboard', label: 'CDN Pending card' },
-  { key: 'section:dashboard.release-pending', group: 'Dashboard', label: 'Export Release Pending card' },
-  { key: 'section:dashboard.pending-summary', group: 'Dashboard', label: 'Pending Work Summary panel' },
+  // Dashboard
+  { key: 'section:dashboard.total-shipments', tabHref: '/admin', label: 'Total Shipments card' },
+  { key: 'section:dashboard.cusdec-pending',  tabHref: '/admin', label: 'CUSDEC Pending card' },
+  { key: 'section:dashboard.boatnote-pending',tabHref: '/admin', label: 'Boat Note Pending card' },
+  { key: 'section:dashboard.cdn-pending',     tabHref: '/admin', label: 'CDN Pending card' },
+  { key: 'section:dashboard.release-pending', tabHref: '/admin', label: 'Export Release Pending card' },
+  { key: 'section:dashboard.pending-summary', tabHref: '/admin', label: 'Pending Work Summary panel' },
+  // Documents (full editor)
+  { key: 'section:documents.upload',  tabHref: '/admin/documents', label: 'Upload panel' },
+  { key: 'section:documents.preview', tabHref: '/admin/documents', label: 'All Documents preview panel' },
+  // Upload Docs
+  { key: 'section:documents-upload.upload',   tabHref: '/admin/documents-upload', label: 'Upload PDFs card' },
+  { key: 'section:documents-upload.uploaded', tabHref: '/admin/documents-upload', label: 'Uploaded list card' },
+  // Settings
+  { key: 'section:settings.general',  tabHref: '/admin/settings', label: 'General Info tab' },
+  { key: 'section:settings.database', tabHref: '/admin/settings', label: 'Document Records tab' },
+  // Boat Notes
+  { key: 'section:boat-note.select-cusdec', tabHref: '/admin/boat-note', label: 'Select CUSDEC card' },
+  { key: 'section:boat-note.select-cdn',     tabHref: '/admin/boat-note', label: 'Select Containers (CDN) card' },
+  { key: 'section:boat-note.output',         tabHref: '/admin/boat-note', label: 'Download / Email card' },
+  // Database — per table, since some tables (Users/Profiles, PDF Templates) are more sensitive than others
+  { key: 'section:database.cusdec',             tabHref: '/admin/database', label: 'CUSDEC table' },
+  { key: 'section:database.cdn',                tabHref: '/admin/database', label: 'CDN table' },
+  { key: 'section:database.barcode',            tabHref: '/admin/database', label: 'Barcode table' },
+  { key: 'section:database.boat_notes',         tabHref: '/admin/database', label: 'Boat Notes table' },
+  { key: 'section:database.uploaded_documents', tabHref: '/admin/database', label: 'Uploaded Documents table' },
+  { key: 'section:database.pdf_templates',      tabHref: '/admin/database', label: 'PDF Templates table' },
+  { key: 'section:database.messages',           tabHref: '/admin/database', label: 'Messages table' },
+  { key: 'section:database.profiles',           tabHref: '/admin/database', label: 'Users (Profiles) table' },
 ]
 
 interface PermissionValue { isAdmin: boolean; has: (key: string) => boolean }

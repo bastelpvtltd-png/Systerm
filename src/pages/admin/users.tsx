@@ -151,19 +151,21 @@ export default function UsersPage() {
                 </div>
               )}
 
-              {!form.is_admin && form.allowed_tabs.includes('/admin') && (
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Dashboard cards this user can see</label>
-                  <div className="space-y-1 max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-2">
-                    {SECTION_ITEMS.map(s => (
-                      <label key={s.key} className="flex items-center gap-2 text-sm py-1 px-1 rounded hover:bg-gray-50">
-                        <input type="checkbox" checked={form.allowed_tabs.includes(s.key)} onChange={() => toggleTab(s.key)}/>
-                        {s.label}
-                      </label>
-                    ))}
+              {!form.is_admin && TAB_ITEMS
+                .filter(t => form.allowed_tabs.includes(t.href) && SECTION_ITEMS.some(s => s.tabHref === t.href))
+                .map(t => (
+                  <div key={t.href}>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">{t.label} — pieces this user can see</label>
+                    <div className="space-y-1 max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                      {SECTION_ITEMS.filter(s => s.tabHref === t.href).map(s => (
+                        <label key={s.key} className="flex items-center gap-2 text-sm py-1 px-1 rounded hover:bg-gray-50">
+                          <input type="checkbox" checked={form.allowed_tabs.includes(s.key)} onChange={() => toggleTab(s.key)}/>
+                          {s.label}
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                ))}
 
               {saveError && <p className="text-xs text-red-600">{saveError}</p>}
             </div>

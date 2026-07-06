@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import AdminLayout from '@/components/admin/AdminLayout'
+import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { applyTextRules } from '@/lib/textClean'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy,
@@ -75,6 +75,9 @@ function statusLabel(it: UploadItem) {
 }
 
 export default function DocumentsPage() {
+  const { has } = usePermission()
+  const canUpload = has('section:documents.upload')
+  const canPreview = has('section:documents.preview')
   const [panel, setPanel] = useState<Panel>('upload')
   const [items, setItems] = useState<UploadItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -125,6 +128,12 @@ export default function DocumentsPage() {
   }, [filterType])
 
   useEffect(() => { if (panel === 'preview') loadRecords() }, [panel, loadRecords])
+
+  // If the current panel isn't granted, drop back to whichever one is
+  useEffect(() => {
+    if (panel === 'upload' && !canUpload && canPreview) setPanel('preview')
+    if (panel === 'preview' && !canPreview && canUpload) setPanel('upload')
+  }, [panel, canUpload, canPreview])
 
   // Reset to page 1 whenever a different saved record is opened, and lazily
   // fetch+cache each page's image from Drive as the admin pages through it.
@@ -654,7 +663,7 @@ export default function DocumentsPage() {
               )}
             </button>
             <div className="flex bg-gray-100 rounded-lg p-0.5">
-              {(['upload','preview'] as Panel[]).map(p => (
+              {(['upload','preview'] as Panel[]).filter(p => p === 'upload' ? canUpload : canPreview).map(p => (
                 <button key={p} onClick={() => setPanel(p)}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors capitalize ${
                     panel === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
@@ -692,7 +701,7 @@ export default function DocumentsPage() {
         )}
 
         {/* === UPLOAD PANEL === */}
-        {panel === 'upload' && (
+        {panel === 'upload' && canUpload && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
             {/* Dropzone */}
@@ -799,7 +808,7 @@ export default function DocumentsPage() {
         )}
 
         {/* === PREVIEW PANEL === */}
-        {panel === 'preview' && (
+        {panel === 'preview' && canPreview && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div className="card">
               <div className="flex items-center justify-between mb-4">

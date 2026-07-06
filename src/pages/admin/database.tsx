@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import AdminLayout from '@/components/admin/AdminLayout'
+import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import {
   Database, RefreshCw, Trash2, Save, Loader, AlertTriangle, X,
 } from 'lucide-react'
@@ -22,6 +22,8 @@ function isJsonValue(v: any) {
 }
 
 export default function DatabasePage() {
+  const { has } = usePermission()
+  const visibleTables = TABLES.filter(t => has(`section:database.${t.key}`))
   const [table, setTable] = useState('cusdec')
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
@@ -48,6 +50,11 @@ export default function DatabasePage() {
   }, [table])
 
   useEffect(() => { load() }, [load])
+
+  // Jump to the first table this account is actually allowed to see
+  useEffect(() => {
+    if (visibleTables.length && !visibleTables.some(t => t.key === table)) setTable(visibleTables[0].key)
+  }, [visibleTables, table])
 
   function draftFor(row: Row): Row {
     return drafts[row.id] || row
@@ -131,7 +138,7 @@ export default function DatabasePage() {
 
         {/* Table tabs */}
         <div className="flex gap-1.5 mb-4 flex-wrap">
-          {TABLES.map(t => (
+          {visibleTables.map(t => (
             <button key={t.key} onClick={() => setTable(t.key)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                 table === t.key ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'

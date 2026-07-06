@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import AdminLayout from '@/components/admin/AdminLayout'
+import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail } from 'lucide-react'
 
 interface CusdecRec { id: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string }
@@ -16,6 +16,10 @@ const COMPANY = {
 }
 
 export default function BoatNotePage() {
+  const { has } = usePermission()
+  const canSelectCusdec = has('section:boat-note.select-cusdec')
+  const canSelectCdn = has('section:boat-note.select-cdn')
+  const canOutput = has('section:boat-note.output')
   const [cusdecs, setCusdecs]   = useState<CusdecRec[]>([])
   const [cdns, setCdns]         = useState<CdnRec[]>([])
   const [selCusdec, setSelCusdec] = useState('')
@@ -259,6 +263,7 @@ export default function BoatNotePage() {
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
 
           {/* Step 1 — CUSDEC */}
+          {canSelectCusdec && (
           <div className="card">
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-semibold text-gray-900 text-sm">1 · Select CUSDEC</h2>
@@ -285,7 +290,11 @@ export default function BoatNotePage() {
             )}
           </div>
 
+          </div>
+          )}
+
           {/* Step 2 — CDNs */}
+          {canSelectCdn && (
           <div className="card">
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-semibold text-gray-900 text-sm">2 · Select Containers (CDN)</h2>
@@ -333,7 +342,11 @@ export default function BoatNotePage() {
             </button>
           </div>
 
+          </div>
+          )}
+
           {/* Step 3 — Output */}
+          {canOutput && (
           <div className="card">
             <h2 className="font-semibold text-gray-900 text-sm mb-3">3 · Download / Email</h2>
 
@@ -380,6 +393,7 @@ export default function BoatNotePage() {
               </div>
             )}
           </div>
+          )}
         </div>
 
         {/* Format preview note */}

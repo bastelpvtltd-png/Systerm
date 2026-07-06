@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import AdminLayout from '@/components/admin/AdminLayout'
+import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
@@ -65,6 +65,9 @@ function fileToBase64(file: File): Promise<string> {
 }
 
 export default function DocumentsUploadPage() {
+  const { has } = usePermission()
+  const canUpload = has('section:documents-upload.upload')
+  const canSeeUploaded = has('section:documents-upload.uploaded')
   const [items, setItems] = useState<UploadItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -210,7 +213,8 @@ export default function DocumentsUploadPage() {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          <div className="lg:col-span-2 card">
+          {canUpload && (
+          <div className={canSeeUploaded ? 'lg:col-span-2 card' : 'lg:col-span-3 card'}>
             <h2 className="font-semibold text-gray-900 text-sm mb-3">Upload PDFs</h2>
             <div
               onClick={() => fileRef.current?.click()}
@@ -234,8 +238,10 @@ export default function DocumentsUploadPage() {
               <p className="text-xs text-gray-400 mt-3">{items.length} file{items.length !== 1 ? 's' : ''} · {readyCount} ready</p>
             )}
           </div>
+          )}
 
-          <div className="card">
+          {canSeeUploaded && (
+          <div className={canUpload ? 'card' : 'lg:col-span-3 card'}>
             <h2 className="font-semibold text-gray-900 text-sm mb-3">Uploaded ({items.length})</h2>
             {items.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-14 text-center">
@@ -297,6 +303,7 @@ export default function DocumentsUploadPage() {
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
 
