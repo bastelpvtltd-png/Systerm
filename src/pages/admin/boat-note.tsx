@@ -15,7 +15,14 @@ const COMPANY = {
   tel:        '',
 }
 
+// usePermission() must run inside AdminLayout's Provider — calling it in the
+// component that creates <AdminLayout> reads the context from above the
+// Provider and always gets the default (has: () => false).
 export default function BoatNotePage() {
+  return <AdminLayout><BoatNoteContent/></AdminLayout>
+}
+
+function BoatNoteContent() {
   const { has } = usePermission()
   const canSelectCusdec = has('section:boat-note.select-cusdec')
   const canSelectCdn = has('section:boat-note.select-cdn')
@@ -251,7 +258,6 @@ export default function BoatNotePage() {
   const statusColor = status.startsWith('✓') ? 'text-green-600' : status.startsWith('⚠') ? 'text-amber-600' : 'text-red-600'
 
   return (
-    <AdminLayout>
       <div className="p-6">
         <div className="mb-5">
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
@@ -397,6 +403,5 @@ export default function BoatNotePage() {
           <span className="font-semibold">PDF Format:</span> SHIPPING NOTE / BOAT NOTE – Exp 3a · Landscape A4 · All fields from Excel b2 sheet (Shipper, Consignee, Voyage, Vessel, Port of Loading/Discharge, Container, CDN No., Gross Weight, Cube, SLPA, Company, Declarant)
         </div>
       </div>
-    </AdminLayout>
   )
 }

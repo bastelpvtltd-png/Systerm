@@ -14,7 +14,14 @@ const TYPE_LABELS: Record<string, string> = {
   boat_note: 'Boat Note', party_copy: "Party's Copy", bill: 'Bill',
 }
 
+// usePermission() must run inside AdminLayout's Provider — calling it in the
+// component that creates <AdminLayout> reads the context from above the
+// Provider and always gets the default (has: () => false).
 export default function SettingsPage() {
+  return <AdminLayout><SettingsContent/></AdminLayout>
+}
+
+function SettingsContent() {
   const { has } = usePermission()
   const canGeneral = has('section:settings.general')
   const canDatabase = has('section:settings.database')
@@ -47,7 +54,6 @@ export default function SettingsPage() {
   }
 
   return (
-    <AdminLayout>
       <div className="p-6">
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
@@ -183,6 +189,5 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
-    </AdminLayout>
   )
 }

@@ -64,7 +64,14 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
+// usePermission() must run inside AdminLayout's Provider — calling it in the
+// component that creates <AdminLayout> reads the context from above the
+// Provider and always gets the default (has: () => false).
 export default function DocumentsUploadPage() {
+  return <AdminLayout><DocumentsUploadContent/></AdminLayout>
+}
+
+function DocumentsUploadContent() {
   const { has } = usePermission()
   const canUpload = has('section:documents-upload.upload')
   const canSeeUploaded = has('section:documents-upload.uploaded')
@@ -197,7 +204,7 @@ export default function DocumentsUploadPage() {
   const readyCount = items.filter(it => it.status === 'ready').length
 
   return (
-    <AdminLayout>
+    <>
       <div className="p-6 max-w-5xl mx-auto">
         <div className="flex items-center gap-2 mb-1">
           <h1 className="text-xl font-bold text-gray-900">Documents</h1>
@@ -380,6 +387,6 @@ export default function DocumentsUploadPage() {
           </div>
         </div>
       )}
-    </AdminLayout>
+    </>
   )
 }

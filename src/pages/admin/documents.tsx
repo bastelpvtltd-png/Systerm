@@ -74,7 +74,14 @@ function statusLabel(it: UploadItem) {
   }
 }
 
+// usePermission() must run inside AdminLayout's Provider — calling it in the
+// component that creates <AdminLayout> reads the context from above the
+// Provider and always gets the default (has: () => false).
 export default function DocumentsPage() {
+  return <AdminLayout><DocumentsContent/></AdminLayout>
+}
+
+function DocumentsContent() {
   const { has } = usePermission()
   const canUpload = has('section:documents.upload')
   const canPreview = has('section:documents.preview')
@@ -638,7 +645,6 @@ export default function DocumentsPage() {
   const savedCount = items.filter(it => it.status === 'saved').length
 
   return (
-    <AdminLayout>
       <div className="p-6 h-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
@@ -1199,7 +1205,6 @@ export default function DocumentsPage() {
           </div>
         )}
       </div>
-    </AdminLayout>
   )
 }
 

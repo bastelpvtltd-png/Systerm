@@ -21,7 +21,14 @@ function isJsonValue(v: any) {
   return v !== null && typeof v === 'object'
 }
 
+// usePermission() must run inside AdminLayout's Provider — calling it in the
+// component that creates <AdminLayout> reads the context from above the
+// Provider and always gets the default (has: () => false).
 export default function DatabasePage() {
+  return <AdminLayout><DatabaseContent/></AdminLayout>
+}
+
+function DatabaseContent() {
   const { has } = usePermission()
   const visibleTables = TABLES.filter(t => has(`section:database.${t.key}`))
   const [table, setTable] = useState('cusdec')
@@ -117,7 +124,6 @@ export default function DatabasePage() {
   }
 
   return (
-    <AdminLayout>
       <div className="p-6">
         <div className="flex items-center justify-between mb-5">
           <div>
@@ -234,6 +240,5 @@ export default function DatabasePage() {
         </div>
         <p className="text-xs text-gray-400 mt-2">Showing latest {rows.length} rows (max 300).</p>
       </div>
-    </AdminLayout>
   )
 }

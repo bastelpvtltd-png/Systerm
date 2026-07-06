@@ -11,7 +11,15 @@ interface Summary {
   pendingRelease: number
 }
 
+// usePermission() must be called from a component rendered INSIDE AdminLayout's
+// PermissionContext.Provider — calling it in the component that creates
+// <AdminLayout> itself reads the context from above the Provider and always
+// gets the default (has: () => false), silently hiding every gated section.
 export default function AdminDashboard() {
+  return <AdminLayout><DashboardContent/></AdminLayout>
+}
+
+function DashboardContent() {
   const [summary, setSummary] = useState<Summary>({
     totalShipments: 0, pendingCusdec: 0,
     pendingBoatNote: 0, pendingCdn: 0, pendingRelease: 0
@@ -55,7 +63,6 @@ export default function AdminDashboard() {
   ].filter(s => has(s.key))
 
   return (
-    <AdminLayout>
       <div className="p-6">
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
@@ -97,6 +104,5 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
-    </AdminLayout>
   )
 }
