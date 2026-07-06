@@ -289,8 +289,6 @@ export default function BoatNotePage() {
               </div>
             )}
           </div>
-
-          </div>
           )}
 
           {/* Step 2 — CDNs */}
@@ -340,8 +338,6 @@ export default function BoatNotePage() {
               {generating ? <Loader size={14} className="animate-spin"/> : <Anchor size={14}/>}
               Generate {selCdns.length > 0 ? `(${selCdns.length})` : ''} Boat Note{selCdns.length !== 1 ? 's' : ''}
             </button>
-          </div>
-
           </div>
           )}
 
