@@ -51,9 +51,10 @@ export const SECTION_ITEMS = [
   { key: 'section:documents.upload',  tabHref: '/admin/documents', label: 'Upload panel' },
   { key: 'section:documents.preview', tabHref: '/admin/documents', label: 'All Documents preview panel' },
   // Upload Docs
-  { key: 'section:documents-upload.upload',   tabHref: '/admin/documents-upload', label: 'Upload PDFs card' },
-  { key: 'section:documents-upload.uploaded', tabHref: '/admin/documents-upload', label: 'Uploaded list card' },
-  { key: 'section:documents-upload.preview',  tabHref: '/admin/documents-upload', label: 'All Documents preview panel' },
+  { key: 'section:documents-upload.upload',     tabHref: '/admin/documents-upload', label: 'Upload PDFs card' },
+  { key: 'section:documents-upload.uploaded',   tabHref: '/admin/documents-upload', label: 'Uploaded list card (normal access)' },
+  { key: 'section:documents-upload.preview',    tabHref: '/admin/documents-upload', label: 'All Documents preview panel' },
+  { key: 'section:documents-upload.admin-edit', tabHref: '/admin/documents-upload', label: 'Full Access Edit panel (box/template editor)' },
   // Settings
   { key: 'section:settings.general',  tabHref: '/admin/settings', label: 'General Info tab' },
   { key: 'section:settings.database', tabHref: '/admin/settings', label: 'Document Records tab' },

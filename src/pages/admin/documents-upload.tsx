@@ -1,19 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
+import { applyTextRules } from '@/lib/textClean'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
-  Trash2, Pencil, FileWarning, Eye, RefreshCw,
+  Trash2, Pencil, FileWarning, Eye, RefreshCw, Plus, Lock, Unlock,
 } from 'lucide-react'
 
-// Separate, reduced-access tab: upload, rename, see the auto-detected type,
-// correct it if wrong, save, or delete — no box drawing or extraction-
-// template editing (that lives on the full /admin/documents tab, which
-// admin keeps for themselves). Who can see this tab is controlled per-user
-// via allowed_tabs (AdminLayout + admin/users.tsx).
+// Three panels here, each gated by its own permission:
+// - Upload PDFs + Uploaded (normal access — simple view/rename/save/delete)
+// - All Documents preview (saved documents, from anyone, read-only)
+// - Admin Edit (full box/template editor — same as /admin/documents, kept
+//   separate so admin can grant it selectively; regular users only ever get
+//   the Upload + Uploaded panels via allowed_tabs)
 
 type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boat_note' | 'party_copy' | 'bill'
+type PdfField = {
+  key: string; label: string; value: string
+  rawValue?: string
+  excludeWords?: string
+  formula?: string
+  locked?: boolean
+}
+type Panel = 'upload' | 'preview' | 'admin-edit'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
+
+interface PctBox { x: number; y: number; w: number; h: number; page?: number }
 
 interface UploadItem {
   id: string
@@ -22,13 +34,20 @@ interface UploadItem {
   base64: string
   status: ItemStatus
   detectedType: DocType | ''
-  fields: { key: string; value: string }[]
+  fields: PdfField[]
+  rawText: string
   scanned: boolean
   driveLink: string
   error: string
   pageImages: Record<number, string>
   numPages: number
+  boxes: Record<string, PctBox>
   variant: 'native' | 'scanned'
+}
+
+interface DbRecord {
+  id: string; doc_type: string; file_name: string
+  drive_url: string; extracted_data: Record<string, string> | null; created_at: string
 }
 
 const DOC_TYPES: { key: DocType; label: string; icon: any; color: string }[] = [
@@ -43,11 +62,6 @@ const DOC_TYPES: { key: DocType; label: string; icon: any; color: string }[] = [
 const TYPE_COLORS: Record<string, string> = {
   cusdec: '#1B3A5C', cdn: '#22A87A', barcode: '#f59e0b',
   boat_note: '#3b82f6', party_copy: '#8b5cf6', bill: '#ef4444',
-}
-
-interface DbRecord {
-  id: string; doc_type: string; file_name: string
-  drive_url: string; extracted_data: Record<string, string> | null; created_at: string
 }
 
 function docDef(key: string) {
@@ -86,17 +100,31 @@ function DocumentsUploadContent() {
   const canUpload = has('section:documents-upload.upload')
   const canSeeUploaded = has('section:documents-upload.uploaded')
   const canPreview = has('section:documents-upload.preview')
-  const [panel, setPanel] = useState<'upload' | 'preview'>('upload')
+  const canAdminEdit = has('section:documents-upload.admin-edit')
+  const [panel, setPanel] = useState<Panel>('upload')
   const [items, setItems] = useState<UploadItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Which popup to show for the currently-selected item: the plain viewer
+  // (opened from Uploaded) or the full box/template editor (opened from Admin Edit)
+  const [popupMode, setPopupMode] = useState<'simple' | 'full'>('simple')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [viewPage, setViewPage] = useState(0)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
-  // "All Documents" preview — same underlying upload/save flow, just showing
-  // what's already been saved to Drive+DB (by anyone), not this session's list.
+
+  // Full editor state (box drawing, field table) — same as /admin/documents
+  const [activeFieldIdx, setActiveFieldIdx] = useState<number | null>(null)
+  const [drag, setDrag] = useState<{ fieldIdx: number; mode: 'draw' | 'move' | 'resize'; startMouse: { x: number; y: number }; startBox: PctBox } | null>(null)
+  const [liveBox, setLiveBox] = useState<PctBox | null>(null)
+  const [extractingBox, setExtractingBox] = useState(false)
+  const [savingFormat, setSavingFormat] = useState(false)
+  const [copyingBoxes, setCopyingBoxes] = useState(false)
+  const imageAreaRef = useRef<HTMLDivElement>(null)
+  const fieldsScrollRef = useRef<HTMLDivElement>(null)
+
+  // "All Documents" preview — saved documents from anyone, not just this session
   const [records, setRecords] = useState<DbRecord[]>([])
   const [loadingRecs, setLoadingRecs] = useState(false)
   const [selectedRec, setSelectedRec] = useState<DbRecord | null>(null)
@@ -150,7 +178,7 @@ function DocumentsUploadContent() {
     const newItems: UploadItem[] = pdfFiles.map(file => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       file, fileName: file.name, base64: '', status: 'reading',
-      detectedType: '', fields: [], scanned: false, driveLink: '', error: '',
+      detectedType: '', fields: [], rawText: '', scanned: false, driveLink: '', error: '', boxes: {},
       pageImages: {}, numPages: 1, variant: 'native',
     }))
     if (!newItems.length) return
@@ -169,8 +197,10 @@ function DocumentsUploadContent() {
         updateItem(item.id, {
           status: 'ready',
           detectedType: (json.detectedDocType as DocType) || '',
-          fields: json.fields || [],
+          fields: (json.fields || []).map((f: PdfField) => ({ ...f, rawValue: f.value })),
+          rawText: json.rawText || '',
           scanned: !!json.scanned,
+          boxes: json.boxes || {},
           variant: json.variant === 'scanned' ? 'scanned' : 'native',
         })
       } catch (e: any) {
@@ -193,6 +223,70 @@ function DocumentsUploadContent() {
   function commitRename(id: string) {
     updateItem(id, { fileName: renameValue.trim() || 'document.pdf' })
     setRenamingId(null)
+  }
+
+  function updateItemField(id: string, idx: number, val: string) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, value: val, rawValue: val } : f) }
+      : it))
+  }
+
+  function updateFieldRuleText(id: string, idx: number, patch: Partial<Pick<PdfField, 'excludeWords' | 'formula'>>) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, ...patch } : f) }
+      : it))
+  }
+
+  async function commitFieldRules(id: string, idx: number) {
+    let updatedField: PdfField | undefined
+    let docType = ''
+    let variant: 'native' | 'scanned' = 'native'
+    setItems(prev => prev.map(it => {
+      if (it.id !== id) return it
+      docType = it.detectedType
+      variant = it.variant
+      return {
+        ...it, fields: it.fields.map((f, i) => {
+          if (i !== idx) return f
+          updatedField = { ...f, value: applyTextRules(f.rawValue ?? f.value, f.formula, f.excludeWords) }
+          return updatedField
+        }),
+      }
+    }))
+    if (!docType || !updatedField) return
+    try {
+      const res = await fetch('/api/save-field-rules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          doc_type: docType, key: updatedField.key, label: updatedField.label,
+          excludeWords: updatedField.excludeWords, formula: updatedField.formula, variant,
+        }),
+      })
+      const d = await res.json()
+      if (!res.ok) setError(d.error || 'Rule save failed')
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  function setFieldFromOcr(id: string, idx: number, rawText: string) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx
+          ? { ...f, rawValue: rawText, value: applyTextRules(rawText, f.formula, f.excludeWords) }
+          : f) }
+      : it))
+  }
+
+  async function useSharedBox(id: string, idx: number, sourceIdx: number) {
+    const item = items.find(it => it.id === id)
+    if (!item || sourceIdx < 0) return
+    const sourceField = item.fields[sourceIdx]
+    const sourceBox = item.boxes[sourceField.key]
+    if (!sourceBox) return
+    const targetKey = item.fields[idx].key
+    updateItem(id, { boxes: { ...item.boxes, [targetKey]: sourceBox } })
+    setFieldFromOcr(id, idx, sourceField.rawValue ?? sourceField.value)
+    await commitFieldRules(id, idx)
   }
 
   async function saveOne(item: UploadItem) {
@@ -237,6 +331,7 @@ function DocumentsUploadContent() {
   }
 
   const selectedItem = items.find(it => it.id === selectedId) || null
+  const showFullEditor = popupMode === 'full' && canAdminEdit
 
   useEffect(() => { setViewPage(0) }, [selectedId])
 
@@ -257,23 +352,267 @@ function DocumentsUploadContent() {
       .catch(() => {})
   }, [selectedItem?.id, viewPage])
 
+  function pctFromEvent(e: React.MouseEvent) {
+    const el = imageAreaRef.current
+    if (!el) return { x: 0, y: 0 }
+    const rect = el.getBoundingClientRect()
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100))
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100))
+    return { x, y }
+  }
+
+  function handleContainerMouseDown(e: React.MouseEvent) {
+    if (activeFieldIdx === null) return
+    const p = pctFromEvent(e)
+    const start = { x: p.x, y: p.y, w: 0, h: 0, page: viewPage }
+    setDrag({ fieldIdx: activeFieldIdx, mode: 'draw', startMouse: p, startBox: start })
+    setLiveBox(start)
+  }
+
+  function startMoveBox(e: React.MouseEvent, fieldIdx: number, box: PctBox) {
+    e.stopPropagation()
+    setDrag({ fieldIdx, mode: 'move', startMouse: pctFromEvent(e), startBox: box })
+    setLiveBox(box)
+  }
+
+  function startResizeBox(e: React.MouseEvent, fieldIdx: number, box: PctBox) {
+    e.stopPropagation()
+    setDrag({ fieldIdx, mode: 'resize', startMouse: pctFromEvent(e), startBox: box })
+    setLiveBox(box)
+  }
+
+  function handleContainerMouseMove(e: React.MouseEvent) {
+    if (!drag) return
+    const p = pctFromEvent(e)
+    if (drag.mode === 'draw') {
+      setLiveBox({
+        x: Math.min(drag.startMouse.x, p.x), y: Math.min(drag.startMouse.y, p.y),
+        w: Math.abs(p.x - drag.startMouse.x), h: Math.abs(p.y - drag.startMouse.y),
+        page: drag.startBox.page,
+      })
+    } else if (drag.mode === 'move') {
+      const dx = p.x - drag.startMouse.x, dy = p.y - drag.startMouse.y
+      setLiveBox({
+        x: Math.max(0, Math.min(100 - drag.startBox.w, drag.startBox.x + dx)),
+        y: Math.max(0, Math.min(100 - drag.startBox.h, drag.startBox.y + dy)),
+        w: drag.startBox.w, h: drag.startBox.h, page: drag.startBox.page,
+      })
+    } else if (drag.mode === 'resize') {
+      const dx = p.x - drag.startMouse.x, dy = p.y - drag.startMouse.y
+      setLiveBox({
+        x: drag.startBox.x, y: drag.startBox.y,
+        w: Math.max(1, Math.min(100 - drag.startBox.x, drag.startBox.w + dx)),
+        h: Math.max(1, Math.min(100 - drag.startBox.y, drag.startBox.h + dy)),
+        page: drag.startBox.page,
+      })
+    }
+  }
+
+  async function handleContainerMouseUp() {
+    if (!drag || !liveBox || !selectedItem || liveBox.w < 1 || liveBox.h < 1) {
+      setDrag(null); setLiveBox(null)
+      return
+    }
+    const idx = drag.fieldIdx
+    const box = liveBox
+    const item = selectedItem
+    setDrag(null)
+    setLiveBox(null)
+    setActiveFieldIdx(null)
+    setExtractingBox(true)
+    try {
+      const res = await fetch('/api/extract-box', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64: item.base64, box }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Extract failed')
+      setFieldFromOcr(item.id, idx, d.text)
+      const fieldKey = item.fields[idx].key
+      updateItem(item.id, { boxes: { ...item.boxes, [fieldKey]: box } })
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setExtractingBox(false)
+    }
+  }
+
+  function slugify(label: string): string {
+    return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'field'
+  }
+
+  async function addCustomField() {
+    if (!selectedItem) return
+    const label = window.prompt('Aluth field eke nama danna (eg. Marks & Numbers) — meka thamai database column name eka:')
+    if (!label || !label.trim()) return
+    let key = slugify(label)
+    const existingKeys = new Set(selectedItem.fields.map(f => f.key))
+    let n = 2
+    while (existingKeys.has(key)) { key = `${slugify(label)}_${n++}` }
+    const docType = selectedItem.detectedType
+    if (!docType) { alert('Document type select karanna kalin'); return }
+    if (!confirm(`"${label.trim()}" field eka add kalama, "${docType}" table ekata aluth column ekak ("${key}") ekamama add wenawa. Continue karanna da?`)) return
+
+    updateItem(selectedItem.id, { fields: [...selectedItem.fields, { key, label: label.trim(), value: '' }] })
+    setActiveFieldIdx(selectedItem.fields.length)
+    requestAnimationFrame(() => {
+      fieldsScrollRef.current?.scrollTo({ top: fieldsScrollRef.current.scrollHeight, behavior: 'smooth' })
+    })
+
+    try {
+      const res = await fetch('/api/ensure-column', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: docType, key }),
+      })
+      const d = await res.json()
+      if (!res.ok) setError(d.error || 'Column create failed')
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  function renameField(id: string, idx: number, newLabel: string) {
+    if (!newLabel.trim()) return
+    setItems(prev => prev.map(it => {
+      if (it.id !== id) return it
+      const oldField = it.fields[idx]
+      if (oldField.locked) return it
+      const newKey = slugify(newLabel)
+      const fields = it.fields.map((f, i) => i === idx ? { ...f, label: newLabel.trim(), key: newKey } : f)
+      const boxes = { ...it.boxes }
+      if (oldField.key !== newKey && boxes[oldField.key]) {
+        boxes[newKey] = boxes[oldField.key]
+        delete boxes[oldField.key]
+      }
+      return { ...it, fields, boxes }
+    }))
+  }
+
+  function toggleLock(id: string, idx: number) {
+    setItems(prev => prev.map(it => it.id === id
+      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, locked: !f.locked } : f) }
+      : it))
+  }
+
+  async function deleteField(id: string, idx: number) {
+    const item = items.find(it => it.id === id)
+    if (!item) return
+    const field = item.fields[idx]
+    if (field.locked) { alert('Meka field eka locked wela thiyenawa — mudalin unlock karanna.'); return }
+    const docType = item.detectedType
+    const warning = docType
+      ? `"${field.label}" field eka delete kalama, "${docType}" table eke "${field.key}" column ekath (thibba nam) delete wenawa — meka undo karanna bæ. Continue karanna da?`
+      : `"${field.label}" field eka delete karanna da?`
+    if (!confirm(warning)) return
+
+    setItems(prev => prev.map(it => {
+      if (it.id !== id) return it
+      const removedKey = it.fields[idx].key
+      const boxes = { ...it.boxes }
+      delete boxes[removedKey]
+      return { ...it, fields: it.fields.filter((_, i) => i !== idx), boxes }
+    }))
+    if (activeFieldIdx === idx) setActiveFieldIdx(null)
+
+    if (docType) {
+      try {
+        const res = await fetch('/api/delete-field', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ doc_type: docType, key: field.key }),
+        })
+        const d = await res.json()
+        if (!res.ok) setError(d.error || 'Column delete failed')
+      } catch (e: any) {
+        setError(e.message)
+      }
+    }
+  }
+
+  async function handleSaveFormat() {
+    if (!selectedItem || !selectedItem.detectedType) { alert('Document type select karanna kalin'); return }
+    const boxEntries = Object.entries(selectedItem.boxes)
+    if (!boxEntries.length) { alert('Box ekakwath draw karala nane — field ekak select karala PDF eke box ekak drag karanna'); return }
+    setSavingFormat(true)
+    try {
+      const boxedFields = selectedItem.fields.filter(f => selectedItem.boxes[f.key])
+      const labels = Object.fromEntries(boxedFields.map(f => [f.key, f.label]))
+      const excludeWords = Object.fromEntries(boxedFields.filter(f => f.excludeWords?.trim()).map(f => [f.key, f.excludeWords]))
+      const formulas = Object.fromEntries(boxedFields.filter(f => f.formula?.trim()).map(f => [f.key, f.formula]))
+      const res = await fetch('/api/save-field-boxes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords, formulas, variant: selectedItem.variant }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Save failed')
+      alert(`Format saved for "${selectedItem.detectedType}" (${selectedItem.variant === 'scanned' ? 'Scanned/OCR' : 'Native Text'}) — future uploads of this variant will auto-use these boxes.`)
+    } catch (e: any) {
+      setError(e.message)
+      alert('Error: ' + e.message)
+    } finally {
+      setSavingFormat(false)
+    }
+  }
+
+  async function copyBoxesFromOtherVariant() {
+    if (!selectedItem || !selectedItem.detectedType) { alert('Document type select karanna kalin'); return }
+    const otherVariant = selectedItem.variant === 'scanned' ? 'native' : 'scanned'
+    setCopyingBoxes(true)
+    try {
+      const res = await fetch('/api/copy-field-boxes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: selectedItem.detectedType, fromVariant: otherVariant, toVariant: selectedItem.variant }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Copy failed')
+
+      const boxes: Record<string, PctBox> = d.boxes || {}
+      const labels: Record<string, string> = d.labels || {}
+      const excludeWords: Record<string, string> = d.excludeWords || {}
+      const formulas: Record<string, string> = d.formulas || {}
+
+      setItems(prev => prev.map(it => {
+        if (it.id !== selectedItem.id) return it
+        const existingByKey = new Map(it.fields.map(f => [f.key, f]))
+        const fields = it.fields.map(f => boxes[f.key]
+          ? { ...f, label: labels[f.key] || f.label, excludeWords: excludeWords[f.key] ?? f.excludeWords, formula: formulas[f.key] ?? f.formula }
+          : f)
+        for (const key of Object.keys(boxes)) {
+          if (!existingByKey.has(key)) {
+            fields.push({ key, label: labels[key] || key, value: '', excludeWords: excludeWords[key], formula: formulas[key] })
+          }
+        }
+        return { ...it, boxes, fields }
+      }))
+      alert(`${otherVariant === 'scanned' ? 'Scanned/OCR' : 'Native Text'} variant eke boxes ${boxes && Object.keys(boxes).length} copy kalā — dhan positions adjust karanna PDF eke box tika drag karala.`)
+    } catch (e: any) {
+      setError(e.message)
+      alert('Error: ' + e.message)
+    } finally {
+      setCopyingBoxes(false)
+    }
+  }
+
   const readyCount = items.filter(it => it.status === 'ready').length
+
+  const panelOptions: Panel[] = (['upload', 'preview', 'admin-edit'] as Panel[]).filter(p =>
+    p === 'upload' ? (canUpload || canSeeUploaded) : p === 'preview' ? canPreview : canAdminEdit
+  )
 
   return (
     <>
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="p-6 max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-bold text-gray-900">Documents</h1>
             <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-blue-100 text-blue-700">Upload</span>
           </div>
-          {canPreview && (
+          {panelOptions.length > 1 && (
             <div className="flex bg-gray-100 rounded-lg p-0.5">
-              {(['upload', 'preview'] as const).map(p => (
+              {panelOptions.map(p => (
                 <button key={p} onClick={() => setPanel(p)}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors capitalize ${
                     panel === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                  }`}>{p}</button>
+                  }`}>{p === 'admin-edit' ? 'Admin Edit' : p}</button>
               ))}
             </div>
           )}
@@ -287,6 +626,7 @@ function DocumentsUploadContent() {
           </div>
         )}
 
+        {/* === UPLOAD panel: dropzone + normal-access list === */}
         {panel === 'upload' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {canUpload && (
@@ -333,11 +673,11 @@ function DocumentsUploadContent() {
                   const openable = it.status !== 'reading' && it.status !== 'extracting'
                   return (
                     <div key={it.id}
-                      onClick={() => openable && setSelectedId(it.id)}
+                      onClick={() => openable && (setPopupMode('simple'), setSelectedId(it.id))}
                       className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${
-                        selectedId === it.id ? 'border-2' : 'border-gray-100 hover:bg-gray-50'
+                        selectedId === it.id && popupMode === 'simple' ? 'border-2' : 'border-gray-100 hover:bg-gray-50'
                       }`}
-                      style={selectedId === it.id ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
+                      style={selectedId === it.id && popupMode === 'simple' ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
                       <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0" style={{ background: `${color}20` }}>
                         {it.status === 'reading' || it.status === 'extracting' || it.status === 'saving'
                           ? <Loader size={13} className="animate-spin" style={{ color }}/>
@@ -366,7 +706,7 @@ function DocumentsUploadContent() {
                         <button onClick={e => startRename(it, e)} title="Rename" className="text-gray-300 hover:text-gray-600 p-1">
                           <Pencil size={12}/>
                         </button>
-                        <button onClick={e => { e.stopPropagation(); openable && setSelectedId(it.id) }} title="View" className="text-gray-300 hover:text-blue-600 p-1">
+                        <button onClick={e => { e.stopPropagation(); openable && (setPopupMode('simple'), setSelectedId(it.id)) }} title="View" className="text-gray-300 hover:text-blue-600 p-1">
                           <Eye size={12}/>
                         </button>
                         <button onClick={e => { e.stopPropagation(); removeItem(it.id) }} title="Delete" className="text-gray-300 hover:text-red-500 p-1">
@@ -383,7 +723,7 @@ function DocumentsUploadContent() {
         </div>
         )}
 
-        {/* All Documents preview — same upload/save flow, saved documents from anyone */}
+        {/* === PREVIEW panel: saved documents from anyone, read-only === */}
         {panel === 'preview' && canPreview && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div className="card">
@@ -490,13 +830,65 @@ function DocumentsUploadContent() {
             </div>
           </div>
         )}
+
+        {/* === ADMIN EDIT panel: same uploaded items, full box/template editor === */}
+        {panel === 'admin-edit' && canAdminEdit && (
+          <div className="card">
+            <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
+              Admin Edit ({items.length})
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">Full access</span>
+            </h2>
+            {items.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-14 text-center">
+                <ScanLine size={30} className="text-gray-200 mb-2"/>
+                <p className="text-xs text-gray-400">No files yet — upload one from the Upload panel first</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {items.map(it => {
+                  const def = it.detectedType ? docDef(it.detectedType) : null
+                  const Icon = def?.icon || FileWarning
+                  const color = def?.color || '#9ca3af'
+                  const openable = it.status !== 'reading' && it.status !== 'extracting'
+                  return (
+                    <div key={it.id}
+                      onClick={() => openable && (setPopupMode('full'), setSelectedId(it.id))}
+                      className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                        selectedId === it.id && popupMode === 'full' ? 'border-2' : 'border-gray-100 hover:bg-gray-50'
+                      }`}
+                      style={selectedId === it.id && popupMode === 'full' ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
+                      <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0" style={{ background: `${color}20` }}>
+                        {it.status === 'reading' || it.status === 'extracting' || it.status === 'saving'
+                          ? <Loader size={13} className="animate-spin" style={{ color }}/>
+                          : it.status === 'error'
+                            ? <AlertTriangle size={13} className="text-red-500"/>
+                            : it.status === 'saved'
+                              ? <CheckCircle size={13} className="text-green-500"/>
+                              : <Icon size={13} style={{ color }}/>}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-gray-800 truncate">{it.fileName}</p>
+                        <p className={`text-xs mt-0.5 truncate ${it.status === 'error' ? 'text-red-500' : 'text-gray-400'}`}>
+                          {statusLabel(it)} · {Object.keys(it.boxes).length} box{Object.keys(it.boxes).length === 1 ? '' : 'es'}
+                        </p>
+                      </div>
+                      <ScanLine size={13} className="text-gray-300 flex-shrink-0"/>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Simple view/save popup — no box drawing or field editing (that stays on the full Documents tab) */}
+      {/* === Popup — simple viewer or full box/template editor, depending on how it was opened === */}
       {selectedItem && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-0 sm:p-4"
+        <div className={`fixed inset-0 bg-black/40 flex items-center justify-center z-50 ${showFullEditor ? 'p-6' : 'p-0 sm:p-4'}`}
           onClick={() => setSelectedId(null)}>
-          <div className="bg-white sm:rounded-2xl shadow-2xl w-full h-full sm:h-auto sm:max-w-lg sm:max-h-[85vh] flex flex-col"
+          <div className={`bg-white sm:rounded-2xl shadow-2xl w-full flex flex-col overflow-hidden ${
+            showFullEditor ? 'max-w-6xl max-h-[90vh] rounded-2xl' : 'h-full sm:h-auto sm:max-w-lg sm:max-h-[85vh]'
+          }`}
             onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <div className="min-w-0">
@@ -528,40 +920,243 @@ function DocumentsUploadContent() {
               )}
             </div>
 
-            <div className="flex-1 overflow-auto bg-gray-100 sm:p-3 flex items-center justify-center min-h-0">
-              {selectedItem.pageImages[viewPage] ? (
-                <img src={`data:image/png;base64,${selectedItem.pageImages[viewPage]}`} className="w-full h-full sm:w-auto sm:h-auto object-contain sm:rounded sm:shadow" alt="PDF page"/>
-              ) : (
-                <Loader size={20} className="animate-spin text-gray-400"/>
-              )}
-            </div>
-            {selectedItem.numPages > 1 && (
-              <div className="flex items-center justify-center gap-3 py-2 text-xs border-t border-gray-100">
-                <button onClick={() => setViewPage(p => Math.max(0, p - 1))} disabled={viewPage === 0}
-                  className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">← Prev</button>
-                <span className="text-gray-500 font-medium">Page {viewPage + 1} / {selectedItem.numPages}</span>
-                <button onClick={() => setViewPage(p => Math.min(selectedItem.numPages - 1, p + 1))} disabled={viewPage >= selectedItem.numPages - 1}
-                  className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">Next →</button>
-              </div>
-            )}
+            {showFullEditor ? (
+              <>
+                <div className="flex-1 overflow-hidden flex gap-4 px-5 py-3">
+                  <div className="w-[380px] flex-shrink-0 flex flex-col">
+                    {selectedItem.numPages > 1 && (
+                      <div className="flex-shrink-0 flex items-center justify-center gap-3 mb-2 text-xs">
+                        <button onClick={() => setViewPage(p => Math.max(0, p - 1))} disabled={viewPage === 0}
+                          className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">← Prev</button>
+                        <span className="text-gray-500 font-medium">Page {viewPage + 1} / {selectedItem.numPages}</span>
+                        <button onClick={() => setViewPage(p => Math.min(selectedItem.numPages - 1, p + 1))} disabled={viewPage >= selectedItem.numPages - 1}
+                          className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">Next →</button>
+                      </div>
+                    )}
+                    <div className="flex-1 overflow-auto bg-gray-100 rounded-lg">
+                      {!selectedItem.pageImages[viewPage] ? (
+                        <div className="h-full flex items-center justify-center py-20">
+                          <Loader size={20} className="animate-spin text-gray-400"/>
+                        </div>
+                      ) : (
+                        <div
+                          ref={imageAreaRef}
+                          className="relative w-full select-none"
+                          style={{ cursor: activeFieldIdx !== null && !drag ? 'crosshair' : 'default' }}
+                          onMouseDown={handleContainerMouseDown}
+                          onMouseMove={handleContainerMouseMove}
+                          onMouseUp={handleContainerMouseUp}
+                          onMouseLeave={() => { setDrag(null); setLiveBox(null) }}
+                        >
+                          <img src={`data:image/png;base64,${selectedItem.pageImages[viewPage]}`} className="w-full block" draggable={false}/>
+                          {selectedItem.fields.map((f, i) => {
+                            const isDragging = drag?.fieldIdx === i
+                            const box = isDragging ? liveBox : selectedItem.boxes[f.key]
+                            if (!box || (box.page || 0) !== viewPage) return null
+                            const isNewDraw = isDragging && drag?.mode === 'draw'
+                            return (
+                              <div key={i}
+                                onMouseDown={e => !isNewDraw && startMoveBox(e, i, box)}
+                                className={`absolute border-2 ${isNewDraw ? 'border-red-500 bg-red-500/10' : 'border-green-500 bg-green-500/10 cursor-move'}`}
+                                style={{ left: `${box.x}%`, top: `${box.y}%`, width: `${box.w}%`, height: `${box.h}%` }}>
+                                <span className="absolute -top-4 left-0 text-[10px] font-bold text-green-700 bg-white/80 px-0.5 rounded pointer-events-none">{i + 1}</span>
+                                {!isNewDraw && (
+                                  <div onMouseDown={e => startResizeBox(e, i, box)}
+                                    className="absolute -right-1 -bottom-1 w-3 h-3 bg-green-600 rounded-sm cursor-nwse-resize"/>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
-            <div className="flex items-center justify-between px-5 py-4 border-t border-gray-100">
-              <button onClick={() => removeItem(selectedItem.id)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
-                <Trash2 size={13}/> Remove
-              </button>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setSelectedId(null)}
-                  className="px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100">
-                  Close
-                </button>
-                <button onClick={() => saveOne(selectedItem)} disabled={selectedItem.status === 'saving'}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ background: '#1B3A5C' }}>
-                  {selectedItem.status === 'saving' ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}
-                  Save
-                </button>
-              </div>
-            </div>
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <div className="mb-2 flex-shrink-0 flex justify-end">
+                      <button onClick={addCustomField}
+                        className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded-md hover:bg-blue-50">
+                        <Plus size={13}/> Add Field
+                      </button>
+                    </div>
+                    {activeFieldIdx !== null && (
+                      <div className="mb-2 flex-shrink-0 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-center justify-between">
+                        <span>Field #{activeFieldIdx + 1} ekata correct box eka <b>vamin thiyena PDF image eke</b> drag karala draw karanna</span>
+                        <button onClick={() => setActiveFieldIdx(null)} className="text-red-400 hover:text-red-600 flex-shrink-0 ml-2"><X size={13}/></button>
+                      </div>
+                    )}
+                    {extractingBox && (
+                      <div className="mb-2 flex-shrink-0 text-xs text-blue-600 bg-blue-50 rounded-lg px-3 py-2 flex items-center gap-2">
+                        <Loader size={12} className="animate-spin"/> Box eka OCR karanawa...
+                      </div>
+                    )}
+                    <div ref={fieldsScrollRef} className="flex-1 overflow-auto">
+                    {selectedItem.fields.length === 0 ? (
+                      <div className="text-center py-10 text-gray-400 text-sm">
+                        {selectedItem.scanned ? 'Scanned PDF — no fields extracted. Select type and save manually.' : 'No fields extracted for this document.'}
+                      </div>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead className="sticky top-0 bg-white">
+                          <tr className="bg-gray-50">
+                            <th className="text-left px-2 py-2 text-gray-500 font-medium w-10">#</th>
+                            <th className="text-left px-2 py-2 text-gray-500 font-medium w-36">Field</th>
+                            <th className="text-left px-2 py-2 text-gray-500 font-medium">Value</th>
+                            <th className="w-10 text-center px-1 py-2 text-gray-500 font-medium">Fix</th>
+                            <th className="w-8"></th>
+                            <th className="w-8"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedItem.fields.map((f, i) => (
+                            <tr key={i} className={`border-t border-gray-50 hover:bg-gray-50 ${activeFieldIdx === i ? 'bg-red-50' : ''} ${f.locked ? 'bg-gray-50' : ''}`}>
+                              <td className="px-2 py-1.5">
+                                <span className="inline-flex items-center justify-center w-6 h-6 text-white text-xs font-bold rounded"
+                                  style={{ background: selectedItem.boxes[f.key] ? '#16a34a' : (docDef(selectedItem.detectedType)?.color || '#6b7280') }}>{i + 1}</span>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input defaultValue={f.label} key={f.key} disabled={f.locked}
+                                  onBlur={e => renameField(selectedItem.id, i, e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                                  title="Column name — rename to match the target table's column"
+                                  className="w-full bg-transparent text-gray-600 font-medium border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 disabled:text-gray-400"/>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <textarea value={f.value} disabled={f.locked} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
+                                  placeholder="—" rows={f.value.includes('\n') ? Math.min(4, f.value.split('\n').length) : 1}
+                                  className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800 disabled:text-gray-400 resize-none leading-tight"/>
+                                <input value={f.excludeWords || ''} disabled={f.locked}
+                                  onChange={e => updateFieldRuleText(selectedItem.id, i, { excludeWords: e.target.value })}
+                                  onBlur={() => commitFieldRules(selectedItem.id, i)}
+                                  onKeyDown={e => { if (e.key === 'Enter') commitFieldRules(selectedItem.id, i) }}
+                                  title="Words to remove from the value — reversible, doesn't touch the original OCR text"
+                                  placeholder="exclude words (comma separated)..."
+                                  className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5"/>
+                                <input value={f.formula || ''} disabled={f.locked}
+                                  onChange={e => updateFieldRuleText(selectedItem.id, i, { formula: e.target.value })}
+                                  onBlur={() => commitFieldRules(selectedItem.id, i)}
+                                  onKeyDown={e => { if (e.key === 'Enter') commitFieldRules(selectedItem.id, i) }}
+                                  title="Excel-like code to slice this field's value out of the box text. Steps chain with | — LINE(n), LEFT(n), RIGHT(n), MID(start,len), AFTER(text), BEFORE(text), TRIM(). e.g. LINE(2)|AFTER(:)"
+                                  placeholder="code: e.g. LINE(2)|AFTER(:)..."
+                                  className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5 font-mono"/>
+                                {selectedItem.fields.some((of, oi) => oi !== i && selectedItem.boxes[of.key]) && (
+                                  <select value="" disabled={f.locked}
+                                    onChange={e => { const si = Number(e.target.value); if (!Number.isNaN(si)) useSharedBox(selectedItem.id, i, si) }}
+                                    title="Copy another field's box so this field can slice its own value from that same crop"
+                                    className="w-full bg-transparent text-[10px] text-blue-400 focus:outline-none focus:text-blue-600 mt-0.5">
+                                    <option value="">use same box as...</option>
+                                    {selectedItem.fields.map((of, oi) => oi !== i && selectedItem.boxes[of.key] && (
+                                      <option key={oi} value={oi}>#{oi + 1} {of.label}</option>
+                                    ))}
+                                  </select>
+                                )}
+                              </td>
+                              <td className="px-1 py-1.5">
+                                <button onClick={() => !f.locked && setActiveFieldIdx(activeFieldIdx === i ? null : i)}
+                                  disabled={f.locked}
+                                  title={f.locked ? 'Unlock first to draw a box' : 'Draw correction box on the PDF image'}
+                                  className={`w-7 h-7 rounded-md border flex items-center justify-center flex-shrink-0 disabled:opacity-40 ${
+                                    activeFieldIdx === i
+                                      ? 'bg-red-500 border-red-500 text-white'
+                                      : 'border-gray-200 text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50'
+                                  }`}>
+                                  <ScanLine size={14}/>
+                                </button>
+                              </td>
+                              <td className="px-1 py-1.5">
+                                <button onClick={() => toggleLock(selectedItem.id, i)}
+                                  title={f.locked ? 'Unlock this field' : 'Lock this field (prevents edit/delete/redraw)'}
+                                  className={`w-7 h-7 rounded-md border flex items-center justify-center flex-shrink-0 ${
+                                    f.locked ? 'bg-amber-100 border-amber-300 text-amber-600' : 'border-gray-200 text-gray-300 hover:text-amber-500 hover:border-amber-300 hover:bg-amber-50'
+                                  }`}>
+                                  {f.locked ? <Lock size={13}/> : <Unlock size={13}/>}
+                                </button>
+                              </td>
+                              <td className="px-1 py-1.5">
+                                <button onClick={() => deleteField(selectedItem.id, i)}
+                                  disabled={f.locked}
+                                  title={f.locked ? 'Unlock first to delete' : 'Delete this field'}
+                                  className="w-7 h-7 rounded-md border border-gray-200 text-gray-300 hover:text-red-500 hover:border-red-300 hover:bg-red-50 flex items-center justify-center flex-shrink-0 disabled:opacity-40">
+                                  <Trash2 size={13}/>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between px-5 py-4 border-t border-gray-100">
+                  <button onClick={() => { removeItem(selectedItem.id) }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
+                    <Trash2 size={13}/> Remove
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={copyBoxesFromOtherVariant} disabled={copyingBoxes || !selectedItem.detectedType}
+                      title={`Copy the ${selectedItem.variant === 'scanned' ? 'Native Text' : 'Scanned/OCR'} variant's saved boxes here, then drag them into place`}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-blue-700 border border-blue-200 hover:bg-blue-50 disabled:opacity-50">
+                      {copyingBoxes ? <Loader size={13} className="animate-spin"/> : <Copy size={13}/>}
+                      Copy from {selectedItem.variant === 'scanned' ? 'Native' : 'Scanned'}
+                    </button>
+                    <button onClick={handleSaveFormat} disabled={savingFormat}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-green-700 border border-green-200 hover:bg-green-50 disabled:opacity-50">
+                      {savingFormat ? <Loader size={13} className="animate-spin"/> : <ScanLine size={13}/>}
+                      Save Format
+                    </button>
+                    <button onClick={() => setSelectedId(null)}
+                      className="px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100">
+                      Close
+                    </button>
+                    <button onClick={() => saveOne(selectedItem)} disabled={selectedItem.status === 'saving'}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs text-white font-medium disabled:opacity-50"
+                      style={{ background: docDef(selectedItem.detectedType)?.color || '#1B3A5C' }}>
+                      {selectedItem.status === 'saving' ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}
+                      {selectedItem.status === 'saved' ? 'Re-save' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex-1 overflow-auto bg-gray-100 sm:p-3 flex items-center justify-center min-h-0">
+                  {selectedItem.pageImages[viewPage] ? (
+                    <img src={`data:image/png;base64,${selectedItem.pageImages[viewPage]}`} className="w-full h-full sm:w-auto sm:h-auto object-contain sm:rounded sm:shadow" alt="PDF page"/>
+                  ) : (
+                    <Loader size={20} className="animate-spin text-gray-400"/>
+                  )}
+                </div>
+                {selectedItem.numPages > 1 && (
+                  <div className="flex items-center justify-center gap-3 py-2 text-xs border-t border-gray-100">
+                    <button onClick={() => setViewPage(p => Math.max(0, p - 1))} disabled={viewPage === 0}
+                      className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">← Prev</button>
+                    <span className="text-gray-500 font-medium">Page {viewPage + 1} / {selectedItem.numPages}</span>
+                    <button onClick={() => setViewPage(p => Math.min(selectedItem.numPages - 1, p + 1))} disabled={viewPage >= selectedItem.numPages - 1}
+                      className="px-2 py-1 rounded border border-gray-200 disabled:opacity-30 hover:bg-gray-50">Next →</button>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between px-5 py-4 border-t border-gray-100">
+                  <button onClick={() => removeItem(selectedItem.id)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
+                    <Trash2 size={13}/> Remove
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setSelectedId(null)}
+                      className="px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100">
+                      Close
+                    </button>
+                    <button onClick={() => saveOne(selectedItem)} disabled={selectedItem.status === 'saving'}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ background: '#1B3A5C' }}>
+                      {selectedItem.status === 'saving' ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}
+                      Save
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
