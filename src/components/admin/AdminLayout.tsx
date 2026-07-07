@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { supabase } from '@/lib/supabase'
 import {
-  LayoutDashboard, Ship, Package, Upload,
+  LayoutDashboard, Ship, Upload,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
   Database, Loader, MessageSquare,
@@ -13,14 +13,12 @@ import {
 // Everyone signs into this same area; is_admin accounts see every tab, and
 // everyone else sees only whichever hrefs are in their profile's allowed_tabs
 // (granted per-user from the Users page), so access is per-tab, not per-role.
-// "Documents" (full box/template editor) and "Upload Docs" (simple
-// upload/rename/view/save/delete) are deliberately two separate tabs —
-// admin keeps Documents for themselves and hands out Upload Docs to
-// regular users via allowed_tabs.
+// The full box/template editor lives inside "Upload Docs"' Admin Edit panel
+// (gated by section:documents-upload.admin-edit) — there's no separate
+// "Documents" tab anymore.
 export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/shipments',        icon: Ship,            label: 'Shipments' },
-  { href: '/admin/documents',        icon: Package,         label: 'Documents' },
   { href: '/admin/documents-upload', icon: Upload,          label: 'Upload Docs' },
   { href: '/admin/drive-files',      icon: Database,        label: 'Drive Files' },
   { href: '/admin/boat-note',        icon: Anchor,          label: 'Boat Notes' },
@@ -47,9 +45,6 @@ export const SECTION_ITEMS = [
   { key: 'section:dashboard.cdn-pending',     tabHref: '/admin', label: 'CDN Pending card' },
   { key: 'section:dashboard.release-pending', tabHref: '/admin', label: 'Export Release Pending card' },
   { key: 'section:dashboard.pending-summary', tabHref: '/admin', label: 'Pending Work Summary panel' },
-  // Documents (full editor)
-  { key: 'section:documents.upload',  tabHref: '/admin/documents', label: 'Upload panel' },
-  { key: 'section:documents.preview', tabHref: '/admin/documents', label: 'All Documents preview panel' },
   // Upload Docs
   { key: 'section:documents-upload.upload',     tabHref: '/admin/documents-upload', label: 'Upload PDFs card' },
   { key: 'section:documents-upload.uploaded',   tabHref: '/admin/documents-upload', label: 'Uploaded list card (normal access)' },

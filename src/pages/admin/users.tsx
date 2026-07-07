@@ -8,12 +8,21 @@ interface Profile {
   username: string
   full_name: string
   position: string
+  designation: string
+  personal_email: string
+  official_email: string
+  whatsapp_number: string
+  contact_number: string
   is_admin: boolean
   allowed_tabs: string[]
   created_at: string
 }
 
-const emptyForm = { username: '', full_name: '', position: '', password: '', is_admin: false, allowed_tabs: [] as string[] }
+const emptyForm = {
+  username: '', full_name: '', position: '', designation: '',
+  personal_email: '', official_email: '', whatsapp_number: '', contact_number: '',
+  password: '', is_admin: false, allowed_tabs: [] as string[],
+}
 
 export default function UsersPage() {
   const [users, setUsers] = useState<Profile[]>([])
@@ -41,7 +50,9 @@ export default function UsersPage() {
     setSaving(true)
     setSaveError('')
     const patch = {
-      username: form.username, full_name: form.full_name, position: form.position,
+      username: form.username, full_name: form.full_name, position: form.position, designation: form.designation,
+      personal_email: form.personal_email, official_email: form.official_email,
+      whatsapp_number: form.whatsapp_number, contact_number: form.contact_number,
       is_admin: form.is_admin, allowed_tabs: form.allowed_tabs,
     }
     try {
@@ -102,7 +113,9 @@ export default function UsersPage() {
                   <td className="px-4 py-3">
                     <button onClick={() => {
                       setForm({
-                        username: u.username, full_name: u.full_name, position: u.position || '',
+                        username: u.username, full_name: u.full_name, position: u.position || '', designation: u.designation || '',
+                        personal_email: u.personal_email || '', official_email: u.official_email || '',
+                        whatsapp_number: u.whatsapp_number || '', contact_number: u.contact_number || '',
                         password: '', is_admin: !!u.is_admin, allowed_tabs: u.allowed_tabs || [],
                       })
                       setEditId(u.id); setSaveError(''); setModal(true)
@@ -124,7 +137,13 @@ export default function UsersPage() {
               <button onClick={() => setModal(false)}><X size={20}/></button>
             </div>
             <div className="p-6 space-y-4 overflow-y-auto">
-              {[['Username','username','text'],['Full Name','full_name','text'],['Position (job title)','position','text'],['Password (new only)','password','password']].map(([label,key,type]) => (
+              {[
+                ['Username','username','text'],['Full Name','full_name','text'],
+                ['Position (job title)','position','text'],['Designation','designation','text'],
+                ['Personal Email','personal_email','email'],['Official Email','official_email','email'],
+                ['WhatsApp Number','whatsapp_number','text'],['Contact Number','contact_number','text'],
+                ['Password (new only)','password','password'],
+              ].map(([label,key,type]) => (
                 <div key={key}>
                   <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
                   <input type={type} value={(form as any)[key]} onChange={e => setForm({...form, [key]: e.target.value})}
