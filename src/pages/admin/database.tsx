@@ -202,13 +202,18 @@ function DatabaseContent() {
                             </td>
                           )
                         }
+                        // A single-line <input> can't hold a line break at all — editing a
+                        // multi-line value in one and saving it back flattens/loses the
+                        // wrapping. A <textarea> keeps \n through display, edit, and save.
+                        const strVal = val == null ? '' : String(val)
                         return (
-                          <td key={col} className="px-3 py-1.5 whitespace-nowrap">
-                            <input
-                              value={val ?? ''}
+                          <td key={col} className="px-3 py-1.5 align-top">
+                            <textarea
+                              value={strVal}
                               disabled={readOnly}
                               onChange={e => setCell(row.id, col, e.target.value)}
-                              className={`min-w-[100px] max-w-[220px] bg-transparent border-b outline-none py-0.5 ${
+                              rows={Math.min(6, Math.max(1, strVal.split('\n').length))}
+                              className={`min-w-[140px] max-w-[260px] max-h-32 overflow-y-auto bg-transparent border-b outline-none py-0.5 resize-none leading-tight whitespace-pre-wrap ${
                                 readOnly ? 'text-gray-400 border-transparent' : 'text-gray-800 border-transparent hover:border-gray-200 focus:border-gray-400'
                               }`}
                             />

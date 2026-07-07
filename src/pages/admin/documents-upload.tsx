@@ -677,6 +677,22 @@ function DocumentsUploadContent() {
 
   const readyCount = items.filter(it => it.status === 'ready').length
 
+  // Bulk actions — shown on both the normal "Uploaded" list and the "Admin
+  // Edit" list, since they're two views onto the same uploaded items.
+  const [savingAll, setSavingAll] = useState(false)
+  async function handleSaveAll() {
+    setSavingAll(true)
+    const toSave = items.filter(it => it.status === 'ready' || it.status === 'error')
+    for (const it of toSave) await saveOne(it)
+    setSavingAll(false)
+  }
+  function handleDeleteAll() {
+    if (!items.length) return
+    if (!confirm(`${items.length} file${items.length !== 1 ? 's' : ''} okkoma me list eken ain karannada? (Dhannma save unu dewal database eke thiyenawa — meken ain wenne me upload session eke list eka witharai.)`)) return
+    setItems([])
+    setSelectedId(null)
+  }
+
   const panelOptions: Panel[] = (['upload', 'preview', 'admin-edit'] as Panel[]).filter(p =>
     p === 'upload' ? (canUpload || canSeeUploaded) : p === 'preview' ? canPreview : canAdminEdit
   )
@@ -741,7 +757,21 @@ function DocumentsUploadContent() {
 
           {canSeeUploaded && (
           <div className={canUpload ? 'card' : 'lg:col-span-3 card'}>
-            <h2 className="font-semibold text-gray-900 text-sm mb-3">Uploaded ({items.length})</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-gray-900 text-sm">Uploaded ({items.length})</h2>
+              {items.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <button onClick={handleSaveAll} disabled={savingAll || readyCount === 0}
+                    title="Save all" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
+                    {savingAll ? <Loader size={11} className="animate-spin"/> : <Save size={11}/>} Save All
+                  </button>
+                  <button onClick={handleDeleteAll}
+                    title="Remove all from this list" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-red-600 border border-red-200 hover:bg-red-50">
+                    <Trash2 size={11}/> Delete All
+                  </button>
+                </div>
+              )}
+            </div>
             {items.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-14 text-center">
                 <FileText size={30} className="text-gray-200 mb-2"/>
@@ -917,10 +947,24 @@ function DocumentsUploadContent() {
         {/* === ADMIN EDIT panel: same uploaded items, full box/template editor === */}
         {panel === 'admin-edit' && canAdminEdit && (
           <div className="card">
-            <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
-              Admin Edit ({items.length})
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">Full access</span>
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+                Admin Edit ({items.length})
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">Full access</span>
+              </h2>
+              {items.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <button onClick={handleSaveAll} disabled={savingAll || readyCount === 0}
+                    title="Save all" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
+                    {savingAll ? <Loader size={11} className="animate-spin"/> : <Save size={11}/>} Save All
+                  </button>
+                  <button onClick={handleDeleteAll}
+                    title="Remove all from this list" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-red-600 border border-red-200 hover:bg-red-50">
+                    <Trash2 size={11}/> Delete All
+                  </button>
+                </div>
+              )}
+            </div>
             {items.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-14 text-center">
                 <ScanLine size={30} className="text-gray-200 mb-2"/>
