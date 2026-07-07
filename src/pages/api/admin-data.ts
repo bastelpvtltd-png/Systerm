@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { getTableColumns } from '@/lib/docTables'
+import { getTableColumns, deleteRowAndDriveFile } from '@/lib/docTables'
+import { deleteDriveFileByUrl } from '@/lib/driveFolders'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -9,6 +10,12 @@ const supabaseAdmin = createClient(
 
 // Whitelisted so this endpoint can't be pointed at arbitrary/system tables.
 const ALLOWED_TABLES = ['cusdec', 'cdn', 'barcode', 'boat_notes', 'uploaded_documents', 'pdf_templates', 'messages', 'profiles']
+// Tables whose rows reference an uploaded PDF — deleting the row here also
+// deletes that Drive file, same as every other delete path in the app.
+const DRIVE_URL_COLUMN: Record<string, string> = {
+  cusdec: 'pdf_url', cdn: 'pdf_url', barcode: 'pdf_url', boat_notes: 'pdf_url',
+  uploaded_documents: 'drive_url',
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const table = String(req.query.table || '')
@@ -39,15 +46,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method === 'DELETE') {
       const { id, all } = req.query
+      const urlColumn = DRIVE_URL_COLUMN[table]
       if (all === 'true') {
+        if (urlColumn) {
+          const { data: rows } = await supabaseAdmin.from(table).select(`id, ${urlColumn}`)
+          for (const row of rows || []) await deleteDriveFileByUrl((row as any)[urlColumn])
+        }
         // Supabase requires a filter on delete — this matches every row without needing a known id.
         const { error } = await supabaseAdmin.from(table).delete().gte('created_at', '1970-01-01')
         if (error) return res.status(400).json({ error: error.message })
         return res.json({ ok: true })
       }
       if (!id) return res.status(400).json({ error: 'id required' })
-      const { error } = await supabaseAdmin.from(table).delete().eq('id', id)
-      if (error) return res.status(400).json({ error: error.message })
+      if (urlColumn) {
+        await deleteRowAndDriveFile(table, String(id), urlColumn)
+      } else {
+        const { error } = await supabaseAdmin.from(table).delete().eq('id', id)
+        if (error) return res.status(400).json({ error: error.message })
+      }
       return res.json({ ok: true })
     }
 

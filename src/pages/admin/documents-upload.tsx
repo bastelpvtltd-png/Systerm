@@ -112,6 +112,11 @@ function DocumentsUploadContent() {
   const [dragOver, setDragOver] = useState(false)
   const [viewPage, setViewPage] = useState(0)
   const [error, setError] = useState('')
+  // Duplicate/CAP conflict resolution — shown instead of saving immediately
+  // when the extracted data matches something already saved.
+  const [matchModal, setMatchModal] = useState<{ item: UploadItem; match: any; capInfo: any } | null>(null)
+  const [capModal, setCapModal] = useState<{ item: UploadItem; capInfo: any } | null>(null)
+  const [resolvingConflict, setResolvingConflict] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Full editor state (box drawing, field table) — same as /admin/documents
@@ -289,7 +294,11 @@ function DocumentsUploadContent() {
     await commitFieldRules(id, idx)
   }
 
-  async function saveOne(item: UploadItem) {
+  // Actually uploads to Drive + writes the generic uploaded_documents row +
+  // the doc-type's structured table row. mode/replaceId decide whether
+  // save-to-table deletes a matched row first (+ its Drive file) or just
+  // inserts alongside what's already there.
+  async function persistItem(item: UploadItem, mode: 'insert' | 'replace', replaceId?: string) {
     const docType = item.detectedType || 'cusdec'
     updateItem(item.id, { status: 'saving' })
     try {
@@ -314,13 +323,13 @@ function DocumentsUploadContent() {
       if (!sr.ok) throw new Error(sd.error || 'Save failed')
 
       if (item.fields.length) {
-        try {
-          const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
-          await fetch('/api/save-to-table', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ doc_type: docType, data, drive_url: link }),
-          })
-        } catch {}
+        const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
+        const tr = await fetch('/api/save-to-table', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ doc_type: docType, data, drive_url: link, mode, replace_id: replaceId }),
+        })
+        const td = await tr.json()
+        if (!tr.ok) setError(td.error || 'Table save failed')
       }
 
       updateItem(item.id, { status: 'saved', driveLink: link })
@@ -328,6 +337,80 @@ function DocumentsUploadContent() {
       updateItem(item.id, { status: 'error', error: e.message })
       setError(e.message)
     }
+  }
+
+  // Before actually saving: check whether this looks like a document that's
+  // already been saved (CUSDEC: code+number+date, CDN/Barcode: container_no).
+  // If so, ask instead of silently creating a duplicate. For CDN, also check
+  // the CUSDEC's CAP (how many CDN rows it should have) before allowing a
+  // brand-new row.
+  async function saveOne(item: UploadItem) {
+    const docType = item.detectedType || 'cusdec'
+    const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
+    try {
+      const res = await fetch('/api/check-document-match', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: docType, data }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Duplicate check failed')
+      if (d.match) {
+        setMatchModal({ item, match: d.match, capInfo: d.capInfo })
+        return
+      }
+      if (d.capInfo && d.capInfo.currentCount >= d.capInfo.cap) {
+        setCapModal({ item, capInfo: d.capInfo })
+        return
+      }
+    } catch (e: any) {
+      setError(e.message)
+      return
+    }
+    await persistItem(item, 'insert')
+  }
+
+  async function resolveMatchReplace() {
+    if (!matchModal) return
+    const { item, match } = matchModal
+    setMatchModal(null)
+    await persistItem(item, 'replace', match.id)
+  }
+
+  async function resolveMatchAddNew() {
+    if (!matchModal) return
+    const { item, capInfo } = matchModal
+    setMatchModal(null)
+    if (capInfo && capInfo.currentCount >= capInfo.cap) {
+      setCapModal({ item, capInfo })
+      return
+    }
+    await persistItem(item, 'insert')
+  }
+
+  async function freeCdnSlot(rowId: string) {
+    if (!capModal) return
+    setResolvingConflict(true)
+    try {
+      await fetch('/api/delete-row', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'cdn', id: rowId }),
+      })
+      setCapModal(prev => prev && ({
+        ...prev,
+        capInfo: { ...prev.capInfo, currentCount: prev.capInfo.currentCount - 1, rows: prev.capInfo.rows.filter((r: any) => r.id !== rowId) },
+      }))
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setResolvingConflict(false)
+    }
+  }
+
+  async function retryAfterFreeingSlot() {
+    if (!capModal) return
+    const { item } = capModal
+    setCapModal(null)
+    await persistItem(item, 'insert')
   }
 
   const selectedItem = items.find(it => it.id === selectedId) || null
@@ -1157,6 +1240,87 @@ function DocumentsUploadContent() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate match found — same document (by code+number+date for CUSDEC,
+          container_no for CDN/Barcode) already saved. Ask before creating a
+          second copy. */}
+      {matchModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col">
+            <div className="p-5 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2"><AlertTriangle size={16} className="text-amber-500"/>Matching document already saved</h3>
+              <p className="text-xs text-gray-500 mt-1">This looks like the same document as an existing row. What should happen?</p>
+            </div>
+            <div className="p-5 overflow-y-auto flex-1">
+              <div className="bg-gray-50 rounded-lg p-3 text-xs space-y-1">
+                {Object.entries(matchModal.match).filter(([k]) => k !== 'id').map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-3">
+                    <span className="text-gray-500">{k}</span>
+                    <span className="text-gray-800 font-medium text-right break-all">{v == null || v === '' ? '—' : String(v)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="p-5 border-t border-gray-100 flex flex-col gap-2">
+              <button onClick={resolveMatchReplace}
+                className="w-full py-2.5 rounded-lg text-sm font-medium text-white bg-red-600 hover:bg-red-700">
+                Delete existing row (+ its Drive PDF) and save this one
+              </button>
+              <button onClick={resolveMatchAddNew}
+                className="w-full py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: '#1B3A5C' }}>
+                Keep existing, add this as a new row
+              </button>
+              <button onClick={() => setMatchModal(null)}
+                className="w-full py-2 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CDN CAP exceeded — the CUSDEC's CAP (column 17) says how many CDN
+          rows it should have; adding one more would go over. Blocked until a
+          slot is freed or the CUSDEC's CAP is corrected. */}
+      {capModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+            <div className="p-5 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2"><AlertTriangle size={16} className="text-red-500"/>CDN count exceeds this CUSDEC's CAP</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                CAP = {capModal.capInfo.cap}, but {capModal.capInfo.currentCount} CDN row{capModal.capInfo.currentCount === 1 ? '' : 's'} already exist for this CUSDEC.
+                Delete one below to free a slot, or fix the CUSDEC's CAP value and try again.
+              </p>
+            </div>
+            <div className="p-5 overflow-y-auto flex-1 space-y-2">
+              {capModal.capInfo.rows.map((row: any) => (
+                <div key={row.id} className="flex items-center justify-between gap-3 border border-gray-100 rounded-lg p-3 text-xs">
+                  <div className="space-y-0.5 min-w-0">
+                    <p className="font-medium text-gray-800">Container: {row.container_no || '—'}</p>
+                    <p className="text-gray-400">Seal: {row.seal_no || '—'} · Uploaded: {row.uploaded_at ? new Date(row.uploaded_at).toLocaleString('en-GB') : '—'}</p>
+                  </div>
+                  <button onClick={() => freeCdnSlot(row.id)} disabled={resolvingConflict}
+                    className="flex-shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 disabled:opacity-50">
+                    <Trash2 size={12}/> Delete
+                  </button>
+                </div>
+              ))}
+              {capModal.capInfo.rows.length === 0 && (
+                <p className="text-xs text-gray-400 text-center py-6">No existing CDN rows left — you can retry the save now.</p>
+              )}
+            </div>
+            <div className="p-5 border-t border-gray-100 flex items-center gap-2">
+              <button onClick={() => setCapModal(null)} className="flex-1 py-2 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100">
+                Cancel
+              </button>
+              <button onClick={retryAfterFreeingSlot} disabled={capModal.capInfo.currentCount >= capModal.capInfo.cap}
+                className="flex-1 py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-40" style={{ background: '#1B3A5C' }}>
+                Retry Save
+              </button>
+            </div>
           </div>
         </div>
       )}

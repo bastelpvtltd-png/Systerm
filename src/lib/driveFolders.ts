@@ -1,4 +1,37 @@
-import type { drive_v3 } from 'googleapis'
+import { google, drive_v3 } from 'googleapis'
+
+// Same OAuth2 setup used across upload/delete/list Drive endpoints, centralized
+// so server-side callers (like the duplicate-row cleanup in docTables.ts)
+// don't each re-implement the credential wiring.
+export function getDriveClient(): drive_v3.Drive {
+  const clientId = process.env.GOOGLE_CLIENT_ID || ''
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || ''
+  if (!clientId || !clientSecret || !refreshToken) throw new Error('Google OAuth credentials not configured')
+  const auth = new google.auth.OAuth2(clientId, clientSecret)
+  auth.setCredentials({ refresh_token: refreshToken })
+  return google.drive({ version: 'v3', auth })
+}
+
+// Extracts the Drive file id from a stored webViewLink like
+// https://drive.google.com/file/d/<ID>/view — used to delete the matching
+// Drive file whenever the DB row that references it is deleted/replaced.
+export function driveFileIdFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  const m = String(url).match(/\/d\/([a-zA-Z0-9_-]+)/)
+  return m ? m[1] : null
+}
+
+export async function deleteDriveFileByUrl(url: string | null | undefined): Promise<void> {
+  const fileId = driveFileIdFromUrl(url)
+  if (!fileId) return
+  try {
+    const drive = getDriveClient()
+    await drive.files.delete({ fileId })
+  } catch (e: any) {
+    console.error('[deleteDriveFileByUrl] failed:', e.message)
+  }
+}
 
 // Maps our doc_type values to the Drive sub-folder name they belong in.
 // Types not listed here (party_copy, bill, unknown) upload to the main folder.
