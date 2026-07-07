@@ -11,13 +11,12 @@ interface Summary {
   pendingRelease: number
 }
 
-// usePermission() must be called from a component rendered INSIDE AdminLayout's
-// PermissionContext.Provider — calling it in the component that creates
-// <AdminLayout> itself reads the context from above the Provider and always
-// gets the default (has: () => false), silently hiding every gated section.
+// getLayout (see _app.tsx) keeps AdminLayout mounted across navigations
+// instead of remounting the sidebar on every tab click.
 export default function AdminDashboard() {
-  return <AdminLayout><DashboardContent/></AdminLayout>
+  return <DashboardContent/>
 }
+AdminDashboard.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
 function DashboardContent() {
   const [summary, setSummary] = useState<Summary>({

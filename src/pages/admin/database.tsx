@@ -22,12 +22,12 @@ function isJsonValue(v: any) {
   return v !== null && typeof v === 'object'
 }
 
-// usePermission() must run inside AdminLayout's Provider — calling it in the
-// component that creates <AdminLayout> reads the context from above the
-// Provider and always gets the default (has: () => false).
+// getLayout (see _app.tsx) keeps AdminLayout mounted across navigations
+// instead of remounting the sidebar on every tab click.
 export default function DatabasePage() {
-  return <AdminLayout><DatabaseContent/></AdminLayout>
+  return <DatabaseContent/>
 }
+DatabasePage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
 function DatabaseContent() {
   const { has } = usePermission()

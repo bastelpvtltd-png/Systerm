@@ -54,7 +54,7 @@ export async function ensureColumns(table: string, keys: string[]): Promise<void
 
 // Structural columns that must never be dropped even if a matching field key
 // somehow appears (id/created_at/etc. predate the dynamic column system).
-const PROTECTED_COLUMNS = new Set(['id', 'shipment_id', 'created_at', 'uploaded_at', 'pdf_url', 'status', 'details', 'cusdec_no', 'cdn_no', 'boat_note_no'])
+const PROTECTED_COLUMNS = new Set(['id', 'shipment_id', 'created_at', 'uploaded_at', 'uploaded_by', 'pdf_url', 'status', 'details', 'cusdec_no', 'cdn_no', 'boat_note_no'])
 
 // Deletes a row from a doc-type table and, if it has a stored Drive link,
 // deletes that Drive file too — every path that removes a row (duplicate
@@ -123,11 +123,11 @@ export type SaveMode = 'insert' | 'replace'
 // blocked if it would push the CUSDEC's CDN count over that CUSDEC's CAP.
 export async function insertExtractedData(
   docType: string, data: Record<string, string>, driveUrl: string,
-  options: { mode?: SaveMode; replaceId?: string } = {}
+  options: { mode?: SaveMode; replaceId?: string; uploadedBy?: string } = {}
 ): Promise<{ ok: true } | { ok: false; reason: 'cap_exceeded'; capInfo: { cap: number; currentCount: number; rows: any[] } }> {
   const table = DOC_TYPE_TABLE[docType]
   if (!table) return { ok: true }
-  const { mode = 'insert', replaceId } = options
+  const { mode = 'insert', replaceId, uploadedBy } = options
 
   if (mode === 'replace' && replaceId) {
     await deleteRowAndDriveFile(table, replaceId)
@@ -140,7 +140,7 @@ export async function insertExtractedData(
 
   if (table === 'boat_notes') {
     const { error } = await supabaseAdmin.from('boat_notes').insert({
-      details: data, pdf_url: driveUrl, uploaded_at: new Date().toISOString(),
+      details: data, pdf_url: driveUrl, uploaded_at: new Date().toISOString(), uploaded_by: uploadedBy || null,
       boat_note_no: data.entry_no || data.bl_no || null,
     })
     if (error) throw new Error(error.message)
@@ -151,7 +151,7 @@ export async function insertExtractedData(
   await ensureColumns(table, dataKeys)
   const columns = await getTableColumns(table)
 
-  const row: Record<string, any> = { pdf_url: driveUrl, uploaded_at: new Date().toISOString() }
+  const row: Record<string, any> = { pdf_url: driveUrl, uploaded_at: new Date().toISOString(), uploaded_by: uploadedBy || null }
   for (const [k, v] of Object.entries(data)) {
     if (v && columns.includes(k)) row[k] = v
   }

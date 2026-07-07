@@ -9,11 +9,14 @@ const supabaseAdmin = createClient(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   try {
-    const { doc_type, file_name, file_url, drive_url, extracted_data } = req.body
+    const { doc_type, file_name, file_url, drive_url, extracted_data, uploaded_by } = req.body
 
     const { data, error } = await supabaseAdmin
       .from('uploaded_documents')
-      .insert({ doc_type, file_name, file_url: file_url || '', drive_url: drive_url || '', extracted_data: extracted_data || null })
+      .insert({
+        doc_type, file_name, file_url: file_url || '', drive_url: drive_url || '',
+        extracted_data: extracted_data || null, uploaded_by: uploaded_by || null,
+      })
       .select()
       .single()
 

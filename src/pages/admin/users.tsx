@@ -78,7 +78,7 @@ export default function UsersPage() {
   }
 
   return (
-    <AdminLayout>
+    <>
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -197,6 +197,7 @@ export default function UsersPage() {
           </div>
         </div>
       )}
-    </AdminLayout>
+    </>
   )
 }
+UsersPage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>

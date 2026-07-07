@@ -45,6 +45,9 @@ export const SECTION_ITEMS = [
   { key: 'section:dashboard.cdn-pending',     tabHref: '/admin', label: 'CDN Pending card' },
   { key: 'section:dashboard.release-pending', tabHref: '/admin', label: 'Export Release Pending card' },
   { key: 'section:dashboard.pending-summary', tabHref: '/admin', label: 'Pending Work Summary panel' },
+  // My Tasks
+  { key: 'section:my-tasks.daily-cost',      tabHref: '/admin/my-tasks', label: 'Daily Cost entry (add cost)' },
+  { key: 'section:my-tasks.balance-update',  tabHref: '/admin/my-tasks', label: 'Balance deposit/top-up (accountant/owner only)' },
   // Upload Docs
   { key: 'section:documents-upload.upload',     tabHref: '/admin/documents-upload', label: 'Upload PDFs card' },
   { key: 'section:documents-upload.uploaded',   tabHref: '/admin/documents-upload', label: 'Uploaded list card (normal access)' },

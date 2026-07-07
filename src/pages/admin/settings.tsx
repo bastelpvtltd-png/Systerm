@@ -19,12 +19,12 @@ const TYPE_LABELS: Record<string, string> = {
   boat_note: 'Boat Note', party_copy: "Party's Copy", bill: 'Bill',
 }
 
-// usePermission() must run inside AdminLayout's Provider — calling it in the
-// component that creates <AdminLayout> reads the context from above the
-// Provider and always gets the default (has: () => false).
+// getLayout (see _app.tsx) keeps AdminLayout mounted across navigations
+// instead of remounting the sidebar on every tab click.
 export default function SettingsPage() {
-  return <AdminLayout><SettingsContent/></AdminLayout>
+  return <SettingsContent/>
 }
+SettingsPage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
 function SettingsContent() {
   const { has, isAdmin } = usePermission()
@@ -40,14 +40,28 @@ function SettingsContent() {
   const [logs, setLogs] = useState<LoginLog[]>([])
   const [loadingLogs, setLoadingLogs] = useState(false)
   const [clearingLogs, setClearingLogs] = useState(false)
+  const [myUsername, setMyUsername] = useState('')
+
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return
+      const { data } = await supabase.from('profiles').select('username').eq('id', user.id).single()
+      setMyUsername(data?.username || '')
+    })
+  }, [])
 
   useEffect(() => { if (tab === 'database') loadRecords() }, [tab, filterType])
-  useEffect(() => { if (tab === 'logs') loadLogs() }, [tab])
+  useEffect(() => { if (tab === 'logs' && (isAdmin || myUsername)) loadLogs() }, [tab, isAdmin, myUsername])
 
+  // Admin sees everyone's login activity; everyone else only ever sees their
+  // own — logging in as another account isn't something a regular user
+  // should be able to observe.
   async function loadLogs() {
     setLoadingLogs(true)
     try {
-      const { data } = await supabase.from('login_logs').select('*').order('created_at', { ascending: false }).limit(200)
+      let query = supabase.from('login_logs').select('*').order('created_at', { ascending: false }).limit(200)
+      if (!isAdmin) query = query.eq('username', myUsername)
+      const { data } = await query
       setLogs(data ?? [])
     } finally {
       setLoadingLogs(false)
@@ -228,7 +242,9 @@ function SettingsContent() {
                 <h2 className="font-semibold text-gray-900 flex items-center gap-2">
                   <Shield size={16} className="text-gray-500"/> Login Logs
                 </h2>
-                <p className="text-xs text-gray-400 mt-0.5">IP tracking and access history · {logs.length} entries</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  IP tracking and access history · {logs.length} entries{!isAdmin && ' · your activity only'}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={loadLogs} className="text-gray-400 hover:text-gray-700"><RefreshCw size={14}/></button>

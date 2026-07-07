@@ -17,12 +17,12 @@ const COMPANY = {
   tel:        '',
 }
 
-// usePermission() must run inside AdminLayout's Provider — calling it in the
-// component that creates <AdminLayout> reads the context from above the
-// Provider and always gets the default (has: () => false).
+// getLayout (see _app.tsx) keeps AdminLayout mounted across navigations
+// instead of remounting the sidebar on every tab click.
 export default function BoatNotePage() {
-  return <AdminLayout><BoatNoteContent/></AdminLayout>
+  return <BoatNoteContent/>
 }
+BoatNotePage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
 function BoatNoteContent() {
   const { has } = usePermission()

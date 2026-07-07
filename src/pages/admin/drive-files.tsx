@@ -1,26 +1,43 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
 import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine } from 'lucide-react'
 
 // Shipment-wise overview: search by shipper / CUSDEC code / CUSDEC number /
-// container number, and see the whole linked set — CUSDEC, its CDN rows
-// (one per container, count should equal the CUSDEC's CAP), and each CDN's
-// matching Barcode row (by container_no) — instead of browsing raw Drive
-// files by folder.
+// container number — each box is a real database value (still hand-typeable,
+// via a <datalist>), and picking one narrows the others: choose a shipper
+// and the code/number/container suggestions shrink to just that shipper's
+// CUSDECs, choose a code and it narrows further, etc. Results show the full
+// linked set — CUSDEC, its CDN rows (count should equal the CUSDEC's CAP),
+// and each CDN's matching Barcode row (by container_no).
 interface Cusdec { id: string; code: string; number: string; date: string; exporter: string; cap: string; pdf_url?: string; [k: string]: any }
 interface Cdn { id: string; container_no: string; shipper: string; goods_description: string; gross_mass: string; pdf_url?: string; [k: string]: any }
 interface Barcode { id: string; container_no: string; seal_no: string; truck_no: string; date: string; pdf_url?: string; [k: string]: any }
 interface OverviewEntry { cusdec: Cusdec; cdns: { cdn: Cdn; barcode: Barcode | null }[] }
+interface Options { shippers: string[]; codes: string[]; numbers: string[]; containers: string[] }
 
 export default function DriveFilesPage() {
   const [shipper, setShipper] = useState('')
   const [code, setCode] = useState('')
   const [number, setNumber] = useState('')
   const [containerNo, setContainerNo] = useState('')
+  const [options, setOptions] = useState<Options>({ shippers: [], codes: [], numbers: [], containers: [] })
   const [results, setResults] = useState<OverviewEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
   const [error, setError] = useState('')
+
+  // Re-fetch suggestion lists whenever shipper/code/number changes, so
+  // picking one narrows the others to what actually exists together.
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (shipper) params.set('shipper', shipper)
+    if (code) params.set('code', code)
+    if (number) params.set('number', number)
+    fetch(`/api/shipment-overview-options?${params.toString()}`)
+      .then(r => r.json())
+      .then(d => setOptions({ shippers: d.shippers || [], codes: d.codes || [], numbers: d.numbers || [], containers: d.containers || [] }))
+      .catch(() => {})
+  }, [shipper, code, number])
 
   async function search() {
     setLoading(true)
@@ -49,7 +66,6 @@ export default function DriveFilesPage() {
   }
 
   return (
-    <AdminLayout>
       <div className="p-6">
         <div className="mb-5">
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Search size={22} className="text-brand-green"/>Shipment Overview</h1>
@@ -62,25 +78,33 @@ export default function DriveFilesPage() {
               <label className="block text-xs font-medium text-gray-600 mb-1">Shipper</label>
               <input value={shipper} onChange={e => setShipper(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && search()}
+                list="shipper-options" placeholder="Pick or type..."
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+              <datalist id="shipper-options">{options.shippers.map(s => <option key={s} value={s}/>)}</datalist>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">CUSDEC Code</label>
               <input value={code} onChange={e => setCode(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && search()}
+                list="code-options" placeholder="Pick or type..."
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+              <datalist id="code-options">{options.codes.map(c => <option key={c} value={c}/>)}</datalist>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">CUSDEC Number</label>
               <input value={number} onChange={e => setNumber(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && search()}
+                list="number-options" placeholder="Pick or type..."
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+              <datalist id="number-options">{options.numbers.map(n => <option key={n} value={n}/>)}</datalist>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Container Number</label>
               <input value={containerNo} onChange={e => setContainerNo(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && search()}
+                list="container-options" placeholder="Pick or type..."
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+              <datalist id="container-options">{options.containers.map(c => <option key={c} value={c}/>)}</datalist>
             </div>
           </div>
           <button onClick={search} disabled={loading || !(shipper || code || number || containerNo)}
@@ -165,6 +189,6 @@ export default function DriveFilesPage() {
           ))}
         </div>
       </div>
-    </AdminLayout>
   )
 }
+DriveFilesPage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>

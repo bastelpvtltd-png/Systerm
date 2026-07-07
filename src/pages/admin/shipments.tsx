@@ -78,7 +78,7 @@ export default function ShipmentsPage() {
   }
 
   return (
-    <AdminLayout>
+    <>
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -176,6 +176,7 @@ export default function ShipmentsPage() {
           </div>
         </div>
       )}
-    </AdminLayout>
+    </>
   )
 }
+ShipmentsPage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>

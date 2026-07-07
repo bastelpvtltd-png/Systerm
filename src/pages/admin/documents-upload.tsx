@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { authHeader } from '@/lib/supabase'
+import { authHeader, supabase } from '@/lib/supabase'
 import { applyTextRules } from '@/lib/textClean'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
@@ -94,12 +94,12 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
-// usePermission() must run inside AdminLayout's Provider — calling it in the
-// component that creates <AdminLayout> reads the context from above the
-// Provider and always gets the default (has: () => false).
+// getLayout (see _app.tsx) keeps AdminLayout mounted across navigations
+// instead of remounting the sidebar on every tab click.
 export default function DocumentsUploadPage() {
-  return <AdminLayout><DocumentsUploadContent/></AdminLayout>
+  return <DocumentsUploadContent/>
 }
+DocumentsUploadPage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
 function DocumentsUploadContent() {
   const { has } = usePermission()
@@ -107,6 +107,14 @@ function DocumentsUploadContent() {
   const canSeeUploaded = has('section:documents-upload.uploaded')
   const canPreview = has('section:documents-upload.preview')
   const canAdminEdit = has('section:documents-upload.admin-edit')
+  const [uploaderName, setUploaderName] = useState('')
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return
+      const { data } = await supabase.from('profiles').select('username, full_name').eq('id', user.id).single()
+      setUploaderName(data?.full_name || data?.username || '')
+    })
+  }, [])
   const [panel, setPanel] = useState<Panel>('upload')
   const [items, setItems] = useState<UploadItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -321,7 +329,7 @@ function DocumentsUploadContent() {
       const sr = await fetch('/api/save-document', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          doc_type: docType, file_name: item.fileName, file_url: '', drive_url: link,
+          doc_type: docType, file_name: item.fileName, file_url: '', drive_url: link, uploaded_by: uploaderName,
           extracted_data: item.fields.length ? Object.fromEntries(item.fields.map(f => [`grid_${f.key}`, f.value])) : null,
         }),
       })
@@ -332,7 +340,7 @@ function DocumentsUploadContent() {
         const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
         const tr = await fetch('/api/save-to-table', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ doc_type: docType, data, drive_url: link, mode, replace_id: replaceId }),
+          body: JSON.stringify({ doc_type: docType, data, drive_url: link, mode, replace_id: replaceId, uploaded_by: uploaderName }),
         })
         const td = await tr.json()
         if (!tr.ok) setError(td.error || 'Table save failed')
@@ -351,6 +359,21 @@ function DocumentsUploadContent() {
   // CDN, also check the CUSDEC's CAP (how many CDN rows it should have)
   // before allowing a brand-new row.
   async function saveOne(item: UploadItem) {
+    // A PDF whose type couldn't be identified, or whose fields came back
+    // empty (nothing extracted), must not be saved — it would create a
+    // structured-table row with no real data. The user has to fix
+    // identification/extraction (pick the type manually, draw boxes in
+    // Admin Edit) before it can go through.
+    if (!item.detectedType) {
+      setError(`"${item.fileName}" — document type could not be identified. Select it manually before saving.`)
+      updateItem(item.id, { status: 'error', error: 'Type not identified' })
+      return
+    }
+    if (!item.fields.some(f => f.value && f.value.trim())) {
+      setError(`"${item.fileName}" — no data could be extracted from this PDF. It can't be saved until fields have values (draw boxes in Admin Edit).`)
+      updateItem(item.id, { status: 'error', error: 'No data extracted' })
+      return
+    }
     const docType = item.detectedType || 'cusdec'
     const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
     try {

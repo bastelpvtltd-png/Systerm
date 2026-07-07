@@ -52,7 +52,6 @@ export default function MessagesPage() {
   }
 
   return (
-    <AdminLayout>
       <div className="p-6 max-w-3xl mx-auto h-[calc(100vh-3rem)] flex flex-col">
         <div className="mb-4">
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><MessageSquare size={22} className="text-brand-green"/>Messages</h1>
@@ -97,6 +96,6 @@ export default function MessagesPage() {
           </div>
         </div>
       </div>
-    </AdminLayout>
   )
 }
+MessagesPage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
