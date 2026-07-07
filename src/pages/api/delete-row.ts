@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { deleteRowAndDriveFile } from '@/lib/docTables'
+import { requireAuth } from '@/lib/serverAuth'
 
 // Deletes a single row from a doc-type table (or uploaded_documents) and,
 // if it has a stored Drive link, deletes that Drive file too. Used by the
@@ -12,6 +13,8 @@ const ALLOWED_TABLES: Record<string, string> = {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const auth = await requireAuth(req)
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error })
   try {
     const { table, id } = req.body
     if (!table || !id) return res.status(400).json({ error: 'table and id required' })

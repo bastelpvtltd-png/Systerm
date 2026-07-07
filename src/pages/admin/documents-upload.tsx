@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
+import { authHeader } from '@/lib/supabase'
 import { applyTextRules } from '@/lib/textClean'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
@@ -64,6 +65,11 @@ const TYPE_COLORS: Record<string, string> = {
   boat_note: '#3b82f6', party_copy: '#8b5cf6', bill: '#ef4444',
 }
 
+// Mirrors DOC_TYPE_TABLE from lib/docTables.ts (server-only, can't be
+// imported client-side) — just for routing the match-edit PATCH to the
+// right table.
+const DOC_TYPE_TABLE: Record<string, string> = { cusdec: 'cusdec', cdn: 'cdn', barcode: 'barcode', boat_note: 'boat_notes' }
+
 function docDef(key: string) {
   return DOC_TYPES.find(d => d.key === key)
 }
@@ -114,7 +120,7 @@ function DocumentsUploadContent() {
   const [error, setError] = useState('')
   // Duplicate/CAP conflict resolution — shown instead of saving immediately
   // when the extracted data matches something already saved.
-  const [matchModal, setMatchModal] = useState<{ item: UploadItem; match: any; capInfo: any } | null>(null)
+  const [matchModal, setMatchModal] = useState<{ item: UploadItem; matches: any[]; capInfo: any; table: string } | null>(null)
   const [capModal, setCapModal] = useState<{ item: UploadItem; capInfo: any } | null>(null)
   const [resolvingConflict, setResolvingConflict] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -341,9 +347,9 @@ function DocumentsUploadContent() {
 
   // Before actually saving: check whether this looks like a document that's
   // already been saved (CUSDEC: code+number+date, CDN/Barcode: container_no).
-  // If so, ask instead of silently creating a duplicate. For CDN, also check
-  // the CUSDEC's CAP (how many CDN rows it should have) before allowing a
-  // brand-new row.
+  // If so, show every match instead of silently creating a duplicate. For
+  // CDN, also check the CUSDEC's CAP (how many CDN rows it should have)
+  // before allowing a brand-new row.
   async function saveOne(item: UploadItem) {
     const docType = item.detectedType || 'cusdec'
     const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
@@ -354,8 +360,8 @@ function DocumentsUploadContent() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Duplicate check failed')
-      if (d.match) {
-        setMatchModal({ item, match: d.match, capInfo: d.capInfo })
+      if (d.matches?.length) {
+        setMatchModal({ item, matches: d.matches, capInfo: d.capInfo, table: DOC_TYPE_TABLE[docType] })
         return
       }
       if (d.capInfo && d.capInfo.currentCount >= d.capInfo.cap) {
@@ -369,11 +375,11 @@ function DocumentsUploadContent() {
     await persistItem(item, 'insert')
   }
 
-  async function resolveMatchReplace() {
+  async function resolveMatchReplace(matchId: string) {
     if (!matchModal) return
-    const { item, match } = matchModal
+    const { item } = matchModal
     setMatchModal(null)
-    await persistItem(item, 'replace', match.id)
+    await persistItem(item, 'replace', matchId)
   }
 
   async function resolveMatchAddNew() {
@@ -387,12 +393,37 @@ function DocumentsUploadContent() {
     await persistItem(item, 'insert')
   }
 
+  function updateMatchDraft(matchId: string, key: string, value: string) {
+    setMatchModal(prev => prev && ({
+      ...prev,
+      matches: prev.matches.map((m: any) => m.id === matchId ? { ...m, [key]: value } : m),
+    }))
+  }
+
+  async function saveMatchEdit(match: any) {
+    if (!matchModal) return
+    setResolvingConflict(true)
+    try {
+      const { id, created_at, uploaded_at, ...updates } = match
+      const res = await fetch('/api/admin-data', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ table: matchModal.table, id, updates }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Save failed')
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setResolvingConflict(false)
+    }
+  }
+
   async function freeCdnSlot(rowId: string) {
     if (!capModal) return
     setResolvingConflict(true)
     try {
       await fetch('/api/delete-row', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ table: 'cdn', id: rowId }),
       })
       setCapModal(prev => prev && ({
@@ -1288,34 +1319,48 @@ function DocumentsUploadContent() {
         </div>
       )}
 
-      {/* Duplicate match found — same document (by code+number+date for CUSDEC,
-          container_no for CDN/Barcode) already saved. Ask before creating a
-          second copy. */}
+      {/* Duplicate match(es) found — same document (by code+number+date for
+          CUSDEC, container_no for CDN/Barcode) already saved. Every match
+          shows here, editable in place, deletable-and-replaceable one at a
+          time, or the new one can be added alongside them anyway. */}
       {matchModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
             <div className="p-5 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-900 flex items-center gap-2"><AlertTriangle size={16} className="text-amber-500"/>Matching document already saved</h3>
-              <p className="text-xs text-gray-500 mt-1">This looks like the same document as an existing row. What should happen?</p>
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2"><AlertTriangle size={16} className="text-amber-500"/>
+                {matchModal.matches.length} matching row{matchModal.matches.length === 1 ? '' : 's'} already saved
+              </h3>
+              <p className="text-xs text-gray-500 mt-1">Edit any of these directly, delete one and save this PDF in its place, or keep everything and add this as a new row.</p>
             </div>
-            <div className="p-5 overflow-y-auto flex-1">
-              <div className="bg-gray-50 rounded-lg p-3 text-xs space-y-1">
-                {Object.entries(matchModal.match).filter(([k]) => k !== 'id').map(([k, v]) => (
-                  <div key={k} className="flex justify-between gap-3">
-                    <span className="text-gray-500">{k}</span>
-                    <span className="text-gray-800 font-medium text-right break-all">{v == null || v === '' ? '—' : String(v)}</span>
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {matchModal.matches.map((match: any) => (
+                <div key={match.id} className="border border-gray-100 rounded-lg p-3">
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs mb-2">
+                    {Object.entries(match).filter(([k]) => !['id', 'created_at', 'uploaded_at', 'pdf_url'].includes(k)).map(([k, v]) => (
+                      <label key={k} className="block">
+                        <span className="text-gray-400 block mb-0.5">{k}</span>
+                        <input value={v == null ? '' : String(v)} onChange={e => updateMatchDraft(match.id, k, e.target.value)}
+                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:border-gray-400"/>
+                      </label>
+                    ))}
                   </div>
-                ))}
-              </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => saveMatchEdit(match)} disabled={resolvingConflict}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-white disabled:opacity-50" style={{ background: '#1B3A5C' }}>
+                      <Save size={11}/> Save Changes
+                    </button>
+                    <button onClick={() => resolveMatchReplace(match.id)}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
+                      <Trash2 size={11}/> Delete this + save new PDF here
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
             <div className="p-5 border-t border-gray-100 flex flex-col gap-2">
-              <button onClick={resolveMatchReplace}
-                className="w-full py-2.5 rounded-lg text-sm font-medium text-white bg-red-600 hover:bg-red-700">
-                Delete existing row (+ its Drive PDF) and save this one
-              </button>
               <button onClick={resolveMatchAddNew}
-                className="w-full py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: '#1B3A5C' }}>
-                Keep existing, add this as a new row
+                className="w-full py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: '#22A87A' }}>
+                Keep all existing, add this as a new row
               </button>
               <button onClick={() => setMatchModal(null)}
                 className="w-full py-2 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100">

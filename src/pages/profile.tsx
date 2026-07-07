@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
 import { supabase } from '@/lib/supabase'
 import { Save, User, Lock } from 'lucide-react'
 
@@ -9,6 +10,7 @@ const emptyForm = {
 }
 
 export default function ProfilePage() {
+  const router = useRouter()
   const [form, setForm] = useState(emptyForm)
   const [isAdmin, setIsAdmin] = useState(false)
   const [msg, setMsg] = useState('')
@@ -16,7 +18,9 @@ export default function ProfilePage() {
 
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (!user) return
+      // This page (unlike admin/*) doesn't go through AdminLayout's guard —
+      // without this, a logged-out visitor could still open /profile directly.
+      if (!user) { router.replace('/'); return }
       const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single()
       if (data) setForm(f => ({
         ...f,

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
+import { authHeader } from '@/lib/supabase'
 import {
   Database, RefreshCw, Trash2, Save, Loader, AlertTriangle, X,
 } from 'lucide-react'
@@ -44,7 +45,7 @@ function DatabaseContent() {
   const load = useCallback(async () => {
     setLoading(true); setError(''); setDrafts({})
     try {
-      const res = await fetch(`/api/admin-data?table=${table}`)
+      const res = await fetch(`/api/admin-data?table=${table}`, { headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Load failed')
       setRows(d.rows || [])
@@ -78,7 +79,7 @@ function DatabaseContent() {
     try {
       const { id, created_at, ...updates } = draft
       const res = await fetch('/api/admin-data', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ table, id: rowId, updates }),
       })
       const d = await res.json()
@@ -96,7 +97,7 @@ function DatabaseContent() {
     if (!confirm('Meka permanent delete ekak — confirm karanna?')) return
     setDeletingId(rowId)
     try {
-      const res = await fetch(`/api/admin-data?table=${table}&id=${rowId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/admin-data?table=${table}&id=${rowId}`, { method: 'DELETE', headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Delete failed')
       setRows(prev => prev.filter(r => r.id !== rowId))
@@ -112,7 +113,7 @@ function DatabaseContent() {
     if (!confirm('Real confirm — meka undo karanna bæ. Ain karannada?')) return
     setDeletingAll(true)
     try {
-      const res = await fetch(`/api/admin-data?table=${table}&all=true`, { method: 'DELETE' })
+      const res = await fetch(`/api/admin-data?table=${table}&all=true`, { method: 'DELETE', headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Delete failed')
       setRows([])

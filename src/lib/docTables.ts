@@ -67,27 +67,27 @@ export async function deleteRowAndDriveFile(table: string, id: string, urlColumn
   await supabaseAdmin.from(table).delete().eq('id', id)
 }
 
-// Finds an existing row that looks like the same real-world document, using
+// Finds existing rows that look like the same real-world document, using
 // the natural key the user specified per doc type — CUSDEC: code+number+date,
 // CDN/Barcode: container_no. Used right before saving so the Upload Docs
-// popup can ask "replace this, or add as a new row?" instead of silently
-// creating a duplicate.
-export async function findExistingMatch(docType: string, data: Record<string, string>): Promise<any | null> {
+// popup can show every match found, let each be edited or deleted-and-
+// replaced in place, or the new one added alongside them anyway.
+export async function findExistingMatches(docType: string, data: Record<string, string>): Promise<any[]> {
   const table = DOC_TYPE_TABLE[docType]
-  if (!table || table === 'boat_notes') return null
+  if (!table || table === 'boat_notes') return []
 
   if (docType === 'cusdec') {
-    if (!data.code || !data.number || !data.date) return null
+    if (!data.code || !data.number || !data.date) return []
     const { data: rows } = await supabaseAdmin.from('cusdec').select('*')
-      .eq('code', data.code).eq('number', data.number).eq('date', data.date).limit(1)
-    return rows?.[0] || null
+      .eq('code', data.code).eq('number', data.number).eq('date', data.date)
+    return rows || []
   }
   if (docType === 'cdn' || docType === 'barcode') {
-    if (!data.container_no) return null
-    const { data: rows } = await supabaseAdmin.from(table).select('*').eq('container_no', data.container_no).limit(1)
-    return rows?.[0] || null
+    if (!data.container_no) return []
+    const { data: rows } = await supabaseAdmin.from(table).select('*').eq('container_no', data.container_no)
+    return rows || []
   }
-  return null
+  return []
 }
 
 // A CUSDEC's CAP (column 17) is the number of CDN rows it should ever have.

@@ -37,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     `
 
     await transporter.sendMail({
-      from: `"Export System" <${process.env.GMAIL_USER}>`,
+      from: `"Bastel Official System" <${process.env.GMAIL_USER}>`,
       to, subject, html,
     })
 

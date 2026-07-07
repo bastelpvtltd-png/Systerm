@@ -1,25 +1,41 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
-import { Database, ExternalLink, Trash2, Loader, AlertTriangle, RefreshCw } from 'lucide-react'
+import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine } from 'lucide-react'
 
-interface DriveFile { id: string; name: string; webViewLink?: string; modifiedTime?: string; size?: string }
-interface FolderGroup { folder: string; files: DriveFile[] }
+// Shipment-wise overview: search by shipper / CUSDEC code / CUSDEC number /
+// container number, and see the whole linked set — CUSDEC, its CDN rows
+// (one per container, count should equal the CUSDEC's CAP), and each CDN's
+// matching Barcode row (by container_no) — instead of browsing raw Drive
+// files by folder.
+interface Cusdec { id: string; code: string; number: string; date: string; exporter: string; cap: string; pdf_url?: string; [k: string]: any }
+interface Cdn { id: string; container_no: string; shipper: string; goods_description: string; gross_mass: string; pdf_url?: string; [k: string]: any }
+interface Barcode { id: string; container_no: string; seal_no: string; truck_no: string; date: string; pdf_url?: string; [k: string]: any }
+interface OverviewEntry { cusdec: Cusdec; cdns: { cdn: Cdn; barcode: Barcode | null }[] }
 
 export default function DriveFilesPage() {
-  const [folders, setFolders] = useState<FolderGroup[]>([])
-  const [activeFolder, setActiveFolder] = useState<string>('Main')
+  const [shipper, setShipper] = useState('')
+  const [code, setCode] = useState('')
+  const [number, setNumber] = useState('')
+  const [containerNo, setContainerNo] = useState('')
+  const [results, setResults] = useState<OverviewEntry[]>([])
   const [loading, setLoading] = useState(false)
+  const [searched, setSearched] = useState(false)
   const [error, setError] = useState('')
-  const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  async function load() {
+  async function search() {
     setLoading(true)
     setError('')
+    setSearched(true)
     try {
-      const res = await fetch('/api/list-drive-files')
+      const params = new URLSearchParams()
+      if (shipper) params.set('shipper', shipper)
+      if (code) params.set('code', code)
+      if (number) params.set('number', number)
+      if (containerNo) params.set('container_no', containerNo)
+      const res = await fetch(`/api/shipment-overview?${params.toString()}`)
       const d = await res.json()
-      if (!res.ok) throw new Error(d.error || 'Failed to load Drive files')
-      setFolders(d.folders || [])
+      if (!res.ok) throw new Error(d.error || 'Search failed')
+      setResults(d.overview || [])
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -27,96 +43,126 @@ export default function DriveFilesPage() {
     }
   }
 
-  useEffect(() => { load() }, [])
-
-  async function handleDelete(fileId: string, name: string) {
-    if (!confirm(`Delete "${name}" from Google Drive? This can't be undone.`)) return
-    setDeletingId(fileId)
-    try {
-      const res = await fetch('/api/delete-drive-file', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileId }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error || 'Delete failed')
-      setFolders(prev => prev.map(f => ({ ...f, files: f.files.filter(file => file.id !== fileId) })))
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setDeletingId(null)
-    }
+  const cdnCountMatchesCap = (entry: OverviewEntry) => {
+    const cap = parseInt(entry.cusdec.cap || '', 10)
+    return !cap || Number.isNaN(cap) || entry.cdns.length === cap
   }
-
-  const current = folders.find(f => f.folder === activeFolder)
 
   return (
     <AdminLayout>
       <div className="p-6">
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Database size={22} className="text-brand-green"/>Drive Files</h1>
-            <p className="text-gray-500 text-sm mt-0.5">View and delete PDFs stored in Google Drive, by folder</p>
+        <div className="mb-5">
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Search size={22} className="text-brand-green"/>Shipment Overview</h1>
+          <p className="text-gray-500 text-sm mt-0.5">Search by shipper, CUSDEC code/number, or container number — see the full linked CUSDEC → CDN → Barcode set</p>
+        </div>
+
+        <div className="card mb-5">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Shipper</label>
+              <input value={shipper} onChange={e => setShipper(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && search()}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">CUSDEC Code</label>
+              <input value={code} onChange={e => setCode(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && search()}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">CUSDEC Number</label>
+              <input value={number} onChange={e => setNumber(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && search()}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Container Number</label>
+              <input value={containerNo} onChange={e => setContainerNo(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && search()}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
           </div>
-          <button onClick={load} disabled={loading} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
-            {loading ? <Loader size={13} className="animate-spin"/> : <RefreshCw size={13}/>} Refresh
+          <button onClick={search} disabled={loading || !(shipper || code || number || containerNo)}
+            className="mt-3 flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40" style={{ background: '#22A87A' }}>
+            {loading ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>} Search
           </button>
         </div>
 
         {error && (
-          <div className="mb-4 flex items-center gap-1.5 bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-xs text-red-600">
-            <AlertTriangle size={13}/>{error}
+          <div className="mb-4 flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+            <AlertTriangle size={14}/> {error}
           </div>
         )}
 
-        <div className="flex gap-2 mb-4 flex-wrap">
-          {folders.map(f => (
-            <button key={f.folder} onClick={() => setActiveFolder(f.folder)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                activeFolder === f.folder ? 'bg-brand-green text-white border-transparent' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-              }`}>
-              {f.folder} ({f.files.length})
-            </button>
-          ))}
-        </div>
+        {searched && !loading && results.length === 0 && !error && (
+          <div className="card text-center py-16 text-gray-400 text-sm">No matching CUSDEC found</div>
+        )}
 
-        <div className="card overflow-hidden p-0">
-          {loading ? (
-            <div className="flex items-center justify-center py-16"><Loader size={20} className="animate-spin text-gray-400"/></div>
-          ) : !current || current.files.length === 0 ? (
-            <div className="text-center py-16 text-sm text-gray-400">No files in this folder</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  {['Name', 'Modified', 'Size', 'Actions'].map(h => (
-                    <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-600 uppercase">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {current.files.map(file => (
-                  <tr key={file.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium max-w-xs truncate">{file.name}</td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : '—'}</td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{file.size ? `${Math.round(Number(file.size) / 1024)} KB` : '—'}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        {file.webViewLink && (
-                          <a href={file.webViewLink} target="_blank" rel="noreferrer" className="p-1.5 rounded hover:bg-blue-50 text-blue-600" title="View">
-                            <ExternalLink size={14}/>
-                          </a>
-                        )}
-                        <button onClick={() => handleDelete(file.id, file.name)} disabled={deletingId === file.id}
-                          className="p-1.5 rounded hover:bg-red-50 text-red-500 disabled:opacity-50" title="Delete">
-                          {deletingId === file.id ? <Loader size={14} className="animate-spin"/> : <Trash2 size={14}/>}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        <div className="space-y-4">
+          {results.map(entry => (
+            <div key={entry.cusdec.id} className="card">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <FileText size={16} className="text-[#1B3A5C]"/>
+                  <span className="font-semibold text-gray-900">CUSDEC {entry.cusdec.code} {entry.cusdec.number}</span>
+                  <span className="text-xs text-gray-400">{entry.cusdec.exporter}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-medium px-2 py-1 rounded-md ${cdnCountMatchesCap(entry) ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    CAP {entry.cusdec.cap || '—'} · {entry.cdns.length} CDN row{entry.cdns.length === 1 ? '' : 's'}
+                  </span>
+                  {entry.cusdec.pdf_url && (
+                    <a href={entry.cusdec.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={13}/></a>
+                  )}
+                </div>
+              </div>
+
+              {entry.cdns.length === 0 ? (
+                <p className="text-xs text-gray-400 py-4 text-center">No CDN rows for this CUSDEC yet</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        {['Container', 'CDN Shipper', 'Goods', 'Gross Mass', 'Barcode Seal', 'Barcode Truck', 'Barcode Date', ''].map(h => (
+                          <th key={h} className="text-left px-2 py-2 text-gray-500 font-medium">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {entry.cdns.map(({ cdn, barcode }) => (
+                        <tr key={cdn.id} className="border-t border-gray-50">
+                          <td className="px-2 py-2 font-mono font-medium text-gray-800 flex items-center gap-1">
+                            <Package size={12} className="text-gray-400"/>{cdn.container_no || '—'}
+                          </td>
+                          <td className="px-2 py-2 text-gray-600">{cdn.shipper || '—'}</td>
+                          <td className="px-2 py-2 text-gray-600 max-w-[160px] truncate">{cdn.goods_description || '—'}</td>
+                          <td className="px-2 py-2 text-gray-600">{cdn.gross_mass || '—'}</td>
+                          {barcode ? (
+                            <>
+                              <td className="px-2 py-2 text-gray-600">{barcode.seal_no || '—'}</td>
+                              <td className="px-2 py-2 text-gray-600">{barcode.truck_no || '—'}</td>
+                              <td className="px-2 py-2 text-gray-400">{barcode.date || '—'}</td>
+                            </>
+                          ) : (
+                            <td colSpan={3} className="px-2 py-2 text-amber-600 flex items-center gap-1">
+                              <ScanLine size={12}/> No matching barcode row
+                            </td>
+                          )}
+                          <td className="px-2 py-2">
+                            {cdn.pdf_url && (
+                              <a href={cdn.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={12}/></a>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </AdminLayout>

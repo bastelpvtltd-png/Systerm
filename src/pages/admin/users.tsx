@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import AdminLayout, { TAB_ITEMS, SECTION_ITEMS } from '@/components/admin/AdminLayout'
-import { supabase } from '@/lib/supabase'
+import { supabase, authHeader } from '@/lib/supabase'
 import { Users, Plus, Edit2, X, Save } from 'lucide-react'
 
 interface Profile {
@@ -62,7 +62,7 @@ export default function UsersPage() {
       } else {
         if (!form.password) throw new Error('Password required for a new account')
         const res = await fetch('/api/create-user', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
           body: JSON.stringify({ ...patch, password: form.password }),
         })
         const d = await res.json()

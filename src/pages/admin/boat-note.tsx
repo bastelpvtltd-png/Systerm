@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail } from 'lucide-react'
+import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package } from 'lucide-react'
+
+type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note'
 
 interface CusdecRec { id: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string }
 interface CdnRec    { id: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string }
@@ -27,6 +29,15 @@ function BoatNoteContent() {
   const canSelectCusdec = has('section:boat-note.select-cusdec')
   const canSelectCdn = has('section:boat-note.select-cdn')
   const canOutput = has('section:boat-note.output')
+  const canInvoice = has('section:boat-note.invoice')
+  const canPackingList = has('section:boat-note.packing-list')
+  const canBoatNote = canSelectCusdec || canSelectCdn || canOutput
+  const subTabs = ([
+    ['invoice', Receipt, 'Invoice', canInvoice],
+    ['packing-list', Package, 'Packing List', canPackingList],
+    ['boat-note', Anchor, 'Boat Note', canBoatNote],
+  ] as const).filter(([, , , can]) => can)
+  const [subTab, setSubTab] = useState<DocsCreateTab>(subTabs[0]?.[0] || 'boat-note')
   const [cusdecs, setCusdecs]   = useState<CusdecRec[]>([])
   const [cdns, setCdns]         = useState<CdnRec[]>([])
   const [selCusdec, setSelCusdec] = useState('')
@@ -261,11 +272,43 @@ function BoatNoteContent() {
       <div className="p-6">
         <div className="mb-5">
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Anchor size={20} className="text-[#3b82f6]"/> Boat Note Generator
+            <FileStack size={20} className="text-[#3b82f6]"/> Docs Create
           </h1>
-          <p className="text-gray-500 text-sm mt-0.5">SHIPPING NOTE / BOAT NOTE – Exp 3a format · Select CUSDEC → CDNs → Generate → Download / Email</p>
+          <p className="text-gray-500 text-sm mt-0.5">Invoice · Packing List · Boat Note</p>
         </div>
 
+        {subTabs.length > 1 && (
+          <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit">
+            {subTabs.map(([key, Icon, label]) => (
+              <button key={key} onClick={() => setSubTab(key)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  subTab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}>
+                <Icon size={14}/>{label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {subTab === 'invoice' && canInvoice && (
+          <div className="card flex flex-col items-center justify-center py-20 text-center">
+            <Receipt size={48} className="text-gray-300 mb-4"/>
+            <h2 className="text-lg font-semibold text-gray-500">Coming Soon</h2>
+            <p className="text-sm text-gray-400 mt-1">Invoice generation is under development</p>
+          </div>
+        )}
+
+        {subTab === 'packing-list' && canPackingList && (
+          <div className="card flex flex-col items-center justify-center py-20 text-center">
+            <Package size={48} className="text-gray-300 mb-4"/>
+            <h2 className="text-lg font-semibold text-gray-500">Coming Soon</h2>
+            <p className="text-sm text-gray-400 mt-1">Packing List generation is under development</p>
+          </div>
+        )}
+
+        {subTab === 'boat-note' && canBoatNote && (
+        <>
+        <p className="text-gray-500 text-sm mb-4 -mt-2">SHIPPING NOTE / BOAT NOTE – Exp 3a format · Select CUSDEC → CDNs → Generate → Download / Email</p>
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
 
           {/* Step 1 — CUSDEC */}
@@ -402,6 +445,8 @@ function BoatNoteContent() {
         <div className="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-100 text-xs text-blue-700">
           <span className="font-semibold">PDF Format:</span> SHIPPING NOTE / BOAT NOTE – Exp 3a · Landscape A4 · All fields from Excel b2 sheet (Shipper, Consignee, Voyage, Vessel, Port of Loading/Discharge, Container, CDN No., Gross Weight, Cube, SLPA, Company, Declarant)
         </div>
+        </>
+        )}
       </div>
   )
 }

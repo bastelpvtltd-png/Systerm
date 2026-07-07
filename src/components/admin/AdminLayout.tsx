@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Ship, Upload,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
-  Database, Loader, MessageSquare,
+  Database, Loader, MessageSquare, CheckCircle, FileStack,
 } from 'lucide-react'
 
 // Single unified nav list — there is no separate admin/worker site anymore.
@@ -18,16 +18,16 @@ import {
 // "Documents" tab anymore.
 export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
+  { href: '/admin/my-tasks',         icon: CheckCircle,     label: 'My Tasks' },
   { href: '/admin/shipments',        icon: Ship,            label: 'Shipments' },
   { href: '/admin/documents-upload', icon: Upload,          label: 'Upload Docs' },
-  { href: '/admin/drive-files',      icon: Database,        label: 'Drive Files' },
-  { href: '/admin/boat-note',        icon: Anchor,          label: 'Boat Notes' },
+  { href: '/admin/drive-files',      icon: Database,        label: 'Shipment Overview' },
+  { href: '/admin/boat-note',        icon: FileStack,       label: 'Docs Create' },
   { href: '/admin/messages',         icon: MessageSquare,   label: 'Messages' },
   { href: '/admin/database',         icon: Database,        label: 'Database' },
   { href: '/admin/financials',       icon: DollarSign,      label: 'Financials' },
   { href: '/admin/reports',          icon: BarChart2,       label: 'Reports' },
   { href: '/admin/users',            icon: Users,           label: 'Users' },
-  { href: '/admin/logs',             icon: Shield,          label: 'Login Logs' },
   { href: '/admin/settings',         icon: Settings,        label: 'Settings' },
 ]
 
@@ -53,10 +53,13 @@ export const SECTION_ITEMS = [
   // Settings
   { key: 'section:settings.general',  tabHref: '/admin/settings', label: 'General Info tab' },
   { key: 'section:settings.database', tabHref: '/admin/settings', label: 'Document Records tab' },
-  // Boat Notes
-  { key: 'section:boat-note.select-cusdec', tabHref: '/admin/boat-note', label: 'Select CUSDEC card' },
-  { key: 'section:boat-note.select-cdn',     tabHref: '/admin/boat-note', label: 'Select Containers (CDN) card' },
-  { key: 'section:boat-note.output',         tabHref: '/admin/boat-note', label: 'Download / Email card' },
+  { key: 'section:settings.logs',     tabHref: '/admin/settings', label: 'Login Logs tab (view-only; clearing is admin-only)' },
+  // Docs Create (Invoice / Packing List / Boat Note)
+  { key: 'section:boat-note.invoice',       tabHref: '/admin/boat-note', label: 'Invoice panel' },
+  { key: 'section:boat-note.packing-list',  tabHref: '/admin/boat-note', label: 'Packing List panel' },
+  { key: 'section:boat-note.select-cusdec', tabHref: '/admin/boat-note', label: 'Boat Note: Select CUSDEC card' },
+  { key: 'section:boat-note.select-cdn',     tabHref: '/admin/boat-note', label: 'Boat Note: Select Containers (CDN) card' },
+  { key: 'section:boat-note.output',         tabHref: '/admin/boat-note', label: 'Boat Note: Download / Email card' },
   // Database — per table, since some tables (Users/Profiles, PDF Templates) are more sensitive than others
   { key: 'section:database.cusdec',             tabHref: '/admin/database', label: 'CUSDEC table' },
   { key: 'section:database.cdn',                tabHref: '/admin/database', label: 'CDN table' },
@@ -141,8 +144,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{background:'#22A87A'}}>
             <Ship size={16} color="white"/>
           </div>
-          {!collapsed && <span className="text-white font-bold text-sm">Export System</span>}
+          {!collapsed && <span className="text-white font-bold text-sm">Bastel Official System</span>}
         </div>
+
+        {/* Collapse toggle — right above the tab list */}
+        <button onClick={() => setCollapsed(!collapsed)}
+          className="flex items-center gap-3 px-3 py-2 mx-2 mt-2 rounded-lg text-sm text-blue-200 hover:bg-white/10 flex-shrink-0">
+          {collapsed ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}
+          {!collapsed && <span>Collapse</span>}
+        </button>
 
         {/* Nav */}
         <nav className="flex-1 py-4 space-y-1 px-2">
@@ -173,11 +183,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm text-red-300 hover:bg-white/10">
             <LogOut size={18}/>
             {!collapsed && <span>Logout</span>}
-          </button>
-          <button onClick={() => setCollapsed(!collapsed)}
-            className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm text-blue-200 hover:bg-white/10">
-            {collapsed ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}
-            {!collapsed && <span>Collapse</span>}
           </button>
         </div>
       </aside>

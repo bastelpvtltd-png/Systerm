@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { getTableColumns, deleteRowAndDriveFile } from '@/lib/docTables'
 import { deleteDriveFileByUrl } from '@/lib/driveFolders'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,6 +19,8 @@ const DRIVE_URL_COLUMN: Record<string, string> = {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const auth = await requireAuth(req)
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error })
   const table = String(req.query.table || '')
   if (!ALLOWED_TABLES.includes(table)) return res.status(400).json({ error: 'Unknown or disallowed table' })
 

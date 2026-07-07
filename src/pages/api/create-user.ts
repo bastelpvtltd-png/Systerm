@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAdmin } from '@/lib/serverAuth'
 
 // Creating an auth user requires the service-role key (admin API), which can
 // only run server-side — the browser client was calling supabase.auth.admin.*
@@ -11,6 +12,8 @@ const supabaseAdmin = createClient(
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const auth = await requireAdmin(req)
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error })
   try {
     const { username, password, full_name, position, is_admin, allowed_tabs } = req.body
     if (!username || !password) return res.status(400).json({ error: 'username and password required' })

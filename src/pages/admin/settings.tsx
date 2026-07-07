@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { Settings, Database, Trash2, Loader, RefreshCw, ExternalLink, AlertTriangle } from 'lucide-react'
+import { Settings, Database, Trash2, Loader, RefreshCw, ExternalLink, AlertTriangle, Shield, CheckCircle, XCircle } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
-type Tab = 'general' | 'database'
+type Tab = 'general' | 'database' | 'logs'
 
 interface DbRecord {
   id: string; doc_type: string; file_name: string; drive_url: string; created_at: string
+}
+
+interface LoginLog {
+  id: string; username: string; ip_address: string; user_agent: string
+  status: 'success' | 'failed'; created_at: string
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -22,17 +27,43 @@ export default function SettingsPage() {
 }
 
 function SettingsContent() {
-  const { has } = usePermission()
+  const { has, isAdmin } = usePermission()
   const canGeneral = has('section:settings.general')
   const canDatabase = has('section:settings.database')
-  const [tab, setTab]             = useState<Tab>(canGeneral ? 'general' : 'database')
+  const canLogs = has('section:settings.logs')
+  const [tab, setTab]             = useState<Tab>(canGeneral ? 'general' : canDatabase ? 'database' : 'logs')
   const [records, setRecords]     = useState<DbRecord[]>([])
   const [loading, setLoading]     = useState(false)
   const [deleting, setDeleting]   = useState<string | null>(null)
   const [filterType, setFilterType] = useState('all')
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [logs, setLogs] = useState<LoginLog[]>([])
+  const [loadingLogs, setLoadingLogs] = useState(false)
+  const [clearingLogs, setClearingLogs] = useState(false)
 
   useEffect(() => { if (tab === 'database') loadRecords() }, [tab, filterType])
+  useEffect(() => { if (tab === 'logs') loadLogs() }, [tab])
+
+  async function loadLogs() {
+    setLoadingLogs(true)
+    try {
+      const { data } = await supabase.from('login_logs').select('*').order('created_at', { ascending: false }).limit(200)
+      setLogs(data ?? [])
+    } finally {
+      setLoadingLogs(false)
+    }
+  }
+
+  async function clearLogs() {
+    if (!confirm('Login logs okkoma permanent widihata clear karannada? Meka undo karanna bæ.')) return
+    setClearingLogs(true)
+    try {
+      await supabase.from('login_logs').delete().gte('created_at', '1970-01-01')
+      setLogs([])
+    } finally {
+      setClearingLogs(false)
+    }
+  }
 
   async function loadRecords() {
     setLoading(true)
@@ -62,8 +93,8 @@ function SettingsContent() {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit">
-          {([['general', Settings, 'General'], ['database', Database, 'Database']] as const)
-            .filter(([key]) => key === 'general' ? canGeneral : canDatabase)
+          {([['general', Settings, 'General'], ['database', Database, 'Database'], ['logs', Shield, 'Login Logs']] as const)
+            .filter(([key]) => key === 'general' ? canGeneral : key === 'database' ? canDatabase : canLogs)
             .map(([key, Icon, label]) => (
             <button key={key} onClick={() => setTab(key)}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -186,6 +217,64 @@ function SettingsContent() {
               <AlertTriangle size={13}/>
               Deleted records cannot be recovered. File in storage will remain.
             </div>
+          </div>
+        )}
+
+        {/* Login Logs tab — everyone with access can view; only admin can clear */}
+        {tab === 'logs' && canLogs && (
+          <div className="card">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <Shield size={16} className="text-gray-500"/> Login Logs
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">IP tracking and access history · {logs.length} entries</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={loadLogs} className="text-gray-400 hover:text-gray-700"><RefreshCw size={14}/></button>
+                {isAdmin && (
+                  <button onClick={clearLogs} disabled={clearingLogs || !logs.length}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 disabled:opacity-40">
+                    {clearingLogs ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>} Clear All
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {loadingLogs ? (
+              <div className="flex justify-center py-10"><Loader size={20} className="animate-spin text-gray-400"/></div>
+            ) : logs.length === 0 ? (
+              <div className="text-center py-10 text-gray-400 text-sm">No login activity yet</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      {['Time', 'Username', 'IP Address', 'Status', 'User Agent'].map(h => (
+                        <th key={h} className="text-left px-3 py-2 text-xs font-semibold text-gray-600 uppercase">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {logs.map(log => (
+                      <tr key={log.id} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 font-mono text-xs text-gray-500 whitespace-nowrap">
+                          {new Date(log.created_at).toLocaleString('en-GB')}
+                        </td>
+                        <td className="px-3 py-2 font-medium">{log.username}</td>
+                        <td className="px-3 py-2 font-mono text-brand-blue">{log.ip_address}</td>
+                        <td className="px-3 py-2">
+                          {log.status === 'success'
+                            ? <span className="flex items-center gap-1 text-green-600 text-xs"><CheckCircle size={12}/>Success</span>
+                            : <span className="flex items-center gap-1 text-red-500 text-xs"><XCircle size={12}/>Failed</span>}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-gray-400 max-w-xs truncate">{log.user_agent}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </div>
