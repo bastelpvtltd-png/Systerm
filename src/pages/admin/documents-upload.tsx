@@ -102,19 +102,39 @@ export default function DocumentsUploadPage() {
 DocumentsUploadPage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
 function DocumentsUploadContent() {
-  const { has } = usePermission()
+  const { has, isAdmin } = usePermission()
   const canUpload = has('section:documents-upload.upload')
   const canSeeUploaded = has('section:documents-upload.uploaded')
   const canPreview = has('section:documents-upload.preview')
   const canAdminEdit = has('section:documents-upload.admin-edit')
   const [uploaderName, setUploaderName] = useState('')
+  const [uploaderId, setUploaderId] = useState('')
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) return
+      setUploaderId(user.id)
       const { data } = await supabase.from('profiles').select('username, full_name').eq('id', user.id).single()
       setUploaderName(data?.full_name || data?.username || '')
     })
   }, [])
+
+  // uploaderName/uploaderId above are populated by an async effect on mount —
+  // if a save happens before that resolves (very first upload right after
+  // page load), fall back to fetching the session directly here so we never
+  // send an empty/garbage uploaded_by. This is what previously caused the
+  // "first PDF upload fails, needs a refresh" bug: uploaded_documents.uploaded_by
+  // is a uuid column, so an unresolved/empty value threw "invalid input syntax
+  // for type uuid" — refreshing just gave the effect time to finish first.
+  async function getUploader(): Promise<{ id: string; name: string }> {
+    if (uploaderId) return { id: uploaderId, name: uploaderName }
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { id: '', name: uploaderName }
+    const { data } = await supabase.from('profiles').select('username, full_name').eq('id', user.id).single()
+    const name = data?.full_name || data?.username || ''
+    setUploaderId(user.id)
+    setUploaderName(name)
+    return { id: user.id, name }
+  }
   const [panel, setPanel] = useState<Panel>('upload')
   const [items, setItems] = useState<UploadItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -130,6 +150,9 @@ function DocumentsUploadContent() {
   // when the extracted data matches something already saved.
   const [matchModal, setMatchModal] = useState<{ item: UploadItem; matches: any[]; capInfo: any; table: string } | null>(null)
   const [capModal, setCapModal] = useState<{ item: UploadItem; capInfo: any } | null>(null)
+  // Shown after a CUSDEC save when its Invoice Number didn't auto-match any
+  // pending Shipment entry — lets the user pick the right one by hand.
+  const [shipmentPickModal, setShipmentPickModal] = useState<{ cusdecId: string; shipments: any[] } | null>(null)
   const [resolvingConflict, setResolvingConflict] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -157,8 +180,10 @@ function DocumentsUploadContent() {
     setLoadingRecs(true)
     try {
       const url = filterType === 'all' ? '/api/list-documents' : `/api/list-documents?doc_type=${filterType}`
-      const res = await fetch(url)
-      if (res.ok) { const d = await res.json(); setRecords(d.records || []) }
+      const res = await fetch(url, { headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Failed to load documents')
+      setRecords(d.records || [])
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -316,6 +341,7 @@ function DocumentsUploadContent() {
     const docType = item.detectedType || 'cusdec'
     updateItem(item.id, { status: 'saving' })
     try {
+      const uploader = await getUploader()
       let link = ''
       try {
         const dr = await fetch('/api/upload-to-drive', {
@@ -329,7 +355,10 @@ function DocumentsUploadContent() {
       const sr = await fetch('/api/save-document', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          doc_type: docType, file_name: item.fileName, file_url: '', drive_url: link, uploaded_by: uploaderName,
+          // uploaded_documents.uploaded_by is a uuid column — must be the
+          // user's id, not their display name (that was the invalid-input-
+          // syntax bug on every save).
+          doc_type: docType, file_name: item.fileName, file_url: '', drive_url: link, uploaded_by: uploader.id || null,
           extracted_data: item.fields.length ? Object.fromEntries(item.fields.map(f => [`grid_${f.key}`, f.value])) : null,
         }),
       })
@@ -340,10 +369,17 @@ function DocumentsUploadContent() {
         const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
         const tr = await fetch('/api/save-to-table', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ doc_type: docType, data, drive_url: link, mode, replace_id: replaceId, uploaded_by: uploaderName }),
+          body: JSON.stringify({ doc_type: docType, data, drive_url: link, mode, replace_id: replaceId, uploaded_by: uploader.name }),
         })
         const td = await tr.json()
         if (!tr.ok) setError(td.error || 'Table save failed')
+        else if (docType === 'cusdec' && td.cusdecId && td.shipmentMatch && !td.shipmentMatch.matched) {
+          // No auto-match — offer manual matching against open shipment entries.
+          fetch('/api/temp-shipments', { headers: await authHeader() })
+            .then(r => r.json())
+            .then(d => { if (d.shipments?.length) setShipmentPickModal({ cusdecId: td.cusdecId, shipments: d.shipments }) })
+            .catch(() => {})
+        }
       }
 
       updateItem(item.id, { status: 'saved', driveLink: link })
@@ -438,6 +474,22 @@ function DocumentsUploadContent() {
       setError(e.message)
     } finally {
       setResolvingConflict(false)
+    }
+  }
+
+  async function resolveManualMatch(shipmentId: string) {
+    if (!shipmentPickModal) return
+    try {
+      const res = await fetch('/api/manual-match-shipment', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cusdec_id: shipmentPickModal.cusdecId, shipment_id: shipmentId }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Match failed')
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setShipmentPickModal(null)
     }
   }
 
@@ -1431,6 +1483,31 @@ function DocumentsUploadContent() {
               <button onClick={retryAfterFreeingSlot} disabled={capModal.capInfo.currentCount >= capModal.capInfo.cap}
                 className="flex-1 py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-40" style={{ background: '#1B3A5C' }}>
                 Retry Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shipmentPickModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            <div className="p-5 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-900">No matching Shipment found automatically</h3>
+              <p className="text-xs text-gray-500 mt-1">This CUSDEC's Invoice Number didn't match any open Shipment entry. Pick one below to merge manually, or skip.</p>
+            </div>
+            <div className="p-5 overflow-y-auto flex-1 space-y-2">
+              {shipmentPickModal.shipments.map((s: any) => (
+                <button key={s.id} onClick={() => resolveManualMatch(s.id)}
+                  className="w-full text-left border border-gray-100 rounded-lg p-3 text-xs hover:bg-gray-50">
+                  <p className="font-medium text-gray-800">Invoice: {s.invoice_number} · Ref: {s.reference || '—'}</p>
+                  <p className="text-gray-400">Shipper: {s.shipper} · Consignee: {s.consignee || '—'}</p>
+                </button>
+              ))}
+            </div>
+            <div className="p-5 border-t border-gray-100">
+              <button onClick={() => setShipmentPickModal(null)} className="w-full py-2 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100">
+                Skip
               </button>
             </div>
           </div>

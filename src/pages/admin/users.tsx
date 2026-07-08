@@ -15,13 +15,14 @@ interface Profile {
   contact_number: string
   is_admin: boolean
   allowed_tabs: string[]
+  assigned_shippers: string[]
   created_at: string
 }
 
 const emptyForm = {
   username: '', full_name: '', position: '', designation: '',
   personal_email: '', official_email: '', whatsapp_number: '', contact_number: '',
-  password: '', is_admin: false, allowed_tabs: [] as string[],
+  password: '', is_admin: false, allowed_tabs: [] as string[], assigned_shippers: '',
 }
 
 export default function UsersPage() {
@@ -54,6 +55,7 @@ export default function UsersPage() {
       personal_email: form.personal_email, official_email: form.official_email,
       whatsapp_number: form.whatsapp_number, contact_number: form.contact_number,
       is_admin: form.is_admin, allowed_tabs: form.allowed_tabs,
+      assigned_shippers: form.assigned_shippers.split(',').map(s => s.trim()).filter(Boolean),
     }
     try {
       if (editId) {
@@ -117,6 +119,7 @@ export default function UsersPage() {
                         personal_email: u.personal_email || '', official_email: u.official_email || '',
                         whatsapp_number: u.whatsapp_number || '', contact_number: u.contact_number || '',
                         password: '', is_admin: !!u.is_admin, allowed_tabs: u.allowed_tabs || [],
+                        assigned_shippers: (u.assigned_shippers || []).join(', '),
                       })
                       setEditId(u.id); setSaveError(''); setModal(true)
                     }}
@@ -155,6 +158,16 @@ export default function UsersPage() {
                 <input type="checkbox" checked={form.is_admin} onChange={e => setForm({...form, is_admin: e.target.checked})}/>
                 Full access (sees every tab)
               </label>
+
+              {!form.is_admin && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Assigned Shippers (Shipment Overview)</label>
+                  <input value={form.assigned_shippers} onChange={e => setForm({...form, assigned_shippers: e.target.value})}
+                    placeholder="Comma-separated shipper names — leave empty to see none"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+                  <p className="text-[11px] text-gray-400 mt-1">Only these shippers' data will show in Shipment Overview for this user. Admins always see all.</p>
+                </div>
+              )}
 
               {!form.is_admin && (
                 <div>

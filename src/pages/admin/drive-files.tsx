@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
+import { authHeader } from '@/lib/supabase'
 import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine } from 'lucide-react'
 
 // Shipment-wise overview: search by shipper / CUSDEC code / CUSDEC number /
@@ -13,14 +14,16 @@ interface Cusdec { id: string; code: string; number: string; date: string; expor
 interface Cdn { id: string; container_no: string; shipper: string; goods_description: string; gross_mass: string; pdf_url?: string; [k: string]: any }
 interface Barcode { id: string; container_no: string; seal_no: string; truck_no: string; date: string; pdf_url?: string; [k: string]: any }
 interface OverviewEntry { cusdec: Cusdec; cdns: { cdn: Cdn; barcode: Barcode | null }[] }
-interface Options { shippers: string[]; codes: string[]; numbers: string[]; containers: string[] }
+interface Options { shippers: string[]; codes: string[]; numbers: string[]; containers: string[]; references: string[]; invoiceNumbers: string[] }
 
 export default function DriveFilesPage() {
   const [shipper, setShipper] = useState('')
   const [code, setCode] = useState('')
   const [number, setNumber] = useState('')
   const [containerNo, setContainerNo] = useState('')
-  const [options, setOptions] = useState<Options>({ shippers: [], codes: [], numbers: [], containers: [] })
+  const [reference, setReference] = useState('')
+  const [invoiceNumber, setInvoiceNumber] = useState('')
+  const [options, setOptions] = useState<Options>({ shippers: [], codes: [], numbers: [], containers: [], references: [], invoiceNumbers: [] })
   const [results, setResults] = useState<OverviewEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
@@ -33,11 +36,16 @@ export default function DriveFilesPage() {
     if (shipper) params.set('shipper', shipper)
     if (code) params.set('code', code)
     if (number) params.set('number', number)
+    if (reference) params.set('reference', reference)
+    if (invoiceNumber) params.set('invoice_number', invoiceNumber)
     fetch(`/api/shipment-overview-options?${params.toString()}`)
       .then(r => r.json())
-      .then(d => setOptions({ shippers: d.shippers || [], codes: d.codes || [], numbers: d.numbers || [], containers: d.containers || [] }))
+      .then(d => setOptions({
+        shippers: d.shippers || [], codes: d.codes || [], numbers: d.numbers || [],
+        containers: d.containers || [], references: d.references || [], invoiceNumbers: d.invoiceNumbers || [],
+      }))
       .catch(() => {})
-  }, [shipper, code, number])
+  }, [shipper, code, number, reference, invoiceNumber])
 
   async function search() {
     setLoading(true)
@@ -49,7 +57,9 @@ export default function DriveFilesPage() {
       if (code) params.set('code', code)
       if (number) params.set('number', number)
       if (containerNo) params.set('container_no', containerNo)
-      const res = await fetch(`/api/shipment-overview?${params.toString()}`)
+      if (reference) params.set('reference', reference)
+      if (invoiceNumber) params.set('invoice_number', invoiceNumber)
+      const res = await fetch(`/api/shipment-overview?${params.toString()}`, { headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Search failed')
       setResults(d.overview || [])
@@ -74,6 +84,22 @@ export default function DriveFilesPage() {
 
         <div className="card mb-5">
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Reference</label>
+              <input value={reference} onChange={e => setReference(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && search()}
+                list="reference-options" placeholder="Pick or type..."
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+              <datalist id="reference-options">{options.references.map(r => <option key={r} value={r}/>)}</datalist>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Invoice Number</label>
+              <input value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && search()}
+                list="invoice-number-options" placeholder="Pick or type..."
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+              <datalist id="invoice-number-options">{options.invoiceNumbers.map(n => <option key={n} value={n}/>)}</datalist>
+            </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Shipper</label>
               <input value={shipper} onChange={e => setShipper(e.target.value)}
@@ -107,7 +133,7 @@ export default function DriveFilesPage() {
               <datalist id="container-options">{options.containers.map(c => <option key={c} value={c}/>)}</datalist>
             </div>
           </div>
-          <button onClick={search} disabled={loading || !(shipper || code || number || containerNo)}
+          <button onClick={search} disabled={loading || !(shipper || code || number || containerNo || reference || invoiceNumber)}
             className="mt-3 flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40" style={{ background: '#22A87A' }}>
             {loading ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>} Search
           </button>
@@ -131,6 +157,8 @@ export default function DriveFilesPage() {
                   <FileText size={16} className="text-[#1B3A5C]"/>
                   <span className="font-semibold text-gray-900">CUSDEC {entry.cusdec.code} {entry.cusdec.number}</span>
                   <span className="text-xs text-gray-400">{entry.cusdec.exporter}</span>
+                  {entry.cusdec.reference && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">Ref: {entry.cusdec.reference}</span>}
+                  {entry.cusdec.invoice_number && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">Inv: {entry.cusdec.invoice_number}</span>}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-xs font-medium px-2 py-1 rounded-md ${cdnCountMatchesCap(entry) ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>

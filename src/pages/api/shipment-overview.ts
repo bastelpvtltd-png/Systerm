@@ -1,24 +1,40 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-// Searches by shipper/code/CUSDEC number/container number and returns a
-// shipment-wise overview: each matched CUSDEC, with the CDN rows that belong
-// to it (matched by code + cusdec_number, one CDN row per container — the
-// CUSDEC's CAP tells how many there should be), and each CDN's corresponding
-// Barcode row (matched by container_no). This is the one linked set the app
-// treats CUSDEC/CDN/Barcode as, not a per-document-type file browser.
+// Searches by shipper/code/CUSDEC number/container number/reference/invoice
+// number and returns a shipment-wise overview: each matched CUSDEC, with the
+// CDN rows that belong to it (matched by code + cusdec_number, one CDN row
+// per container — the CUSDEC's CAP tells how many there should be), and each
+// CDN's corresponding Barcode row (matched by container_no). This is the one
+// linked set the app treats CUSDEC/CDN/Barcode as, not a per-document-type
+// file browser.
+//
+// Access control: non-admin accounts only ever see CUSDECs whose exporter is
+// in their profile's assigned_shippers list — enforced here server-side, not
+// just hidden in the UI, since this is the one endpoint that can return
+// another shipper's data.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
   try {
+    const authed = await requireAuth(req)
+    if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
+    const { data: prof } = await supabaseAdmin.from('profiles').select('is_admin, assigned_shippers').eq('id', authed.userId).single()
+    const isAdmin = !!prof?.is_admin
+    const assignedShippers: string[] = prof?.assigned_shippers || []
+    if (!isAdmin && !assignedShippers.length) return res.json({ overview: [] })
+
     const shipper = String(req.query.shipper || '').trim()
     const code = String(req.query.code || '').trim()
     const number = String(req.query.number || '').trim()
     const containerNo = String(req.query.container_no || '').trim()
+    const reference = String(req.query.reference || '').trim()
+    const invoiceNumber = String(req.query.invoice_number || '').trim()
 
     let cusdecRows: any[] = []
 
@@ -29,15 +45,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const r of cdnRows || []) {
         if (r.code && r.cusdec_number) pairs.set(`${r.code}|${r.cusdec_number}`, { code: r.code, number: r.cusdec_number })
       }
-      for (const { code: c, number: n } of pairs.values()) {
+      for (const { code: c, number: n } of Array.from(pairs.values())) {
         const { data } = await supabaseAdmin.from('cusdec').select('*').eq('code', c).eq('number', n).limit(1)
         if (data?.[0]) cusdecRows.push(data[0])
       }
-    } else if (shipper || code || number) {
+    } else if (shipper || code || number || reference || invoiceNumber) {
       let q = supabaseAdmin.from('cusdec').select('*')
       if (code) q = q.ilike('code', `%${code}%`)
       if (number) q = q.ilike('number', `%${number}%`)
       if (shipper) q = q.ilike('exporter', `%${shipper}%`)
+      if (reference) q = q.ilike('reference', `%${reference}%`)
+      if (invoiceNumber) q = q.ilike('invoice_number', `%${invoiceNumber}%`)
       const { data } = await q.limit(50)
       cusdecRows = data || []
 
@@ -56,6 +74,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       }
+    }
+
+    if (!isAdmin) {
+      const allowed = new Set(assignedShippers.map(s => s.toLowerCase()))
+      cusdecRows = cusdecRows.filter(c => allowed.has((c.exporter || '').split('\n')[0].trim().toLowerCase()))
     }
 
     const overview = []

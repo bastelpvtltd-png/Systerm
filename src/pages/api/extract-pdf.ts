@@ -172,7 +172,15 @@ function extractCusdecFields(text: string): Record<string, string> {
     cty_of_last: '', country_of_export: '', cap: '', vessel: '', voyage_no: '', discharging: '',
     location_of_goods: '', delivery_terms: '', amount: '', pkges: '', type: '', description: '',
     hs_code: '', gross_mass: '', net_mass: '', preference: '', procedure_code: '', bl_no: '',
+    invoice_number: '',
   }
+
+  // Invoice Number — used to auto-match this CUSDEC against a pending
+  // Shipment entry (temporary_shipments.invoice_number). Regex is best-effort
+  // (form layout varies); if it misses, the field can still be corrected by
+  // hand in Admin Edit before saving, same as any other extracted field.
+  const invM = text.match(/Invoice\s*(?:No\.?|Number)\s*[:\-]?\s*([A-Z0-9\/\-]+)/i)
+  if (invM) data.invoice_number = invM[1]
 
   // Office ref → number
   const offM = text.match(/EX\s*1\s+([A-Z0-9]+)/)

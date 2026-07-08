@@ -124,7 +124,7 @@ export type SaveMode = 'insert' | 'replace'
 export async function insertExtractedData(
   docType: string, data: Record<string, string>, driveUrl: string,
   options: { mode?: SaveMode; replaceId?: string; uploadedBy?: string } = {}
-): Promise<{ ok: true } | { ok: false; reason: 'cap_exceeded'; capInfo: { cap: number; currentCount: number; rows: any[] } }> {
+): Promise<{ ok: true; row?: any } | { ok: false; reason: 'cap_exceeded'; capInfo: { cap: number; currentCount: number; rows: any[] } }> {
   const table = DOC_TYPE_TABLE[docType]
   if (!table) return { ok: true }
   const { mode = 'insert', replaceId, uploadedBy } = options
@@ -139,12 +139,12 @@ export async function insertExtractedData(
   }
 
   if (table === 'boat_notes') {
-    const { error } = await supabaseAdmin.from('boat_notes').insert({
+    const { data: inserted, error } = await supabaseAdmin.from('boat_notes').insert({
       details: data, pdf_url: driveUrl, uploaded_at: new Date().toISOString(), uploaded_by: uploadedBy || null,
       boat_note_no: data.entry_no || data.bl_no || null,
-    })
+    }).select().single()
     if (error) throw new Error(error.message)
-    return { ok: true }
+    return { ok: true, row: inserted }
   }
 
   const dataKeys = Object.keys(data).filter(k => data[k])
@@ -155,7 +155,61 @@ export async function insertExtractedData(
   for (const [k, v] of Object.entries(data)) {
     if (v && columns.includes(k)) row[k] = v
   }
-  const { error } = await supabaseAdmin.from(table).insert(row)
+  const { data: inserted, error } = await supabaseAdmin.from(table).insert(row).select().single()
   if (error) throw new Error(error.message)
-  return { ok: true }
+  return { ok: true, row: inserted }
+}
+
+// ── Cusdec ⇄ Shipment automation ─────────────────────────────────────────
+// A Shipment entry (temporary_shipments) is opened before any paperwork
+// exists. Once a CUSDEC upload comes in with a matching Invoice Number, its
+// leftover fields (Reference, Packing Number, Consignee if the CUSDEC's own
+// extraction missed it) get folded into the CUSDEC row and the shipment
+// entry is deleted — the CUSDEC row is now the single source of truth.
+// Extracted CUSDEC data always wins: only columns that are still empty on
+// the CUSDEC row get filled in from the shipment, nothing is overwritten.
+function generateReference(): string {
+  const y = new Date().getFullYear()
+  const rand = Math.floor(100000 + Math.random() * 900000)
+  return `REF-${y}-${rand}`
+}
+
+export async function matchAndMergeShipment(cusdecRow: any): Promise<{ matched: boolean; shipmentId?: string }> {
+  if (!cusdecRow?.id) return { matched: false }
+
+  if (cusdecRow.invoice_number) {
+    const { data: shipment } = await supabaseAdmin
+      .from('temporary_shipments')
+      .select('*')
+      .eq('invoice_number', cusdecRow.invoice_number)
+      .limit(1)
+      .maybeSingle()
+
+    if (shipment) {
+      await mergeShipmentIntoCusdec(cusdecRow, shipment)
+      return { matched: true, shipmentId: shipment.id }
+    }
+  }
+
+  // No matching shipment — this CUSDEC stands alone; give it its own
+  // reference if it doesn't already have one (e.g. from a prior merge attempt).
+  if (!cusdecRow.reference) {
+    await supabaseAdmin.from('cusdec').update({ reference: generateReference() }).eq('id', cusdecRow.id)
+  }
+  return { matched: false }
+}
+
+export async function mergeShipmentIntoCusdec(cusdecRow: any, shipment: any): Promise<void> {
+  const fill: Record<string, any> = {}
+  if (!cusdecRow.reference && shipment.reference) fill.reference = shipment.reference
+  if (!cusdecRow.packing_number && shipment.packing_number) fill.packing_number = shipment.packing_number
+  if (!cusdecRow.consignee && shipment.consignee) fill.consignee = shipment.consignee
+  if (!cusdecRow.exporter && shipment.shipper) fill.exporter = shipment.shipper
+  if (!cusdecRow.reference) fill.reference = fill.reference || generateReference()
+
+  if (Object.keys(fill).length) {
+    const { error } = await supabaseAdmin.from('cusdec').update(fill).eq('id', cusdecRow.id)
+    if (error) throw new Error(error.message)
+  }
+  await supabaseAdmin.from('temporary_shipments').delete().eq('id', shipment.id)
 }

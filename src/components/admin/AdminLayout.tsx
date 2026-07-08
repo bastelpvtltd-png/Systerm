@@ -20,9 +20,11 @@ export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/my-tasks',         icon: CheckCircle,     label: 'My Tasks' },
   { href: '/admin/shipments',        icon: Ship,            label: 'Shipments' },
+  { href: '/admin/shipment-entry',   icon: Ship,            label: 'Shipment Entry' },
   { href: '/admin/documents-upload', icon: Upload,          label: 'Upload Docs' },
   { href: '/admin/drive-files',      icon: Database,        label: 'Shipment Overview' },
   { href: '/admin/boat-note',        icon: FileStack,       label: 'Docs Create' },
+  { href: '/admin/templates',        icon: FileStack,       label: 'Templates' },
   { href: '/admin/messages',         icon: MessageSquare,   label: 'Messages' },
   { href: '/admin/database',         icon: Database,        label: 'Database' },
   { href: '/admin/financials',       icon: DollarSign,      label: 'Financials' },
@@ -45,6 +47,10 @@ export const SECTION_ITEMS = [
   { key: 'section:dashboard.cdn-pending',     tabHref: '/admin', label: 'CDN Pending card' },
   { key: 'section:dashboard.release-pending', tabHref: '/admin', label: 'Export Release Pending card' },
   { key: 'section:dashboard.pending-summary', tabHref: '/admin', label: 'Pending Work Summary panel' },
+  // Shipment Entry
+  { key: 'section:shipment-entry.form', tabHref: '/admin/shipment-entry', label: 'Shipment entry form' },
+  // Templates
+  { key: 'section:templates.manage', tabHref: '/admin/templates', label: 'Template upload & fill' },
   // My Tasks
   { key: 'section:my-tasks.daily-cost',      tabHref: '/admin/my-tasks', label: 'Daily Cost entry (add cost)' },
   { key: 'section:my-tasks.balance-update',  tabHref: '/admin/my-tasks', label: 'Balance deposit/top-up (accountant/owner only)' },

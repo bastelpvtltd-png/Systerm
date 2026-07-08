@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { insertExtractedData, DOC_TYPE_TABLE } from '@/lib/docTables'
+import { insertExtractedData, matchAndMergeShipment, DOC_TYPE_TABLE } from '@/lib/docTables'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -16,7 +16,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!result.ok) {
       return res.status(409).json({ error: 'CDN cap exceeded', reason: result.reason, capInfo: result.capInfo })
     }
-    res.json({ ok: true })
+
+    // Cusdec auto-match: fold in any pending Shipment entry with the same
+    // Invoice Number (see matchAndMergeShipment for the priority rule), or
+    // generate this CUSDEC its own reference if nothing matched.
+    let shipmentMatch: { matched: boolean; shipmentId?: string } | undefined
+    if (doc_type === 'cusdec' && result.row) {
+      shipmentMatch = await matchAndMergeShipment(result.row)
+    }
+
+    res.json({ ok: true, shipmentMatch, cusdecId: doc_type === 'cusdec' ? result.row?.id : undefined })
   } catch (err: any) {
     console.error('[save-to-table] error:', err)
     res.status(500).json({ error: err.message })

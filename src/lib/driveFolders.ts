@@ -40,6 +40,9 @@ export const DOC_TYPE_FOLDER_NAMES: Record<string, string> = {
   cusdec: 'CUSDEC',
   barcode: 'Barcode',
   boat_note: 'Boat Note',
+  invoice: 'Invoice',
+  packing_list: 'Packing List',
+  template: 'Templates',
 }
 
 const folderIdCache = new Map<string, string>()

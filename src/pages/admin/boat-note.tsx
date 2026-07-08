@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package } from 'lucide-react'
+import { authHeader } from '@/lib/supabase'
+import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock } from 'lucide-react'
 
 type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note'
 
@@ -8,6 +9,48 @@ interface CusdecRec { id: string; number: string; exporter: string; consignee: s
 interface CdnRec    { id: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string }
 
 interface BoatNote { shipper: string; consignee: string; entry_no: string; bl_no: string; slpa_no: string; voyage: string; voyage_date: string; vessel: string; terminal: string; lorry_no: string; trailer_no: string; driver_name: string; container_no: string; con_type: string; seal_no: string; goods: string; gross_mass: string; net_mass: string; cdn_no: string; pkg_no: string; pkg_type: string; voc: string; coc: string; loading_port: string; discharge_port: string; volume: string; marks: string }
+
+// Invoice + Packing List share one form — both PDFs pull from the same
+// state so nothing has to be typed twice. Fields not listed per-item
+// (Terms of Delivery, Payment Type, Bank Details, ...) live at the top level;
+// Item Description and Payment Type are repeatable (spec explicitly calls
+// for "more than one" of each).
+interface DocLineItem { description: string; packages: string; pkgType: string; gw: string; nw: string; unitPrice: string; totalValue: string }
+const emptyLineItem = (): DocLineItem => ({ description: '', packages: '', pkgType: '', gw: '', nw: '', unitPrice: '', totalValue: '' })
+
+interface DocForm {
+  invoiceNumber: string; referenceNumber: string; date: string
+  exporter: string; consignee: string; containerMark: string
+  items: DocLineItem[]
+  totalGross: string; totalNet: string
+  termsOfDelivery: string; paymentTypes: string[]; bankDetails: string
+  booking: string; vessel: string; voyage: string; coc: string; voc: string
+  discharge: string; loading: string; origin: string
+}
+const emptyDocForm = (): DocForm => ({
+  invoiceNumber: '', referenceNumber: '', date: new Date().toISOString().slice(0, 10),
+  exporter: '', consignee: '', containerMark: '',
+  items: [emptyLineItem()],
+  totalGross: '', totalNet: '',
+  termsOfDelivery: '', paymentTypes: [''], bankDetails: '',
+  booking: '', vessel: '', voyage: '', coc: '', voc: '',
+  discharge: '', loading: '', origin: '',
+})
+// Fields that can be auto-filled (from the shipper profile, or auto-summed
+// from item rows) and therefore need "Edited" tag tracking.
+type AutoFillableKey = 'consignee' | 'bankDetails' | 'totalGross' | 'totalNet'
+
+function Field({ label, edited, children }: { label: string; edited?: boolean; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">
+        {label}
+        {edited && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 align-middle">Edited</span>}
+      </label>
+      {children}
+    </div>
+  )
+}
 
 // Company constants from Excel b2 sheet
 const COMPANY = {
@@ -49,6 +92,210 @@ function BoatNoteContent() {
   const [emailTo, setEmailTo]   = useState('bathiyapradeep7788@gmail.com')
   const [sending, setSending]   = useState(false)
   const [status, setStatus]     = useState('')
+
+  // ── Invoice / Packing List (shared form) ──────────────────────────────
+  const [docForm, setDocForm] = useState<DocForm>(emptyDocForm())
+  const [autoValues, setAutoValues] = useState<Partial<Record<AutoFillableKey, string>>>({})
+  const [editedFields, setEditedFields] = useState<Set<AutoFillableKey>>(new Set())
+  const [docStatus, setDocStatus] = useState('')
+  const [docBusy, setDocBusy] = useState<'invoice' | 'packing-list' | 'invoice-temp' | 'packing-list-temp' | ''>('')
+
+  function setDocField<K extends keyof DocForm>(key: K, value: DocForm[K]) {
+    setDocForm(f => ({ ...f, [key]: value }))
+    if ((autoValues as any)[key] !== undefined && (autoValues as any)[key] !== value) {
+      setEditedFields(prev => new Set(prev).add(key as AutoFillableKey))
+    }
+  }
+
+  function updateLineItem(idx: number, patch: Partial<DocLineItem>) {
+    setDocForm(f => ({ ...f, items: f.items.map((it, i) => i === idx ? { ...it, ...patch } : it) }))
+  }
+  function addLineItem() { setDocForm(f => ({ ...f, items: [...f.items, emptyLineItem()] })) }
+  function removeLineItem(idx: number) { setDocForm(f => ({ ...f, items: f.items.length > 1 ? f.items.filter((_, i) => i !== idx) : f.items })) }
+
+  function updatePaymentType(idx: number, value: string) {
+    setDocForm(f => ({ ...f, paymentTypes: f.paymentTypes.map((p, i) => i === idx ? value : p) }))
+  }
+  function addPaymentType() { setDocForm(f => ({ ...f, paymentTypes: [...f.paymentTypes, ''] })) }
+  function removePaymentType(idx: number) { setDocForm(f => ({ ...f, paymentTypes: f.paymentTypes.length > 1 ? f.paymentTypes.filter((_, i) => i !== idx) : f.paymentTypes })) }
+
+  // Auto-sum Total Gross/Net from item rows, unless the user has manually
+  // overridden them (tracked the same way as the shipper auto-fill below).
+  useEffect(() => {
+    const sum = (key: 'gw' | 'nw') => docForm.items.reduce((acc, it) => acc + (parseFloat(it[key]) || 0), 0)
+    const gross = sum('gw') ? String(sum('gw')) : ''
+    const net = sum('nw') ? String(sum('nw')) : ''
+    setAutoValues(prev => ({ ...prev, totalGross: gross, totalNet: net }))
+    setDocForm(f => ({
+      ...f,
+      totalGross: editedFields.has('totalGross') ? f.totalGross : gross,
+      totalNet: editedFields.has('totalNet') ? f.totalNet : net,
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(docForm.items)])
+
+  // Shipper auto-fill: on picking/typing an Exporter that has a saved
+  // profile, pull in its last-used Consignee + Bank Details.
+  async function handleExporterBlur() {
+    const shipper = docForm.exporter.trim()
+    if (!shipper) return
+    try {
+      const res = await fetch(`/api/shipper-profile?shipper=${encodeURIComponent(shipper)}`)
+      const d = await res.json()
+      const profile = d.profile
+      if (!profile) return
+      setAutoValues(prev => ({ ...prev, consignee: profile.consignee || '', bankDetails: profile.bank_details || '' }))
+      setDocForm(f => ({
+        ...f,
+        consignee: editedFields.has('consignee') ? f.consignee : (profile.consignee || f.consignee),
+        bankDetails: editedFields.has('bankDetails') ? f.bankDetails : (profile.bank_details || f.bankDetails),
+      }))
+    } catch {}
+  }
+
+  function isEdited(key: AutoFillableKey) { return editedFields.has(key) }
+
+  async function fileToBase64FromBlob(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve((reader.result as string).split(',')[1])
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  }
+
+  async function buildDocPdf(kind: 'invoice' | 'packing-list') {
+    const { jsPDF } = await import('jspdf')
+    const autoTable = (await import('jspdf-autotable')).default
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const M = 12
+    let y = M
+
+    doc.setFont('helvetica', 'bold').setFontSize(13)
+    doc.text(COMPANY.name, M, y); y += 5
+    doc.setFontSize(11)
+    doc.text(kind === 'invoice' ? 'COMMERCIAL INVOICE' : 'PACKING LIST', M, y); y += 7
+
+    doc.setFont('helvetica', 'normal').setFontSize(9)
+    doc.text(`Invoice No: ${docForm.invoiceNumber || '-'}`, M, y)
+    doc.text(`Reference No: ${docForm.referenceNumber || '-'}`, M + 90, y); y += 5
+    doc.text(`Date: ${docForm.date || '-'}`, M, y); y += 7
+
+    doc.setFont('helvetica', 'bold').setFontSize(9)
+    doc.text('Exporter:', M, y)
+    doc.text('Consignee:', M + 95, y); y += 4
+    doc.setFont('helvetica', 'normal')
+    const expLines = doc.splitTextToSize(docForm.exporter || '-', 88)
+    const conLines = doc.splitTextToSize(docForm.consignee || '-', 88)
+    doc.text(expLines, M, y)
+    doc.text(conLines, M + 95, y)
+    y += Math.max(expLines.length, conLines.length) * 4 + 4
+
+    doc.text(`Container Mark: ${docForm.containerMark || '-'}`, M, y); y += 6
+
+    const cols = kind === 'invoice'
+      ? ['Description', 'Packages', 'Type', 'G/W', 'N/W', 'Unit Price', 'Total Value']
+      : ['Description', 'Packages', 'Type', 'G/W', 'N/W']
+    const rows = docForm.items.map(it => kind === 'invoice'
+      ? [it.description, it.packages, it.pkgType, it.gw, it.nw, it.unitPrice, it.totalValue]
+      : [it.description, it.packages, it.pkgType, it.gw, it.nw])
+
+    autoTable(doc, {
+      startY: y, margin: { left: M, right: M }, styles: { fontSize: 8, cellPadding: 1.5 },
+      headStyles: { fillColor: [27, 58, 92] },
+      head: [cols], body: rows,
+    })
+    // @ts-ignore - jspdf-autotable augments doc with lastAutoTable at runtime
+    y = (doc as any).lastAutoTable.finalY + 6
+
+    doc.setFont('helvetica', 'bold').setFontSize(9)
+    doc.text(`Total Gross: ${docForm.totalGross || '-'} Kg`, M, y)
+    doc.text(`Total Net: ${docForm.totalNet || '-'} Kg`, M + 70, y)
+    if (kind === 'invoice') {
+      const grand = docForm.items.reduce((acc, it) => acc + (parseFloat(it.totalValue) || 0), 0)
+      doc.text(`Grand Total: ${grand ? grand.toFixed(2) : '-'}`, M + 140, y)
+    }
+    y += 7
+
+    doc.setFont('helvetica', 'normal').setFontSize(8.5)
+    const meta = [
+      ['Terms of Delivery', docForm.termsOfDelivery],
+      ['Payment Type', docForm.paymentTypes.filter(Boolean).join(', ')],
+      ['Bank Details', docForm.bankDetails],
+      ['Booking', docForm.booking], ['Vessel', docForm.vessel], ['Voyage', docForm.voyage],
+      ['COC', docForm.coc], ['VOC', docForm.voc],
+      ['Loading', docForm.loading], ['Discharge', docForm.discharge], ['Origin', docForm.origin],
+    ].filter(([, v]) => v)
+    meta.forEach(([label, value]) => {
+      const lines = doc.splitTextToSize(`${label}: ${value}`, 186)
+      doc.text(lines, M, y)
+      y += lines.length * 4
+    })
+
+    y = Math.max(y + 10, 270)
+    doc.setFont('helvetica', 'italic').setFontSize(7)
+    doc.text(`Generated by Export Management System · ${new Date().toLocaleDateString('en-GB')}`, M, 290)
+    doc.line(M + 120, y, M + 186, y)
+    doc.text('Authorized Signature', M + 140, y + 4)
+
+    return doc
+  }
+
+  async function generateDoc(kind: 'invoice' | 'packing-list', temporary: boolean) {
+    setDocStatus('')
+    if (!temporary && !docForm.invoiceNumber.trim()) {
+      setDocStatus('⚠ Invoice Number is required to save/attach this document (use "Temporary" if it isn\'t generated yet)')
+      return
+    }
+    setDocBusy(temporary ? (kind === 'invoice' ? 'invoice-temp' : 'packing-list-temp') : kind)
+    try {
+      const doc = await buildDocPdf(kind)
+      const dt = new Date().toISOString().slice(0, 10)
+      const fileName = `${kind === 'invoice' ? 'INVOICE' : 'PACKING_LIST'}_${docForm.invoiceNumber || 'TEMP'}_${dt}.pdf`
+      doc.save(fileName)
+
+      if (temporary) {
+        setDocStatus('✓ Temporary PDF downloaded (not saved — will clear on refresh)')
+        return
+      }
+
+      // Persist shipper defaults for next time (Bank Details / Consignee auto-fill).
+      if (docForm.exporter.trim()) {
+        fetch('/api/shipper-profile', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shipper: docForm.exporter.trim(), consignee: docForm.consignee, bank_details: docForm.bankDetails }),
+        }).catch(() => {})
+      }
+
+      // Auto-attach: upload to Drive, log it, then link onto the matching shipment.
+      const base64 = await fileToBase64FromBlob(doc.output('blob'))
+      const docType = kind === 'invoice' ? 'invoice' : 'packing_list'
+      const dr = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64, fileName, mimeType: 'application/pdf', docType }),
+      })
+      const dd = await dr.json()
+      if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
+
+      await fetch('/api/save-document', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: docType, file_name: fileName, drive_url: dd.driveLink, extracted_data: { invoice_number: docForm.invoiceNumber } }),
+      })
+
+      const at = await fetch('/api/attach-shipment-pdf', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoice_number: docForm.invoiceNumber, doc_type: docType, url: dd.driveLink }),
+      })
+      const ad = await at.json()
+      setDocStatus(ad.attached
+        ? `✓ ${kind === 'invoice' ? 'Invoice' : 'Packing List'} PDF saved to Drive and attached to shipment ${docForm.invoiceNumber}`
+        : `✓ ${kind === 'invoice' ? 'Invoice' : 'Packing List'} PDF saved to Drive (no open shipment found for ${docForm.invoiceNumber} to attach to)`)
+    } catch (e: any) {
+      setDocStatus(`✗ ${e.message}`)
+    } finally {
+      setDocBusy('')
+    }
+  }
 
   useEffect(() => { loadCusdecs() }, [])
   useEffect(() => { if (selCusdec) loadCdns() }, [selCusdec])
@@ -290,21 +537,109 @@ function BoatNoteContent() {
           </div>
         )}
 
-        {subTab === 'invoice' && canInvoice && (
-          <div className="card flex flex-col items-center justify-center py-20 text-center">
-            <Receipt size={48} className="text-gray-300 mb-4"/>
-            <h2 className="text-lg font-semibold text-gray-500">Coming Soon</h2>
-            <p className="text-sm text-gray-400 mt-1">Invoice generation is under development</p>
-          </div>
-        )}
+        {(subTab === 'invoice' && canInvoice) || (subTab === 'packing-list' && canPackingList) ? (
+          <div className="space-y-4">
+            {docStatus && (
+              <p className={`text-xs font-medium ${docStatus.startsWith('✓') ? 'text-green-600' : docStatus.startsWith('⚠') ? 'text-amber-600' : 'text-red-600'}`}>{docStatus}</p>
+            )}
 
-        {subTab === 'packing-list' && canPackingList && (
-          <div className="card flex flex-col items-center justify-center py-20 text-center">
-            <Package size={48} className="text-gray-300 mb-4"/>
-            <h2 className="text-lg font-semibold text-gray-500">Coming Soon</h2>
-            <p className="text-sm text-gray-400 mt-1">Packing List generation is under development</p>
+            <div className="card">
+              <h2 className="font-semibold text-gray-900 text-sm mb-3">Document Details</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <Field label="Invoice Number *"><input value={docForm.invoiceNumber} onChange={e => setDocField('invoiceNumber', e.target.value)} className="input"/></Field>
+                <Field label="Reference Number"><input value={docForm.referenceNumber} onChange={e => setDocField('referenceNumber', e.target.value)} className="input"/></Field>
+                <Field label="Date"><input type="date" value={docForm.date} onChange={e => setDocField('date', e.target.value)} className="input"/></Field>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                <Field label="Exporter (Shipper)"><input value={docForm.exporter} onChange={e => setDocField('exporter', e.target.value)} onBlur={handleExporterBlur} className="input"/></Field>
+                <Field label="Consignee" edited={isEdited('consignee')}><input value={docForm.consignee} onChange={e => setDocField('consignee', e.target.value)} className="input"/></Field>
+                <Field label="Container Mark"><input value={docForm.containerMark} onChange={e => setDocField('containerMark', e.target.value)} className="input"/></Field>
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-semibold text-gray-900 text-sm">Item Description</h2>
+                <button onClick={addLineItem} className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"><Plus size={13}/>Add Row</button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead><tr className="text-left text-gray-500">
+                    <th className="pb-2 pr-2">Description</th><th className="pb-2 pr-2">Packages</th><th className="pb-2 pr-2">Type</th>
+                    <th className="pb-2 pr-2">G/W</th><th className="pb-2 pr-2">N/W</th><th className="pb-2 pr-2">Unit Price</th><th className="pb-2 pr-2">Total Value</th><th/>
+                  </tr></thead>
+                  <tbody>
+                    {docForm.items.map((it, idx) => (
+                      <tr key={idx}>
+                        <td className="pr-2 pb-2"><input value={it.description} onChange={e => updateLineItem(idx, { description: e.target.value })} className="input"/></td>
+                        <td className="pr-2 pb-2"><input value={it.packages} onChange={e => updateLineItem(idx, { packages: e.target.value })} className="input w-20"/></td>
+                        <td className="pr-2 pb-2"><input value={it.pkgType} onChange={e => updateLineItem(idx, { pkgType: e.target.value })} className="input w-20"/></td>
+                        <td className="pr-2 pb-2"><input value={it.gw} onChange={e => updateLineItem(idx, { gw: e.target.value })} className="input w-20"/></td>
+                        <td className="pr-2 pb-2"><input value={it.nw} onChange={e => updateLineItem(idx, { nw: e.target.value })} className="input w-20"/></td>
+                        <td className="pr-2 pb-2"><input value={it.unitPrice} onChange={e => updateLineItem(idx, { unitPrice: e.target.value })} className="input w-24"/></td>
+                        <td className="pr-2 pb-2"><input value={it.totalValue} onChange={e => updateLineItem(idx, { totalValue: e.target.value })} className="input w-24"/></td>
+                        <td className="pb-2">{docForm.items.length > 1 && <button onClick={() => removeLineItem(idx)} className="text-gray-300 hover:text-red-500"><X size={14}/></button>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <Field label="Total Gross" edited={isEdited('totalGross')}><input value={docForm.totalGross} onChange={e => setDocField('totalGross', e.target.value)} className="input"/></Field>
+                <Field label="Total Net" edited={isEdited('totalNet')}><input value={docForm.totalNet} onChange={e => setDocField('totalNet', e.target.value)} className="input"/></Field>
+              </div>
+            </div>
+
+            <div className="card">
+              <h2 className="font-semibold text-gray-900 text-sm mb-3">Terms & Shipping Details</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <Field label="Terms of Delivery"><input value={docForm.termsOfDelivery} onChange={e => setDocField('termsOfDelivery', e.target.value)} className="input"/></Field>
+                <Field label="Bank Details" edited={isEdited('bankDetails')}><input value={docForm.bankDetails} onChange={e => setDocField('bankDetails', e.target.value)} className="input"/></Field>
+                <Field label="Booking"><input value={docForm.booking} onChange={e => setDocField('booking', e.target.value)} className="input"/></Field>
+                <Field label="Vessel"><input value={docForm.vessel} onChange={e => setDocField('vessel', e.target.value)} className="input"/></Field>
+                <Field label="Voyage"><input value={docForm.voyage} onChange={e => setDocField('voyage', e.target.value)} className="input"/></Field>
+                <Field label="COC"><input value={docForm.coc} onChange={e => setDocField('coc', e.target.value)} className="input"/></Field>
+                <Field label="VOC"><input value={docForm.voc} onChange={e => setDocField('voc', e.target.value)} className="input"/></Field>
+                <Field label="Loading"><input value={docForm.loading} onChange={e => setDocField('loading', e.target.value)} className="input"/></Field>
+                <Field label="Discharge"><input value={docForm.discharge} onChange={e => setDocField('discharge', e.target.value)} className="input"/></Field>
+                <Field label="Origin"><input value={docForm.origin} onChange={e => setDocField('origin', e.target.value)} className="input"/></Field>
+              </div>
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-medium text-gray-600">Payment Type</label>
+                  <button onClick={addPaymentType} className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"><Plus size={13}/>Add</button>
+                </div>
+                <div className="space-y-2">
+                  {docForm.paymentTypes.map((p, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input value={p} onChange={e => updatePaymentType(idx, e.target.value)} className="input"/>
+                      {docForm.paymentTypes.length > 1 && <button onClick={() => removePaymentType(idx)} className="text-gray-300 hover:text-red-500"><X size={14}/></button>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="card flex flex-col sm:flex-row gap-3">
+              {subTab === 'invoice' ? (
+                <button onClick={() => generateDoc('invoice', false)} disabled={!!docBusy}
+                  className="btn-primary flex items-center justify-center gap-2 flex-1">
+                  {docBusy === 'invoice' ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}Generate Invoice PDF
+                </button>
+              ) : (
+                <button onClick={() => generateDoc('packing-list', false)} disabled={!!docBusy}
+                  className="btn-primary flex items-center justify-center gap-2 flex-1">
+                  {docBusy === 'packing-list' ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}Generate Packing List PDF
+                </button>
+              )}
+              <button onClick={() => generateDoc(subTab === 'invoice' ? 'invoice' : 'packing-list', true)} disabled={!!docBusy}
+                className="btn-secondary flex items-center justify-center gap-2 flex-1">
+                {(docBusy === 'invoice-temp' || docBusy === 'packing-list-temp') ? <Loader size={14} className="animate-spin"/> : <Clock size={14}/>}
+                Temporary (no save, cleared on refresh)
+              </button>
+            </div>
           </div>
-        )}
+        ) : null}
 
         {subTab === 'boat-note' && canBoatNote && (
         <>

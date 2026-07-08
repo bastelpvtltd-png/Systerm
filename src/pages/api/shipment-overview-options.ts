@@ -18,42 +18,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const code = String(req.query.code || '').trim()
     const number = String(req.query.number || '').trim()
 
-    let cusdecQuery = supabaseAdmin.from('cusdec').select('code, number, exporter').limit(1000)
+    const reference = String(req.query.reference || '').trim()
+    const invoiceNumber = String(req.query.invoice_number || '').trim()
+
+    let cusdecQuery = supabaseAdmin.from('cusdec').select('code, number, exporter, reference, invoice_number').limit(1000)
     if (code) cusdecQuery = cusdecQuery.eq('code', code)
     if (number) cusdecQuery = cusdecQuery.eq('number', number)
+    if (reference) cusdecQuery = cusdecQuery.eq('reference', reference)
+    if (invoiceNumber) cusdecQuery = cusdecQuery.eq('invoice_number', invoiceNumber)
     const { data: cusdecRows } = await cusdecQuery
 
     // Shipper suggestions always come from the full table (unfiltered by
     // shipper itself) — first line only, since "exporter" is a multi-line
     // name+address blob.
     const { data: allCusdec } = await supabaseAdmin.from('cusdec').select('exporter').limit(1000)
-    const shippers = [...new Set((allCusdec || []).map(r => (r.exporter || '').split('\n')[0].trim()).filter(Boolean))].sort()
+    const shippers = Array.from(new Set((allCusdec || []).map(r => (r.exporter || '').split('\n')[0].trim()).filter(Boolean))).sort()
 
     const shipperFiltered = shipper
       ? (cusdecRows || []).filter(r => (r.exporter || '').split('\n')[0].trim().toLowerCase().includes(shipper.toLowerCase()))
       : (cusdecRows || [])
 
-    const codes = [...new Set(shipperFiltered.map(r => r.code).filter(Boolean))].sort()
-    const numbers = [...new Set(shipperFiltered.map(r => r.number).filter(Boolean))].sort()
+    const codes = Array.from(new Set(shipperFiltered.map(r => r.code).filter(Boolean))).sort()
+    const numbers = Array.from(new Set(shipperFiltered.map(r => r.number).filter(Boolean))).sort()
+    const references = Array.from(new Set(shipperFiltered.map(r => r.reference).filter(Boolean))).sort()
+    const invoiceNumbers = Array.from(new Set(shipperFiltered.map(r => r.invoice_number).filter(Boolean))).sort()
 
     // Containers: CDN rows belonging to whichever CUSDECs matched above.
     let containers: string[] = []
     if (shipperFiltered.length) {
-      const pairs = shipperFiltered.map(r => `(code.eq.${r.code},cusdec_number.eq.${r.number})`)
       // Supabase JS doesn't do OR-of-ANDs cleanly across many pairs — fetch
       // per matching CUSDEC's code/number set instead (small result sets in
       // practice: a handful of CUSDECs per shipper).
-      const codeSet = [...new Set(shipperFiltered.map(r => r.code))]
-      const numberSet = [...new Set(shipperFiltered.map(r => r.number))]
+      const codeSet = Array.from(new Set(shipperFiltered.map(r => r.code)))
+      const numberSet = Array.from(new Set(shipperFiltered.map(r => r.number)))
       let cdnQuery = supabaseAdmin.from('cdn').select('container_no, code, cusdec_number').limit(1000)
       if (codeSet.length) cdnQuery = cdnQuery.in('code', codeSet)
       const { data: cdnRows } = await cdnQuery
-      containers = [...new Set((cdnRows || [])
+      containers = Array.from(new Set((cdnRows || [])
         .filter(r => numberSet.includes(r.cusdec_number))
-        .map(r => r.container_no).filter(Boolean))].sort()
+        .map(r => r.container_no).filter(Boolean))).sort()
     }
 
-    res.json({ shippers, codes, numbers, containers })
+    res.json({ shippers, codes, numbers, containers, references, invoiceNumbers })
   } catch (err: any) {
     console.error('[shipment-overview-options] error:', err)
     res.status(500).json({ error: err.message })
