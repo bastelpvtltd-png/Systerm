@@ -24,10 +24,24 @@ const DETECTED_TO_DOC_TYPE: Record<string, string> = {
   unknown: '',
 }
 
+// pdf-parse (pdfjs-dist underneath) can throw "Invalid PDF structure" on an
+// otherwise-valid file — a transient failure tied to a cold/fresh serverless
+// instance, not the file itself: re-sending the exact same bytes right after
+// always succeeds. Retrying a few times here does automatically what a
+// manual re-upload was doing, instead of surfacing the error to the user.
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   const pdfParse = require('pdf-parse')
-  const parsed = await pdfParse(buffer)
-  return parsed.text
+  let lastErr: any
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const parsed = await pdfParse(buffer)
+      return parsed.text
+    } catch (e: any) {
+      lastErr = e
+      if (attempt < 3) await new Promise(r => setTimeout(r, 250 * attempt))
+    }
+  }
+  throw lastErr
 }
 
 // Port of Python isProbablyScanned — textLen < 50 chars means scanned

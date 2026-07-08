@@ -13,12 +13,16 @@ async function loadMupdf() {
 }
 
 export async function openPdf(buffer: Buffer) {
-  let mupdf = await loadMupdf()
-  try {
-    return { mupdf, doc: mupdf.Document.openDocument(buffer, 'application/pdf') }
-  } catch (err) {
-    cached = null
-    mupdf = await loadMupdf()
-    return { mupdf, doc: mupdf.Document.openDocument(buffer, 'application/pdf') }
+  let lastErr: any
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const mupdf = await loadMupdf()
+      return { mupdf, doc: mupdf.Document.openDocument(buffer, 'application/pdf') }
+    } catch (err) {
+      lastErr = err
+      cached = null
+      if (attempt < 3) await new Promise(r => setTimeout(r, 250 * attempt))
+    }
   }
+  throw lastErr
 }
