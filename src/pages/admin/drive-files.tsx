@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine } from 'lucide-react'
+import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine, Anchor } from 'lucide-react'
 
 // Shipment-wise overview: search by shipper / CUSDEC code / CUSDEC number /
 // container number — each box is a real database value (still hand-typeable,
@@ -13,7 +13,8 @@ import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLin
 interface Cusdec { id: string; code: string; number: string; date: string; exporter: string; cap: string; pdf_url?: string; [k: string]: any }
 interface Cdn { id: string; container_no: string; shipper: string; goods_description: string; gross_mass: string; pdf_url?: string; [k: string]: any }
 interface Barcode { id: string; container_no: string; seal_no: string; truck_no: string; date: string; pdf_url?: string; [k: string]: any }
-interface OverviewEntry { cusdec: Cusdec; cdns: { cdn: Cdn; barcode: Barcode | null }[] }
+interface BoatNote { id: string; pdf_url?: string; details: Record<string, any> }
+interface OverviewEntry { cusdec: Cusdec; cdns: { cdn: Cdn; barcode: Barcode | null }[]; boatNotes: BoatNote[] }
 interface Options { shippers: string[]; codes: string[]; numbers: string[]; containers: string[]; references: string[]; invoiceNumbers: string[] }
 
 export default function DriveFilesPage() {
@@ -25,6 +26,7 @@ export default function DriveFilesPage() {
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [options, setOptions] = useState<Options>({ shippers: [], codes: [], numbers: [], containers: [], references: [], invoiceNumbers: [] })
   const [results, setResults] = useState<OverviewEntry[]>([])
+  const [orphanBoatNotes, setOrphanBoatNotes] = useState<BoatNote[]>([])
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
   const [error, setError] = useState('')
@@ -63,6 +65,7 @@ export default function DriveFilesPage() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Search failed')
       setResults(d.overview || [])
+      setOrphanBoatNotes(d.orphanBoatNotes || [])
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -79,7 +82,7 @@ export default function DriveFilesPage() {
       <div className="p-6">
         <div className="mb-5">
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Search size={22} className="text-brand-green"/>Shipment Overview</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Search by shipper, CUSDEC code/number, or container number — see the full linked CUSDEC → CDN → Barcode set</p>
+          <p className="text-gray-500 text-sm mt-0.5">Search by shipper, CUSDEC code/number, container number, reference, or invoice number — see every linked CUSDEC, CDN, Barcode, and Boat Note, each with its PDF</p>
         </div>
 
         <div className="card mb-5">
@@ -145,8 +148,8 @@ export default function DriveFilesPage() {
           </div>
         )}
 
-        {searched && !loading && results.length === 0 && !error && (
-          <div className="card text-center py-16 text-gray-400 text-sm">No matching CUSDEC found</div>
+        {searched && !loading && results.length === 0 && orphanBoatNotes.length === 0 && !error && (
+          <div className="card text-center py-16 text-gray-400 text-sm">No matching documents found</div>
         )}
 
         <div className="space-y-4">
@@ -195,7 +198,12 @@ export default function DriveFilesPage() {
                             <>
                               <td className="px-2 py-2 text-gray-600">{barcode.seal_no || '—'}</td>
                               <td className="px-2 py-2 text-gray-600">{barcode.truck_no || '—'}</td>
-                              <td className="px-2 py-2 text-gray-400">{barcode.date || '—'}</td>
+                              <td className="px-2 py-2 text-gray-400 flex items-center gap-1">
+                                {barcode.date || '—'}
+                                {barcode.pdf_url && (
+                                  <a href={barcode.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={11}/></a>
+                                )}
+                              </td>
                             </>
                           ) : (
                             <td colSpan={3} className="px-2 py-2 text-amber-600 flex items-center gap-1">
@@ -213,8 +221,43 @@ export default function DriveFilesPage() {
                   </table>
                 </div>
               )}
+
+              {entry.boatNotes.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1"><Anchor size={12}/> Boat Notes</p>
+                  <div className="flex flex-wrap gap-2">
+                    {entry.boatNotes.map(bn => (
+                      <div key={bn.id} className="flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-100 rounded-full px-3 py-1.5">
+                        <span className="text-gray-700">{bn.details?.entry_no || bn.details?.bl_no || bn.id.slice(0, 8)}</span>
+                        <span className="text-gray-400">· {bn.details?.container_no || '—'}</span>
+                        {bn.pdf_url && (
+                          <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={11}/></a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
+
+          {orphanBoatNotes.length > 0 && (
+            <div className="card">
+              <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1"><Anchor size={12}/> Boat Notes (no linked CDN yet)</p>
+              <div className="flex flex-wrap gap-2">
+                {orphanBoatNotes.map(bn => (
+                  <div key={bn.id} className="flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-100 rounded-full px-3 py-1.5">
+                    <span className="text-gray-700">{bn.details?.shipper || '—'}</span>
+                    <span className="text-gray-400">· {bn.details?.entry_no || bn.details?.bl_no || bn.id.slice(0, 8)}</span>
+                    <span className="text-gray-400">· {bn.details?.container_no || '—'}</span>
+                    {bn.pdf_url && (
+                      <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={11}/></a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
   )

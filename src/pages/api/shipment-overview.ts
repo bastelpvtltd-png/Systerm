@@ -81,20 +81,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       cusdecRows = cusdecRows.filter(c => allowed.has((c.exporter || '').split('\n')[0].trim().toLowerCase()))
     }
 
+    const matchedBoatNoteIds = new Set<string>()
     const overview = []
     for (const cusdec of cusdecRows) {
       const { data: cdns } = await supabaseAdmin.from('cdn').select('*').eq('code', cusdec.code).eq('cusdec_number', cusdec.number)
       const cdnWithBarcode = []
+      const containerNos: string[] = []
       for (const cdn of cdns || []) {
         const { data: barcodeRows } = cdn.container_no
           ? await supabaseAdmin.from('barcode').select('*').eq('container_no', cdn.container_no).limit(1)
           : { data: [] }
         cdnWithBarcode.push({ cdn, barcode: barcodeRows?.[0] || null })
+        if (cdn.container_no) containerNos.push(cdn.container_no)
       }
-      overview.push({ cusdec, cdns: cdnWithBarcode })
+
+      // Boat notes aren't linked by a foreign key — they carry the same
+      // container number (inside their jsonb `details` blob) as the CDN row
+      // they were made for, so that's the only reliable way to attach them
+      // to this CUSDEC's shipment.
+      let boatNotes: any[] = []
+      if (containerNos.length) {
+        const { data: bnRows } = await supabaseAdmin.from('boat_notes').select('*')
+          .in('details->>container_no', containerNos)
+        boatNotes = bnRows || []
+        boatNotes.forEach(b => matchedBoatNoteIds.add(b.id))
+      }
+
+      overview.push({ cusdec, cdns: cdnWithBarcode, boatNotes })
     }
 
-    res.json({ overview })
+    // Boat notes whose shipper matches the search but whose container didn't
+    // line up with any matched CDN above (e.g. the CDN row itself hasn't been
+    // uploaded yet) — surfaced separately so a shipper/reference search still
+    // finds them instead of silently dropping them.
+    let orphanBoatNotes: any[] = []
+    if (shipper) {
+      const { data: bnByShipper } = await supabaseAdmin.from('boat_notes').select('*')
+        .ilike('details->>shipper', `%${shipper}%`)
+      orphanBoatNotes = (bnByShipper || []).filter(b => !matchedBoatNoteIds.has(b.id))
+      if (!isAdmin) {
+        const allowed = new Set(assignedShippers.map(s => s.toLowerCase()))
+        orphanBoatNotes = orphanBoatNotes.filter(b => allowed.has(String(b.details?.shipper || '').trim().toLowerCase()))
+      }
+    }
+
+    res.json({ overview, orphanBoatNotes })
   } catch (err: any) {
     console.error('[shipment-overview] error:', err)
     res.status(500).json({ error: err.message })
