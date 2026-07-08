@@ -8,6 +8,8 @@ type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note'
 interface CusdecRec { id: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string }
 interface CdnRec    { id: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string }
 
+interface DocTemplate { id: string; name: string; file_name: string; drive_url: string | null; raw_text: string; placeholders: string[]; created_at: string }
+
 interface BoatNote { shipper: string; consignee: string; entry_no: string; bl_no: string; slpa_no: string; voyage: string; voyage_date: string; vessel: string; terminal: string; lorry_no: string; trailer_no: string; driver_name: string; container_no: string; con_type: string; seal_no: string; goods: string; gross_mass: string; net_mass: string; cdn_no: string; pkg_no: string; pkg_type: string; voc: string; coc: string; loading_port: string; discharge_port: string; volume: string; marks: string }
 
 // Invoice + Packing List share one form — both PDFs pull from the same
@@ -98,7 +100,69 @@ function BoatNoteContent() {
   const [autoValues, setAutoValues] = useState<Partial<Record<AutoFillableKey, string>>>({})
   const [editedFields, setEditedFields] = useState<Set<AutoFillableKey>>(new Set())
   const [docStatus, setDocStatus] = useState('')
-  const [docBusy, setDocBusy] = useState<'invoice' | 'packing-list' | 'invoice-temp' | 'packing-list-temp' | ''>('')
+  const [docBusy, setDocBusy] = useState<'invoice' | 'packing-list' | 'invoice-temp' | 'packing-list-temp' | 'template' | ''>('')
+
+  // Templates uploaded on the Templates tab (Word docs with {{placeholder}}
+  // tags) — shown here filtered by name so "INVOICE ..." templates only
+  // offer themselves on the Invoice tab, "PACKING LIST ..." only on Packing
+  // List, matching how the user names them when saving.
+  const [templates, setTemplates] = useState<DocTemplate[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  useEffect(() => {
+    fetch('/api/list-templates').then(r => r.json()).then(d => setTemplates(d.templates || [])).catch(() => {})
+  }, [])
+  const templateKeyword = subTab === 'invoice' ? 'inv' : 'pl'
+  const matchingTemplates = templates.filter(t => t.name.toLowerCase().includes(templateKeyword))
+  useEffect(() => { setSelectedTemplateId('') }, [subTab])
+  const selectedTemplate = matchingTemplates.find(t => t.id === selectedTemplateId) || null
+
+  // Maps the shared Invoice/Packing List form onto the plain-text placeholder
+  // names a saved template is expected to use — {{invoice_number}},
+  // {{exporter}}, etc. Item rows and payment types don't have a single value,
+  // so they're flattened into one multi-line block per {{items}}/{{payment_type}}.
+  function buildTemplateValues(): Record<string, string> {
+    const grand = docForm.items.reduce((acc, it) => acc + (parseFloat(it.totalValue) || 0), 0)
+    return {
+      invoice_number: docForm.invoiceNumber, reference_number: docForm.referenceNumber, date: docForm.date,
+      exporter: docForm.exporter, consignee: docForm.consignee, container_mark: docForm.containerMark,
+      items: docForm.items.map(it => `${it.description} | ${it.packages} ${it.pkgType} | G/W ${it.gw} | N/W ${it.nw}${subTab === 'invoice' ? ` | ${it.unitPrice} | ${it.totalValue}` : ''}`).join('\n'),
+      total_gross: docForm.totalGross, total_net: docForm.totalNet, grand_total: grand ? grand.toFixed(2) : '',
+      terms_of_delivery: docForm.termsOfDelivery, payment_type: docForm.paymentTypes.filter(Boolean).join(', '), bank_details: docForm.bankDetails,
+      booking: docForm.booking, vessel: docForm.vessel, voyage: docForm.voyage, coc: docForm.coc, voc: docForm.voc,
+      discharge: docForm.discharge, loading: docForm.loading, origin: docForm.origin,
+    }
+  }
+
+  async function generateFromTemplate() {
+    if (!selectedTemplate) return
+    setDocStatus('')
+    setDocBusy('template')
+    try {
+      const values = buildTemplateValues()
+      const filled = selectedTemplate.raw_text.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => values[key] ?? '')
+      const { jsPDF } = await import('jspdf')
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const M = 15
+      let y = M
+      doc.setFont('helvetica', 'normal').setFontSize(10)
+      for (const paragraph of filled.split('\n')) {
+        const lines = doc.splitTextToSize(paragraph || ' ', 210 - M * 2)
+        for (const line of lines) {
+          if (y > 280) { doc.addPage(); y = M }
+          doc.text(line, M, y)
+          y += 5.5
+        }
+      }
+      const dt = new Date().toISOString().slice(0, 10)
+      const fileName = `${selectedTemplate.name.replace(/[^\w.-]+/g, '_')}_${docForm.invoiceNumber || 'TEMP'}_${dt}.pdf`
+      doc.save(fileName)
+      setDocStatus(`✓ Generated from template "${selectedTemplate.name}"`)
+    } catch (e: any) {
+      setDocStatus(`✗ ${e.message}`)
+    } finally {
+      setDocBusy('')
+    }
+  }
 
   function setDocField<K extends keyof DocForm>(key: K, value: DocForm[K]) {
     setDocForm(f => ({ ...f, [key]: value }))
@@ -619,6 +683,39 @@ function BoatNoteContent() {
                 </div>
               </div>
             </div>
+
+            {matchingTemplates.length > 0 && (
+              <div className="card">
+                <h2 className="font-semibold text-gray-900 text-sm mb-3">Use a Template</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Template</label>
+                    <select value={selectedTemplateId} onChange={e => setSelectedTemplateId(e.target.value)} className="input">
+                      <option value="">Don't use a template (form layout below)</option>
+                      {matchingTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </div>
+                  {selectedTemplate && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Spaces in this template</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedTemplate.placeholders.map(p => (
+                          <span key={p} className="text-[11px] font-mono bg-blue-50 text-blue-700 px-2 py-0.5 rounded">{'{{' + p + '}}'}</span>
+                        ))}
+                        {selectedTemplate.placeholders.length === 0 && <span className="text-xs text-gray-400">No {'{{tags}}'} detected</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {selectedTemplate && (
+                  <button onClick={generateFromTemplate} disabled={!!docBusy}
+                    className="btn-secondary mt-3 flex items-center gap-2">
+                    {docBusy === 'template' ? <Loader size={14} className="animate-spin"/> : <FileStack size={14}/>}
+                    Generate PDF from Template
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="card flex flex-col sm:flex-row gap-3">
               {subTab === 'invoice' ? (

@@ -17,6 +17,35 @@ interface BoatNote { id: string; pdf_url?: string; details: Record<string, any> 
 interface OverviewEntry { cusdec: Cusdec; cdns: { cdn: Cdn; barcode: Barcode | null }[]; boatNotes: BoatNote[] }
 interface Options { shippers: string[]; codes: string[]; numbers: string[]; containers: string[]; references: string[]; invoiceNumbers: string[] }
 
+// Bookkeeping columns that aren't a real extracted field — never shown in the
+// full-details grid below.
+const EXCLUDE_KEYS = new Set(['id', 'created_at', 'uploaded_at', 'uploaded_by', 'pdf_url', 'status', 'code', 'number', 'cusdec_number', 'container_no'])
+const LABEL_OVERRIDES: Record<string, string> = {
+  cap: 'C.A.P.', hs_code: '(HS) Code', cty_of_last: 'Cty of Last',
+  voyage_no: 'Voyage No./Date', bl_no: 'BL No.', pkges: 'PKGES',
+  gross_mass: 'Gross Mass (KG)', net_mass: 'Net Mass (KG)',
+}
+function fieldLabel(key: string) { return LABEL_OVERRIDES[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) }
+
+// Every non-empty column on the record, laid out as a compact label/value
+// grid — this is the "full details" view (as opposed to the few columns the
+// summary header/table row show), so nothing extracted from a CUSDEC/CDN/
+// Barcode upload gets hidden from Shipment Overview.
+function FieldGrid({ record }: { record: Record<string, any> }) {
+  const entries = Object.entries(record).filter(([k, v]) => !EXCLUDE_KEYS.has(k) && v !== null && v !== undefined && String(v).trim() !== '')
+  if (!entries.length) return null
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-2">
+      {entries.map(([k, v]) => (
+        <div key={k} className="min-w-0">
+          <p className="text-[10px] uppercase tracking-wide text-gray-400">{fieldLabel(k)}</p>
+          <p className="text-xs text-gray-800 truncate" title={String(v)}>{String(v)}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function DriveFilesPage() {
   const [shipper, setShipper] = useState('')
   const [code, setCode] = useState('')
@@ -168,94 +197,85 @@ export default function DriveFilesPage() {
                     CAP {entry.cusdec.cap || '—'} · {entry.cdns.length} CDN row{entry.cdns.length === 1 ? '' : 's'}
                   </span>
                   {entry.cusdec.pdf_url && (
-                    <a href={entry.cusdec.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={13}/></a>
+                    <a href={entry.cusdec.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={13}/>View CUSDEC PDF</a>
                   )}
                 </div>
+              </div>
+
+              <div className="bg-gray-50/60 rounded-lg p-3 mb-4">
+                <FieldGrid record={entry.cusdec}/>
               </div>
 
               {entry.cdns.length === 0 ? (
                 <p className="text-xs text-gray-400 py-4 text-center">No CDN rows for this CUSDEC yet</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        {['Container', 'CDN Shipper', 'Goods', 'Gross Mass', 'Barcode Seal', 'Barcode Truck', 'Barcode Date', ''].map(h => (
-                          <th key={h} className="text-left px-2 py-2 text-gray-500 font-medium">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {entry.cdns.map(({ cdn, barcode }) => (
-                        <tr key={cdn.id} className="border-t border-gray-50">
-                          <td className="px-2 py-2 font-mono font-medium text-gray-800 flex items-center gap-1">
-                            <Package size={12} className="text-gray-400"/>{cdn.container_no || '—'}
-                          </td>
-                          <td className="px-2 py-2 text-gray-600">{cdn.shipper || '—'}</td>
-                          <td className="px-2 py-2 text-gray-600 max-w-[160px] truncate">{cdn.goods_description || '—'}</td>
-                          <td className="px-2 py-2 text-gray-600">{cdn.gross_mass || '—'}</td>
-                          {barcode ? (
-                            <>
-                              <td className="px-2 py-2 text-gray-600">{barcode.seal_no || '—'}</td>
-                              <td className="px-2 py-2 text-gray-600">{barcode.truck_no || '—'}</td>
-                              <td className="px-2 py-2 text-gray-400 flex items-center gap-1">
-                                {barcode.date || '—'}
-                                {barcode.pdf_url && (
-                                  <a href={barcode.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={11}/></a>
-                                )}
-                              </td>
-                            </>
-                          ) : (
-                            <td colSpan={3} className="px-2 py-2 text-amber-600 flex items-center gap-1">
-                              <ScanLine size={12}/> No matching barcode row
-                            </td>
-                          )}
-                          <td className="px-2 py-2">
-                            {cdn.pdf_url && (
-                              <a href={cdn.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={12}/></a>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="space-y-3">
+                  {entry.cdns.map(({ cdn, barcode }) => (
+                    <div key={cdn.id} className="border border-gray-100 rounded-lg p-3">
+                      <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                        <span className="flex items-center gap-1.5 font-mono font-semibold text-sm text-gray-800">
+                          <Package size={13} className="text-gray-400"/>{cdn.container_no || '—'}
+                        </span>
+                        {cdn.pdf_url && (
+                          <a href={cdn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={12}/>View CDN PDF</a>
+                        )}
+                      </div>
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">CDN Details</p>
+                      <FieldGrid record={cdn}/>
+
+                      <div className="mt-3 pt-2 border-t border-gray-100">
+                        {barcode ? (
+                          <>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Barcode Details</p>
+                              {barcode.pdf_url && (
+                                <a href={barcode.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Barcode PDF</a>
+                              )}
+                            </div>
+                            <FieldGrid record={barcode}/>
+                          </>
+                        ) : (
+                          <p className="text-xs text-amber-600 flex items-center gap-1"><ScanLine size={12}/> No matching barcode row for this container</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
 
               {entry.boatNotes.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-gray-100">
-                  <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1"><Anchor size={12}/> Boat Notes</p>
-                  <div className="flex flex-wrap gap-2">
-                    {entry.boatNotes.map(bn => (
-                      <div key={bn.id} className="flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-100 rounded-full px-3 py-1.5">
-                        <span className="text-gray-700">{bn.details?.entry_no || bn.details?.bl_no || bn.id.slice(0, 8)}</span>
-                        <span className="text-gray-400">· {bn.details?.container_no || '—'}</span>
+                <div className="mt-3 pt-3 border-t border-gray-100 space-y-3">
+                  <p className="text-xs font-medium text-gray-500 flex items-center gap-1"><Anchor size={12}/> Boat Notes</p>
+                  {entry.boatNotes.map(bn => (
+                    <div key={bn.id} className="border border-gray-100 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-semibold text-gray-800">{bn.details?.entry_no || bn.details?.bl_no || bn.id.slice(0, 8)}</span>
                         {bn.pdf_url && (
-                          <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={11}/></a>
+                          <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Boat Note PDF</a>
                         )}
                       </div>
-                    ))}
-                  </div>
+                      <FieldGrid record={bn.details || {}}/>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
           ))}
 
           {orphanBoatNotes.length > 0 && (
-            <div className="card">
-              <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1"><Anchor size={12}/> Boat Notes (no linked CDN yet)</p>
-              <div className="flex flex-wrap gap-2">
-                {orphanBoatNotes.map(bn => (
-                  <div key={bn.id} className="flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-100 rounded-full px-3 py-1.5">
-                    <span className="text-gray-700">{bn.details?.shipper || '—'}</span>
-                    <span className="text-gray-400">· {bn.details?.entry_no || bn.details?.bl_no || bn.id.slice(0, 8)}</span>
-                    <span className="text-gray-400">· {bn.details?.container_no || '—'}</span>
+            <div className="card space-y-3">
+              <p className="text-xs font-medium text-gray-500 flex items-center gap-1"><Anchor size={12}/> Boat Notes (no linked CDN yet)</p>
+              {orphanBoatNotes.map(bn => (
+                <div key={bn.id} className="border border-gray-100 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-semibold text-gray-800">{bn.details?.shipper || '—'} · {bn.details?.entry_no || bn.details?.bl_no || bn.id.slice(0, 8)}</span>
                     {bn.pdf_url && (
-                      <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><ExternalLink size={11}/></a>
+                      <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Boat Note PDF</a>
                     )}
                   </div>
-                ))}
-              </div>
+                  <FieldGrid record={bn.details || {}}/>
+                </div>
+              ))}
             </div>
           )}
         </div>
