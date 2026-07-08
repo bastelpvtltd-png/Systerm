@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { openPdf } from '@/lib/mupdfDoc'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
@@ -10,9 +11,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { base64, page } = req.body
     if (!base64) return res.status(400).json({ error: 'base64 required' })
 
-    const mupdf = await import('mupdf')
     const buffer = Buffer.from(base64, 'base64')
-    const doc = mupdf.Document.openDocument(buffer, 'application/pdf')
+    const { mupdf, doc } = await openPdf(buffer)
     const numPages = doc.countPages()
     const pageIndex = Math.min(Math.max(Number(page) || 0, 0), numPages - 1)
 

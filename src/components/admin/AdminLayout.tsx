@@ -19,7 +19,6 @@ import {
 export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/my-tasks',         icon: CheckCircle,     label: 'My Tasks' },
-  { href: '/admin/shipments',        icon: Ship,            label: 'Shipments' },
   { href: '/admin/shipment-entry',   icon: Ship,            label: 'Shipment Entry' },
   { href: '/admin/documents-upload', icon: Upload,          label: 'Upload Docs' },
   { href: '/admin/drive-files',      icon: Database,        label: 'Shipment Overview' },

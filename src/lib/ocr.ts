@@ -4,15 +4,14 @@
 
 import { createWorker } from 'tesseract.js'
 import os from 'os'
+import { openPdf } from '@/lib/mupdfDoc'
 
 const MAX_PAGES = 5
 // Vercel/serverless functions only allow writes to /tmp — os.tmpdir() resolves to that in production
 const CACHE_PATH = os.tmpdir()
 
 export async function ocrPdf(buffer: Buffer): Promise<string> {
-  // mupdf ships as an ESM module — must be dynamically imported from this CommonJS-compiled file
-  const mupdf = await import('mupdf')
-  const doc = mupdf.Document.openDocument(buffer, 'application/pdf')
+  const { mupdf, doc } = await openPdf(buffer)
   const numPages = Math.min(doc.countPages(), MAX_PAGES)
   const matrix = mupdf.Matrix.scale(2, 2)
 

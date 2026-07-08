@@ -5,6 +5,7 @@
 
 import { createWorker } from 'tesseract.js'
 import os from 'os'
+import { openPdf } from '@/lib/mupdfDoc'
 
 const CACHE_PATH = os.tmpdir()
 const RENDER_SCALE = 3
@@ -25,8 +26,7 @@ export async function extractBox(buffer: Buffer, box: PctBox): Promise<string> {
 // language data) and re-rendering the same page per field is what made a form
 // with 15-20 boxed fields take many seconds; this does it all in one pass.
 export async function extractBoxes(buffer: Buffer, boxes: Record<string, PctBox>): Promise<Record<string, string>> {
-  const mupdf = await import('mupdf')
-  const doc = mupdf.Document.openDocument(buffer, 'application/pdf')
+  const { mupdf, doc } = await openPdf(buffer)
   const matrix = mupdf.Matrix.scale(RENDER_SCALE, RENDER_SCALE)
   const pixmapCache = new Map<number, any>()
   const worker = await createWorker('eng', 1, { cachePath: CACHE_PATH })
@@ -49,8 +49,7 @@ export async function extractBoxes(buffer: Buffer, boxes: Record<string, PctBox>
 }
 
 async function extractBoxWithWorker(buffer: Buffer, box: PctBox, worker: any): Promise<string> {
-  const mupdf = await import('mupdf')
-  const doc = mupdf.Document.openDocument(buffer, 'application/pdf')
+  const { mupdf, doc } = await openPdf(buffer)
   const pageIndex = Math.min(Math.max(box.page || 0, 0), doc.countPages() - 1)
   const page = doc.loadPage(pageIndex)
   const matrix = mupdf.Matrix.scale(RENDER_SCALE, RENDER_SCALE)

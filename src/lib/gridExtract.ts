@@ -4,6 +4,7 @@
 
 import { createWorker } from 'tesseract.js'
 import os from 'os'
+import { openPdf } from '@/lib/mupdfDoc'
 
 const CACHE_PATH = os.tmpdir()
 const RENDER_SCALE = 3 // higher res crops -> better OCR accuracy on small boxes
@@ -44,8 +45,7 @@ export async function extractByGrid(
   fieldMap: FieldMap,
   pageIndex = 0
 ): Promise<GridField[]> {
-  const mupdf = await import('mupdf')
-  const doc = mupdf.Document.openDocument(buffer, 'application/pdf')
+  const { mupdf, doc } = await openPdf(buffer)
   const page = doc.loadPage(pageIndex)
   const matrix = mupdf.Matrix.scale(RENDER_SCALE, RENDER_SCALE)
   const pagePixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB, false, true)

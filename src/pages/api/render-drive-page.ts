@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { google } from 'googleapis'
+import { openPdf } from '@/lib/mupdfDoc'
 
 // Same rendering as render-page.ts, but for a document that's already saved
 // (only its Drive link is stored in the DB, not the PDF bytes) — downloads
@@ -25,8 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const file = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'arraybuffer' })
     const buffer = Buffer.from(file.data as ArrayBuffer)
 
-    const mupdf = await import('mupdf')
-    const doc = mupdf.Document.openDocument(buffer, 'application/pdf')
+    const { mupdf, doc } = await openPdf(buffer)
     const numPages = doc.countPages()
     const pageIndex = Math.min(Math.max(Number(page) || 0, 0), numPages - 1)
 
