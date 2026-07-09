@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader, supabase } from '@/lib/supabase'
 import { applyTextRules } from '@/lib/textClean'
+import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
 import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
-  Trash2, Pencil, FileWarning, Eye, RefreshCw, Plus, Lock, Unlock,
+  Trash2, Pencil, FileWarning, Eye, RefreshCw, Plus, Lock, Unlock, Mail,
 } from 'lucide-react'
 
 // Three panels here, each gated by its own permission:
@@ -154,6 +155,14 @@ function DocumentsUploadContent() {
   // pending Shipment entry — lets the user pick the right one by hand.
   const [shipmentPickModal, setShipmentPickModal] = useState<{ cusdecId: string; shipments: any[] } | null>(null)
   const [resolvingConflict, setResolvingConflict] = useState(false)
+  // Asked right after each save finishes ("Email this?") — a queue rather
+  // than a single item because "Save All" saves several in a row and each
+  // one should still get its own prompt instead of only the last. Yes opens
+  // emailAttachments with that one file. The Preview list and detail pane
+  // offer the same Email action any time afterwards, in case a prompt was
+  // dismissed or the page was refreshed before it could be answered.
+  const [emailPromptQueue, setEmailPromptQueue] = useState<UploadItem[]>([])
+  const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Full editor state (box drawing, field table) — same as /admin/documents
@@ -383,6 +392,7 @@ function DocumentsUploadContent() {
       }
 
       updateItem(item.id, { status: 'saved', driveLink: link })
+      if (link) setEmailPromptQueue(q => [...q, { ...item, driveLink: link }])
     } catch (e: any) {
       updateItem(item.id, { status: 'error', error: e.message })
       setError(e.message)
@@ -1012,11 +1022,17 @@ function DocumentsUploadContent() {
                       </p>
                     </div>
                     {selectedRec.drive_url && (
-                      <a href={selectedRec.drive_url} target="_blank" rel="noreferrer"
-                        className="flex items-center gap-1.5 text-xs text-white px-3 py-1.5 rounded-lg flex-shrink-0 ml-2"
-                        style={{ background: TYPE_COLORS[selectedRec.doc_type] || '#1B3A5C' }}>
-                        <ExternalLink size={12}/> Open in Drive
-                      </a>
+                      <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                        <a href={selectedRec.drive_url} target="_blank" rel="noreferrer"
+                          className="flex items-center gap-1.5 text-xs text-white px-3 py-1.5 rounded-lg"
+                          style={{ background: TYPE_COLORS[selectedRec.doc_type] || '#1B3A5C' }}>
+                          <ExternalLink size={12}/> Open in Drive
+                        </a>
+                        <button onClick={() => setEmailAttachments([{ filename: selectedRec.file_name, url: selectedRec.drive_url }])}
+                          className="flex items-center gap-1.5 text-xs text-white px-3 py-1.5 rounded-lg" style={{ background: '#22A87A' }}>
+                          <Mail size={12}/> Email
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -1513,6 +1529,25 @@ function DocumentsUploadContent() {
           </div>
         </div>
       )}
+
+      {emailPromptQueue.length > 0 && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-5">
+            <h3 className="font-semibold text-gray-900 mb-1">Email this document?</h3>
+            <p className="text-xs text-gray-500 mb-1 truncate">{emailPromptQueue[0].fileName}</p>
+            {emailPromptQueue.length > 1 && <p className="text-xs text-gray-400 mb-3">{emailPromptQueue.length - 1} more waiting after this one</p>}
+            <div className="flex gap-3 mt-3">
+              <button onClick={() => setEmailPromptQueue(q => q.slice(1))} className="btn-secondary flex-1">No</button>
+              <button onClick={() => {
+                setEmailAttachments([{ filename: emailPromptQueue[0].fileName, url: emailPromptQueue[0].driveLink }])
+                setEmailPromptQueue(q => q.slice(1))
+              }} className="btn-primary flex-1">Yes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {emailAttachments && <EmailPdfModal attachments={emailAttachments} onClose={() => setEmailAttachments(null)}/>}
     </>
   )
 }

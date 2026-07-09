@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import AdminLayout from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine, Anchor } from 'lucide-react'
+import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine, Anchor, Mail, CheckSquare, Square } from 'lucide-react'
+import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
 
 // Shipment-wise overview: search by shipper / CUSDEC code / CUSDEC number /
 // container number — each box is a real database value (still hand-typeable,
@@ -66,6 +67,28 @@ export default function DriveFilesPage() {
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
   const [error, setError] = useState('')
+  // "Select just the PDFs you actually need" for emailing — a checkbox next
+  // to every View-PDF link across CUSDEC/CDN/Barcode/Boat Note, keyed by a
+  // unique id so the same picker works across every result card at once.
+  const [selectedDocs, setSelectedDocs] = useState<Record<string, EmailAttachment>>({})
+  const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
+
+  function toggleDoc(key: string, attachment: EmailAttachment) {
+    setSelectedDocs(prev => {
+      const next = { ...prev }
+      if (next[key]) delete next[key]
+      else next[key] = attachment
+      return next
+    })
+  }
+  function DocCheckbox({ docKey, attachment }: { docKey: string; attachment: EmailAttachment }) {
+    const on = !!selectedDocs[docKey]
+    return (
+      <button onClick={() => toggleDoc(docKey, attachment)} title="Select for email" className="text-gray-300 hover:text-green-600">
+        {on ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>}
+      </button>
+    )
+  }
 
   // Re-fetch suggestion lists whenever shipper/code/number changes, so
   // picking one narrows the others to what actually exists together.
@@ -209,7 +232,10 @@ export default function DriveFilesPage() {
                     CAP {entry.cusdec.cap || '—'} · {entry.cdns.length} CDN row{entry.cdns.length === 1 ? '' : 's'}
                   </span>
                   {entry.cusdec.pdf_url && (
-                    <a href={entry.cusdec.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={13}/>View CUSDEC PDF</a>
+                    <>
+                      <DocCheckbox docKey={`cusdec-${entry.cusdec.id}`} attachment={{ filename: `CUSDEC_${entry.cusdec.code}_${entry.cusdec.number}.pdf`, url: entry.cusdec.pdf_url }}/>
+                      <a href={entry.cusdec.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={13}/>View CUSDEC PDF</a>
+                    </>
                   )}
                 </div>
               </div>
@@ -230,7 +256,10 @@ export default function DriveFilesPage() {
                           {cdn.export_release_passed ? <span className="text-[10px] font-medium text-green-600">· released</span> : cdn.boat_note_passed ? <span className="text-[10px] font-medium text-blue-600">· boat note passed</span> : null}
                         </span>
                         {cdn.pdf_url && (
-                          <a href={cdn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={12}/>View CDN PDF</a>
+                          <div className="flex items-center gap-2">
+                            <DocCheckbox docKey={`cdn-${cdn.id}`} attachment={{ filename: `CDN_${cdn.container_no}.pdf`, url: cdn.pdf_url }}/>
+                            <a href={cdn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={12}/>View CDN PDF</a>
+                          </div>
                         )}
                       </div>
                       <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">CDN Details</p>
@@ -242,7 +271,10 @@ export default function DriveFilesPage() {
                             <div className="flex items-center justify-between mb-1.5">
                               <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Barcode Details</p>
                               {barcode.pdf_url && (
-                                <a href={barcode.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Barcode PDF</a>
+                                <div className="flex items-center gap-2">
+                                  <DocCheckbox docKey={`barcode-${barcode.id}`} attachment={{ filename: `Barcode_${cdn.container_no}.pdf`, url: barcode.pdf_url }}/>
+                                  <a href={barcode.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Barcode PDF</a>
+                                </div>
                               )}
                             </div>
                             <FieldGrid record={barcode}/>
@@ -264,7 +296,10 @@ export default function DriveFilesPage() {
                       <div className="flex items-center justify-between mb-1.5">
                         <span className="text-xs font-semibold text-gray-800">{bn.details?.entry_no || bn.details?.bl_no || bn.id.slice(0, 8)}</span>
                         {bn.pdf_url && (
-                          <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Boat Note PDF</a>
+                          <div className="flex items-center gap-2">
+                            <DocCheckbox docKey={`boatnote-${bn.id}`} attachment={{ filename: `BoatNote_${bn.details?.entry_no || bn.id.slice(0, 8)}.pdf`, url: bn.pdf_url }}/>
+                            <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Boat Note PDF</a>
+                          </div>
                         )}
                       </div>
                       <FieldGrid record={bn.details || {}}/>
@@ -283,7 +318,10 @@ export default function DriveFilesPage() {
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs font-semibold text-gray-800">{bn.details?.shipper || '—'} · {bn.details?.entry_no || bn.details?.bl_no || bn.id.slice(0, 8)}</span>
                     {bn.pdf_url && (
-                      <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Boat Note PDF</a>
+                      <div className="flex items-center gap-2">
+                        <DocCheckbox docKey={`orphan-boatnote-${bn.id}`} attachment={{ filename: `BoatNote_${bn.details?.entry_no || bn.id.slice(0, 8)}.pdf`, url: bn.pdf_url }}/>
+                        <a href={bn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View Boat Note PDF</a>
+                      </div>
                     )}
                   </div>
                   <FieldGrid record={bn.details || {}}/>
@@ -292,6 +330,20 @@ export default function DriveFilesPage() {
             </div>
           )}
         </div>
+
+        {Object.keys(selectedDocs).length > 0 && (
+          <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2">
+            <button onClick={() => setSelectedDocs({})} className="text-xs text-gray-500 bg-white border border-gray-200 rounded-full px-3 py-2 shadow-lg hover:bg-gray-50">
+              Clear ({Object.keys(selectedDocs).length})
+            </button>
+            <button onClick={() => setEmailAttachments(Object.values(selectedDocs))}
+              className="flex items-center gap-2 text-sm font-medium text-white rounded-full px-4 py-2.5 shadow-lg" style={{ background: '#22A87A' }}>
+              <Mail size={15}/>Email Selected ({Object.keys(selectedDocs).length})
+            </button>
+          </div>
+        )}
+
+        {emailAttachments && <EmailPdfModal attachments={emailAttachments} onClose={() => setEmailAttachments(null)}/>}
       </div>
   )
 }
