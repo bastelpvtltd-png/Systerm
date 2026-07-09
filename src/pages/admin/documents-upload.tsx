@@ -225,6 +225,42 @@ function DocumentsUploadContent() {
     setItems(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it))
   }
 
+  // Shared by the initial upload and Retry — Retry reuses the base64 already
+  // read off the file the first time, so a transient "invalid pdf structure"
+  // (see extract-pdf.ts's own retry — this is the rare case that still slips
+  // through) can be tried again without asking the user to re-select the file.
+  async function extractOne(itemId: string, base64: string) {
+    updateItem(itemId, { base64, status: 'extracting', error: '' })
+    try {
+      const res = await fetch('/api/extract-pdf', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64 }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Extraction failed')
+      updateItem(itemId, {
+        status: 'ready',
+        detectedType: (json.detectedDocType as DocType) || '',
+        fields: (json.fields || []).map((f: PdfField) => ({ ...f, rawValue: f.value })),
+        rawText: json.rawText || '',
+        scanned: !!json.scanned,
+        boxes: json.boxes || {},
+        variant: json.variant === 'scanned' ? 'scanned' : 'native',
+      })
+    } catch (e: any) {
+      updateItem(itemId, { status: 'error', error: e.message })
+      setError(e.message)
+    }
+  }
+
+  async function retryExtraction(item: UploadItem) {
+    if (item.base64) return extractOne(item.id, item.base64)
+    // Fallback for the rare case the base64 wasn't captured before the error
+    // (e.g. FileReader itself failed) — re-read straight from the same File.
+    const base64 = await fileToBase64(item.file)
+    return extractOne(item.id, base64)
+  }
+
   async function handleFiles(fileList: FileList | null) {
     if (!fileList || !fileList.length) return
     const pdfFiles = Array.from(fileList).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'))
@@ -238,28 +274,8 @@ function DocumentsUploadContent() {
     setItems(prev => [...prev, ...newItems])
 
     for (const item of newItems) {
-      try {
-        const base64 = await fileToBase64(item.file)
-        updateItem(item.id, { base64, status: 'extracting' })
-        const res = await fetch('/api/extract-pdf', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64 }),
-        })
-        const json = await res.json()
-        if (!res.ok) throw new Error(json.error || 'Extraction failed')
-        updateItem(item.id, {
-          status: 'ready',
-          detectedType: (json.detectedDocType as DocType) || '',
-          fields: (json.fields || []).map((f: PdfField) => ({ ...f, rawValue: f.value })),
-          rawText: json.rawText || '',
-          scanned: !!json.scanned,
-          boxes: json.boxes || {},
-          variant: json.variant === 'scanned' ? 'scanned' : 'native',
-        })
-      } catch (e: any) {
-        updateItem(item.id, { status: 'error', error: e.message })
-        setError(e.message)
-      }
+      const base64 = await fileToBase64(item.file)
+      await extractOne(item.id, base64)
     }
   }
 
@@ -932,6 +948,11 @@ function DocumentsUploadContent() {
                         </p>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
+                        {it.status === 'error' && (
+                          <button onClick={e => { e.stopPropagation(); retryExtraction(it) }} title="Retry (same file, no re-upload)" className="text-gray-300 hover:text-amber-600 p-1">
+                            <RefreshCw size={12}/>
+                          </button>
+                        )}
                         <button onClick={e => startRename(it, e)} title="Rename" className="text-gray-300 hover:text-gray-600 p-1">
                           <Pencil size={12}/>
                         </button>
@@ -1121,6 +1142,11 @@ function DocumentsUploadContent() {
                           {statusLabel(it)} · {Object.keys(it.boxes).length} box{Object.keys(it.boxes).length === 1 ? '' : 'es'}
                         </p>
                       </div>
+                      {it.status === 'error' && (
+                        <button onClick={e => { e.stopPropagation(); retryExtraction(it) }} title="Retry (same file, no re-upload)" className="text-gray-300 hover:text-amber-600 p-1 flex-shrink-0">
+                          <RefreshCw size={13}/>
+                        </button>
+                      )}
                       <ScanLine size={13} className="text-gray-300 flex-shrink-0"/>
                     </div>
                   )

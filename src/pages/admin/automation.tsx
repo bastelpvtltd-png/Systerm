@@ -16,7 +16,11 @@ type AutomationTab =
   | 'boat-note' | 'boat-note-check' | 'export-release'
   | 'credentials' | 'notes'
 
-interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean }
+interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean; tin_vat?: string }
+
+// The stored CUSDEC number often carries its serial letter/space (e.g.
+// "E 38812") — the Customs lookup form wants just the digits.
+function cleanCusdecNumber(raw: string): string { return (raw || '').replace(/\D/g, '') }
 interface CdnRec { id: string; code: string; cusdec_number: string; shipper: string; consignee: string; container_no: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; driver_name: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; cdn_no: string; boat_note_passed?: boolean; export_release_passed?: boolean }
 
 const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: string }[] = [
@@ -828,31 +832,32 @@ function ExportReleaseCheckPanel() {
   const eligible = cusdecs.filter(boatNotePassed)
   const selected = eligible.find(c => c.id === selectedId) || null
 
+  // The CUSDEC's own tin_vat column (filled in when it was extracted/imported)
+  // is the authoritative source — shipper_profiles.tin is only a fallback for
+  // records that don't have one yet.
+  async function resolveTin(c: CusdecRec): Promise<string> {
+    if (c.tin_vat) return c.tin_vat
+    const shipperName = (c.exporter || '').split('\n')[0].trim()
+    try {
+      const pr = await fetch(`/api/shipper-profile?shipper=${encodeURIComponent(shipperName)}`)
+      return (await pr.json()).profile?.tin || ''
+    } catch { return '' }
+  }
+
   async function pickCusdec(id: string) {
     setSelectedId(id)
     const c = eligible.find(x => x.id === id)
     if (!c) return
-    const shipperName = (c.exporter || '').split('\n')[0].trim()
-    let tin = ''
-    try {
-      const pr = await fetch(`/api/shipper-profile?shipper=${encodeURIComponent(shipperName)}`)
-      const pd = await pr.json()
-      tin = pd.profile?.tin || ''
-    } catch {}
-    setForm({ officeCode: c.code || '', serial: 'E', cusdecNumber: c.number || '', cusdecYear: yearOf(c.date), consigneeTIN: tin })
+    const tin = await resolveTin(c)
+    setForm({ officeCode: c.code || '', serial: 'E', cusdecNumber: cleanCusdecNumber(c.number), cusdecYear: yearOf(c.date), consigneeTIN: tin })
   }
 
   async function runOne(c: CusdecRec, tinOverride?: string) {
-    const shipperName = (c.exporter || '').split('\n')[0].trim()
-    let tin = tinOverride
-    if (!tin) {
-      const pr = await fetch(`/api/shipper-profile?shipper=${encodeURIComponent(shipperName)}`)
-      tin = (await pr.json()).profile?.tin || ''
-    }
-    if (!tin) throw new Error(`No saved Company TIN for "${shipperName}" — enter it once manually first`)
+    const tin = tinOverride || await resolveTin(c)
+    if (!tin) throw new Error(`No Company TIN found for CUSDEC E ${c.number} (not on the record or in the saved shipper profile) — enter it once manually first`)
     const res = await fetch('/api/export-release-check', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ officeCode: c.code, serial: 'E', cusdecNumber: c.number, cusdecYear: yearOf(c.date), consigneeTIN: tin, cusdecId: c.id }),
+      body: JSON.stringify({ officeCode: c.code, serial: 'E', cusdecNumber: cleanCusdecNumber(c.number), cusdecYear: yearOf(c.date), consigneeTIN: tin, cusdecId: c.id }),
     })
     const d = await res.json()
     if (!res.ok) throw new Error(d.error)
