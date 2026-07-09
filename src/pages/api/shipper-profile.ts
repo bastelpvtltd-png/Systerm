@@ -20,11 +20,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
-      const { shipper, consignee, bank_details } = req.body
+      const { shipper, consignee, bank_details, tin } = req.body
       if (!shipper) return res.status(400).json({ error: 'shipper required' })
+      const patch: Record<string, any> = { shipper, consignee: consignee || null, bank_details: bank_details || null, updated_at: new Date().toISOString() }
+      if (tin !== undefined) patch.tin = tin || null
       const { error } = await supabaseAdmin
         .from('shipper_profiles')
-        .upsert({ shipper, consignee: consignee || null, bank_details: bank_details || null, updated_at: new Date().toISOString() }, { onConflict: 'shipper' })
+        .upsert(patch, { onConflict: 'shipper' })
       if (error) return res.status(400).json({ error: error.message })
       return res.json({ ok: true })
     }

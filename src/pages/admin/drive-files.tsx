@@ -19,7 +19,14 @@ interface Options { shippers: string[]; codes: string[]; numbers: string[]; cont
 
 // Bookkeeping columns that aren't a real extracted field — never shown in the
 // full-details grid below.
-const EXCLUDE_KEYS = new Set(['id', 'created_at', 'uploaded_at', 'uploaded_by', 'pdf_url', 'status', 'code', 'number', 'cusdec_number', 'container_no'])
+const EXCLUDE_KEYS = new Set(['id', 'created_at', 'uploaded_at', 'uploaded_by', 'pdf_url', 'status', 'code', 'number', 'cusdec_number', 'container_no', 'boat_note_passed', 'boat_note_checked_at', 'export_release_passed', 'export_release_checked_at'])
+// Blue = Boat Note passed (Automation tab), Green = Export Release passed —
+// green wins once both are true, matching the CUSDEC/CDN row coloring rule.
+function statusBorderClass(passedBoatNote?: boolean, passedRelease?: boolean) {
+  if (passedRelease) return 'border-l-4 border-l-green-500'
+  if (passedBoatNote) return 'border-l-4 border-l-blue-500'
+  return ''
+}
 const LABEL_OVERRIDES: Record<string, string> = {
   cap: 'C.A.P.', hs_code: '(HS) Code', cty_of_last: 'Cty of Last',
   voyage_no: 'Voyage No./Date', bl_no: 'BL No.', pkges: 'PKGES',
@@ -107,6 +114,11 @@ export default function DriveFilesPage() {
     return !cap || Number.isNaN(cap) || entry.cdns.length === cap
   }
 
+  // A CUSDEC only turns blue once every one of its CDNs (matching CAP) has
+  // itself passed Boat Note check — same rule the Automation tab uses.
+  const cusdecBoatNotePassed = (entry: OverviewEntry) =>
+    entry.cdns.length > 0 && cdnCountMatchesCap(entry) && entry.cdns.every(({ cdn }) => cdn.boat_note_passed)
+
   return (
       <div className="p-6">
         <div className="mb-5">
@@ -183,7 +195,7 @@ export default function DriveFilesPage() {
 
         <div className="space-y-4">
           {results.map(entry => (
-            <div key={entry.cusdec.id} className="card">
+            <div key={entry.cusdec.id} className={`card ${statusBorderClass(cusdecBoatNotePassed(entry), entry.cusdec.export_release_passed)}`}>
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <FileText size={16} className="text-[#1B3A5C]"/>
@@ -211,10 +223,11 @@ export default function DriveFilesPage() {
               ) : (
                 <div className="space-y-3">
                   {entry.cdns.map(({ cdn, barcode }) => (
-                    <div key={cdn.id} className="border border-gray-100 rounded-lg p-3">
+                    <div key={cdn.id} className={`border border-gray-100 rounded-lg p-3 ${statusBorderClass(cdn.boat_note_passed, cdn.export_release_passed)}`}>
                       <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
                         <span className="flex items-center gap-1.5 font-mono font-semibold text-sm text-gray-800">
                           <Package size={13} className="text-gray-400"/>{cdn.container_no || '—'}
+                          {cdn.export_release_passed ? <span className="text-[10px] font-medium text-green-600">· released</span> : cdn.boat_note_passed ? <span className="text-[10px] font-medium text-blue-600">· boat note passed</span> : null}
                         </span>
                         {cdn.pdf_url && (
                           <a href={cdn.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={12}/>View CDN PDF</a>

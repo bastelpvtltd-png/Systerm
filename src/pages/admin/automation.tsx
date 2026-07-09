@@ -4,6 +4,7 @@ import { authHeader } from '@/lib/supabase'
 import { useBoatNoteCreator } from '@/lib/useBoatNoteCreator'
 import { downloadBoatNotePdf } from '@/lib/boatNotePdf'
 import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
+import { yearOf } from '@/lib/flexibleDate'
 import {
   Zap, FileCode, ScanText, Barcode as BarcodeIcon, Truck, RefreshCw, Anchor,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Download, Plus, Trash2,
@@ -15,8 +16,8 @@ type AutomationTab =
   | 'boat-note' | 'boat-note-check' | 'export-release'
   | 'credentials' | 'notes'
 
-interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string }
-interface CdnRec { id: string; code: string; cusdec_number: string; shipper: string; consignee: string; container_no: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; driver_name: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; cdn_no: string }
+interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean }
+interface CdnRec { id: string; code: string; cusdec_number: string; shipper: string; consignee: string; container_no: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; driver_name: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; cdn_no: string; boat_note_passed?: boolean; export_release_passed?: boolean }
 
 const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: string }[] = [
   { key: 'xml', label: 'Cusdec XML Generator', icon: FileCode, permission: 'section:automation.xml-generator' },
@@ -672,25 +673,69 @@ function BoatNoteCreate() {
 // ── 2.5 Status Checks (Boat Note Check / Export Release Check) ──────────
 // Both hit the real public (no-login) lookup on each site directly — see
 // src/pages/api/boat-note-check.ts and export-release-check.ts for how the
-// request/response shape was confirmed against the live pages.
+// request/response shape was confirmed against the live pages. Each offers
+// a Manual Trigger (check one picked item) and an Auto Trigger (loop every
+// item that still needs checking) — a passed Boat Note check turns that CDN
+// blue; a passed Export Release turns the CUSDEC (and its already-blue CDNs)
+// green. Export Release only ever runs against CDNs/CUSDECs that already
+// passed Boat Note.
 function BoatNoteCheckPanel() {
-  const [containerNo, setContainerNo] = useState('')
+  const [cdns, setCdns] = useState<CdnRec[]>([])
+  const [search, setSearch] = useState('')
+  const [selectedId, setSelectedId] = useState('')
   const [busy, setBusy] = useState(false)
+  const [autoBusy, setAutoBusy] = useState(false)
+  const [autoProgress, setAutoProgress] = useState('')
   const [error, setError] = useState('')
-  const [result, setResult] = useState<{ containerNo: string; vessel: string; level: string; status: string } | null>(null)
+  const [result, setResult] = useState<{ containerNo: string; vessel: string; level: string; status: string; passed: boolean } | null>(null)
 
-  async function check() {
+  async function load() {
+    const r = await fetch('/api/list-records?table=cdn&limit=500')
+    const d = await r.json()
+    setCdns(d.records || [])
+  }
+  useEffect(() => { load() }, [])
+
+  const filtered = cdns.filter(c => !search || c.container_no?.toLowerCase().includes(search.toLowerCase()) || c.shipper?.toLowerCase().includes(search.toLowerCase()))
+  const selected = cdns.find(c => c.id === selectedId) || null
+
+  async function runOne(cdn: CdnRec) {
+    const res = await fetch('/api/boat-note-check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ containerNo: cdn.container_no, cdnId: cdn.id }),
+    })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.error)
+    return d
+  }
+
+  async function manualTrigger() {
+    if (!selected) return
     setBusy(true); setError(''); setResult(null)
     try {
-      const res = await fetch('/api/boat-note-check', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ containerNo }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error)
+      const d = await runOne(selected)
       setResult(d)
+      if (d.passed) await load()
     } catch (e: any) { setError(e.message) }
     finally { setBusy(false) }
+  }
+
+  async function autoTrigger() {
+    const pending = cdns.filter(c => !c.boat_note_passed && c.container_no)
+    if (!pending.length) { setAutoProgress('Nothing pending — every CDN already checked.'); return }
+    setAutoBusy(true); setError('')
+    let passedCount = 0
+    for (let i = 0; i < pending.length; i++) {
+      setAutoProgress(`Checking ${i + 1}/${pending.length} — ${pending[i].container_no}...`)
+      try {
+        const d = await runOne(pending[i])
+        if (d.passed) passedCount++
+      } catch { /* keep going through the rest of the batch */ }
+      await new Promise(r => setTimeout(r, 400))
+    }
+    await load()
+    setAutoProgress(`Done — ${passedCount}/${pending.length} newly passed.`)
+    setAutoBusy(false)
   }
 
   const levelColor = result?.level === 'success' ? 'bg-green-50 border-green-200 text-green-700'
@@ -698,86 +743,221 @@ function BoatNoteCheckPanel() {
     : 'bg-amber-50 border-amber-200 text-amber-700'
 
   return (
-    <div className="card max-w-xl">
-      <h2 className="font-semibold text-gray-900 text-sm mb-2">Boat Note Check</h2>
-      <p className="text-xs text-gray-500 mb-3">Public lookup on Trico Logistics' portal — no login required.</p>
-      <div className="flex gap-2">
-        <input value={containerNo} onChange={e => setContainerNo(e.target.value.toUpperCase())} placeholder="Container Number" className="input flex-1"/>
-        <button onClick={check} disabled={busy || !containerNo} className="btn-primary flex items-center gap-2 whitespace-nowrap">
-          {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check
-        </button>
-      </div>
-      {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
-      {result && (
-        <div className={`mt-4 border rounded-lg p-3 text-sm ${levelColor}`}>
-          <p><span className="font-semibold">Container:</span> {result.containerNo}</p>
-          {result.vessel && <p><span className="font-semibold">Vessel / Voyage:</span> {result.vessel}</p>}
-          <p className="mt-1">{result.status}</p>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-900 text-sm">Select CDN</h2>
+          <button onClick={autoTrigger} disabled={autoBusy} className="btn-secondary flex items-center gap-2 text-xs">
+            {autoBusy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Auto Trigger (all pending)
+          </button>
         </div>
-      )}
+        {autoProgress && <p className="text-xs text-gray-500 mb-2">{autoProgress}</p>}
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container or shipper..." className="input mb-3"/>
+        <div className="space-y-1 max-h-96 overflow-y-auto">
+          {filtered.map(c => (
+            <button key={c.id} onClick={() => setSelectedId(c.id)}
+              className={`w-full text-left p-2.5 rounded-lg border-l-4 border text-xs ${
+                selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'
+              } ${c.boat_note_passed ? '!border-l-blue-500' : '!border-l-transparent'}`}>
+              <p className="font-bold text-gray-800">{c.container_no || '—'} {c.boat_note_passed && <span className="text-blue-600 font-normal">· passed</span>}</p>
+              <p className="text-gray-600 truncate">{c.shipper?.slice(0, 40)}</p>
+            </button>
+          ))}
+          {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CDNs found</p>}
+        </div>
+      </div>
+
+      <div className="card">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Manual Trigger</h2>
+        {!selected ? (
+          <p className="text-xs text-gray-400 text-center py-12">Select a CDN to check</p>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-3">Container: <span className="font-mono font-semibold text-gray-800">{selected.container_no}</span></p>
+            <button onClick={manualTrigger} disabled={busy} className="btn-primary flex items-center gap-2">
+              {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check Status
+            </button>
+            {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
+            {result && (
+              <div className={`mt-4 border rounded-lg p-3 text-sm ${levelColor}`}>
+                <p><span className="font-semibold">Container:</span> {result.containerNo}</p>
+                {result.vessel && <p><span className="font-semibold">Vessel / Voyage:</span> {result.vessel}</p>}
+                <p className="mt-1">{result.status}</p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
 
 function ExportReleaseCheckPanel() {
   const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
+  const [cdns, setCdns] = useState<CdnRec[]>([])
+  const [selectedId, setSelectedId] = useState('')
   const [form, setForm] = useState({ officeCode: '', serial: 'E', cusdecNumber: '', cusdecYear: '', consigneeTIN: '' })
   const [busy, setBusy] = useState(false)
+  const [autoBusy, setAutoBusy] = useState(false)
+  const [autoProgress, setAutoProgress] = useState('')
   const [error, setError] = useState('')
-  const [result, setResult] = useState<{ found: boolean; message?: string; text?: string } | null>(null)
+  const [result, setResult] = useState<{ found: boolean; message?: string; text?: string; passed?: boolean | null; releaseDate?: string | null } | null>(null)
 
-  useEffect(() => {
-    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
-  }, [])
+  async function load() {
+    const [cr, dr] = await Promise.all([
+      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()),
+      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()),
+    ])
+    setCusdecs(cr.records || [])
+    setCdns(dr.records || [])
+  }
+  useEffect(() => { load() }, [])
 
-  function pickCusdec(id: string) {
-    const c = cusdecs.find(x => x.id === id)
-    if (!c) return
-    setForm(f => ({ ...f, officeCode: c.code || f.officeCode, cusdecNumber: c.number || '', cusdecYear: (c.date || '').slice(0, 4) || f.cusdecYear }))
+  // A CUSDEC only counts as "Boat Note passed" once every CDN row that
+  // belongs to it (matched by code+number, same as the Overview page) is
+  // itself boat_note_passed — matching the CAP is the give-away that there
+  // aren't more containers still waiting to be checked.
+  function boatNotePassed(c: CusdecRec): boolean {
+    const own = cdns.filter(d => d.code === c.code && d.cusdec_number === c.number)
+    if (!own.length) return false
+    const cap = parseInt(c.cap || '', 10)
+    if (cap && own.length < cap) return false
+    return own.every(d => d.boat_note_passed)
   }
 
-  async function check() {
+  const eligible = cusdecs.filter(boatNotePassed)
+  const selected = eligible.find(c => c.id === selectedId) || null
+
+  async function pickCusdec(id: string) {
+    setSelectedId(id)
+    const c = eligible.find(x => x.id === id)
+    if (!c) return
+    const shipperName = (c.exporter || '').split('\n')[0].trim()
+    let tin = ''
+    try {
+      const pr = await fetch(`/api/shipper-profile?shipper=${encodeURIComponent(shipperName)}`)
+      const pd = await pr.json()
+      tin = pd.profile?.tin || ''
+    } catch {}
+    setForm({ officeCode: c.code || '', serial: 'E', cusdecNumber: c.number || '', cusdecYear: yearOf(c.date), consigneeTIN: tin })
+  }
+
+  async function runOne(c: CusdecRec, tinOverride?: string) {
+    const shipperName = (c.exporter || '').split('\n')[0].trim()
+    let tin = tinOverride
+    if (!tin) {
+      const pr = await fetch(`/api/shipper-profile?shipper=${encodeURIComponent(shipperName)}`)
+      tin = (await pr.json()).profile?.tin || ''
+    }
+    if (!tin) throw new Error(`No saved Company TIN for "${shipperName}" — enter it once manually first`)
+    const res = await fetch('/api/export-release-check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ officeCode: c.code, serial: 'E', cusdecNumber: c.number, cusdecYear: yearOf(c.date), consigneeTIN: tin, cusdecId: c.id }),
+    })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.error)
+    return d
+  }
+
+  async function manualTrigger() {
+    if (!selected) return
     setBusy(true); setError(''); setResult(null)
     try {
+      // Manual trigger uses whatever TIN is currently in the form (so a
+      // just-typed correction is respected), and remembers it for next time.
+      if (form.consigneeTIN) {
+        const shipperName = (selected.exporter || '').split('\n')[0].trim()
+        fetch('/api/shipper-profile', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shipper: shipperName, tin: form.consigneeTIN }),
+        }).catch(() => {})
+      }
       const res = await fetch('/api/export-release-check', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, cusdecId: selected.id }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setResult(d)
+      if (d.passed) await load()
     } catch (e: any) { setError(e.message) }
     finally { setBusy(false) }
   }
 
+  async function autoTrigger() {
+    const pending = eligible.filter(c => !c.export_release_passed)
+    if (!pending.length) { setAutoProgress('Nothing pending — every eligible CUSDEC already checked.'); return }
+    setAutoBusy(true); setError('')
+    let passedCount = 0
+    for (let i = 0; i < pending.length; i++) {
+      setAutoProgress(`Checking ${i + 1}/${pending.length} — E ${pending[i].number}...`)
+      try {
+        const d = await runOne(pending[i])
+        if (d.passed) passedCount++
+      } catch { /* keep going through the rest of the batch */ }
+      await new Promise(r => setTimeout(r, 400))
+    }
+    await load()
+    setAutoProgress(`Done — ${passedCount}/${pending.length} newly passed.`)
+    setAutoBusy(false)
+  }
+
   return (
-    <div className="card max-w-2xl">
-      <h2 className="font-semibold text-gray-900 text-sm mb-2">Export Release Check</h2>
-      <p className="text-xs text-gray-500 mb-3">Public TrackMyCusDec lookup on Sri Lanka Customs' site — no login required, but needs the exact Office Code / Serial / Number / Year / Company TIN.</p>
-      <Field label="Fill from an existing CUSDEC (optional)">
-        <select onChange={e => pickCusdec(e.target.value)} className="input" defaultValue="">
-          <option value="">Select...</option>
-          {cusdecs.map(c => <option key={c.id} value={c.id}>E {c.number} — {c.exporter?.slice(0, 30)}</option>)}
-        </select>
-      </Field>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
-        <Field label="Office Code"><input value={form.officeCode} onChange={e => setForm(f => ({ ...f, officeCode: e.target.value }))} className="input"/></Field>
-        <Field label="Serial"><input value={form.serial} onChange={e => setForm(f => ({ ...f, serial: e.target.value }))} className="input"/></Field>
-        <Field label="Cusdec Number"><input value={form.cusdecNumber} onChange={e => setForm(f => ({ ...f, cusdecNumber: e.target.value }))} className="input"/></Field>
-        <Field label="Cusdec Year"><input value={form.cusdecYear} onChange={e => setForm(f => ({ ...f, cusdecYear: e.target.value }))} className="input"/></Field>
-        <Field label="Company TIN"><input value={form.consigneeTIN} onChange={e => setForm(f => ({ ...f, consigneeTIN: e.target.value }))} className="input"/></Field>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-900 text-sm">Select CUSDEC (Boat Note passed only)</h2>
+          <button onClick={autoTrigger} disabled={autoBusy} className="btn-secondary flex items-center gap-2 text-xs">
+            {autoBusy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Auto Trigger (all pending)
+          </button>
+        </div>
+        {autoProgress && <p className="text-xs text-gray-500 mb-2">{autoProgress}</p>}
+        <div className="space-y-1 max-h-96 overflow-y-auto">
+          {eligible.map(c => (
+            <button key={c.id} onClick={() => pickCusdec(c.id)}
+              className={`w-full text-left p-2.5 rounded-lg border-l-4 border text-xs ${
+                selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'
+              } ${c.export_release_passed ? '!border-l-green-500' : '!border-l-blue-400'}`}>
+              <p className="font-bold text-gray-800">E {c.number} {c.export_release_passed && <span className="text-green-600 font-normal">· released</span>}</p>
+              <p className="text-gray-600 truncate">{c.exporter?.slice(0, 40)}</p>
+            </button>
+          ))}
+          {eligible.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDEC has passed Boat Note check yet</p>}
+        </div>
       </div>
-      <button onClick={check} disabled={busy || !form.officeCode || !form.cusdecNumber || !form.cusdecYear || !form.consigneeTIN}
-        className="btn-primary mt-4 flex items-center gap-2">
-        {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check Status
-      </button>
-      {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
-      {result && !result.found && (
-        <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{result.message}</p>
-      )}
-      {result?.found && (
-        <pre className="mt-4 border border-gray-200 rounded-lg p-3 text-xs bg-gray-50 whitespace-pre-wrap max-h-96 overflow-y-auto">{result.text}</pre>
-      )}
+
+      <div className="card">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Manual Trigger</h2>
+        {!selected ? (
+          <p className="text-xs text-gray-400 text-center py-12">Select a CUSDEC to check</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+              <Field label="Office Code"><input value={form.officeCode} onChange={e => setForm(f => ({ ...f, officeCode: e.target.value }))} className="input"/></Field>
+              <Field label="Serial"><input value={form.serial} onChange={e => setForm(f => ({ ...f, serial: e.target.value }))} className="input"/></Field>
+              <Field label="Cusdec Number"><input value={form.cusdecNumber} onChange={e => setForm(f => ({ ...f, cusdecNumber: e.target.value }))} className="input"/></Field>
+              <Field label="Cusdec Year (from CUSDEC date)"><input value={form.cusdecYear} onChange={e => setForm(f => ({ ...f, cusdecYear: e.target.value }))} className="input"/></Field>
+              <Field label="Company TIN (from database)"><input value={form.consigneeTIN} onChange={e => setForm(f => ({ ...f, consigneeTIN: e.target.value }))} className="input"/></Field>
+            </div>
+            <button onClick={manualTrigger} disabled={busy || !form.officeCode || !form.cusdecNumber || !form.cusdecYear || !form.consigneeTIN}
+              className="btn-primary flex items-center gap-2">
+              {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check Status
+            </button>
+            {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
+            {result && !result.found && (
+              <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{result.message}</p>
+            )}
+            {result?.found && (
+              <>
+                <p className={`text-xs font-semibold mt-3 ${result.passed ? 'text-green-600' : 'text-amber-600'}`}>
+                  {result.passed ? '✓ Export Release passed' : result.passed === false ? '✗ Not passed yet' : '⚠ Could not determine pass/fail — check the raw text below'}
+                </p>
+                <pre className="mt-2 border border-gray-200 rounded-lg p-3 text-xs bg-gray-50 whitespace-pre-wrap max-h-72 overflow-y-auto">{result.text}</pre>
+              </>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
