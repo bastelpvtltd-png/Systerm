@@ -83,8 +83,8 @@ function AutomationContent() {
       {tab === 'trico' && <TricoGatePasses/>}
       {tab === 'data-updates' && <DataUpdates/>}
       {tab === 'boat-note' && <BoatNoteCreate/>}
-      {tab === 'boat-note-check' && <StatusCheck title="Boat Note Check" action="boat-note-check" url="https://s2.tricologi.net/webuser/?option=etc&action=boatnote_check"/>}
-      {tab === 'export-release' && <StatusCheck title="Export Release Check" action="export-release-check" url="https://services.customs.gov.lk/"/>}
+      {tab === 'boat-note-check' && <BoatNoteCheckPanel/>}
+      {tab === 'export-release' && <ExportReleaseCheckPanel/>}
       {tab === 'credentials' && <CredentialsSettings/>}
       {tab === 'notes' && <SystemNotes/>}
     </div>
@@ -670,26 +670,114 @@ function BoatNoteCreate() {
 }
 
 // ── 2.5 Status Checks (Boat Note Check / Export Release Check) ──────────
-function StatusCheck({ title, action, url }: { title: string; action: string; url: string }) {
-  const [query, setQuery] = useState('')
-  const [msg, setMsg] = useState('')
+// Both hit the real public (no-login) lookup on each site directly — see
+// src/pages/api/boat-note-check.ts and export-release-check.ts for how the
+// request/response shape was confirmed against the live pages.
+function BoatNoteCheckPanel() {
+  const [containerNo, setContainerNo] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<{ containerNo: string; vessel: string; level: string; status: string } | null>(null)
+
   async function check() {
-    setBusy(true)
-    setMsg(await notConnectedYet(`${action} (query=${query})`))
-    setBusy(false)
+    setBusy(true); setError(''); setResult(null)
+    try {
+      const res = await fetch('/api/boat-note-check', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ containerNo }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setResult(d)
+    } catch (e: any) { setError(e.message) }
+    finally { setBusy(false) }
   }
+
+  const levelColor = result?.level === 'success' ? 'bg-green-50 border-green-200 text-green-700'
+    : result?.level === 'danger' ? 'bg-red-50 border-red-200 text-red-700'
+    : 'bg-amber-50 border-amber-200 text-amber-700'
+
   return (
     <div className="card max-w-xl">
-      <h2 className="font-semibold text-gray-900 text-sm mb-2">{title}</h2>
-      <p className="text-xs text-gray-500 mb-3">No login required on the source site: <a href={url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{url}</a></p>
+      <h2 className="font-semibold text-gray-900 text-sm mb-2">Boat Note Check</h2>
+      <p className="text-xs text-gray-500 mb-3">Public lookup on Trico Logistics' portal — no login required.</p>
       <div className="flex gap-2">
-        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Container / Reference No." className="input flex-1"/>
-        <button onClick={check} disabled={busy} className="btn-primary flex items-center gap-2 whitespace-nowrap">
-          {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check Status
+        <input value={containerNo} onChange={e => setContainerNo(e.target.value.toUpperCase())} placeholder="Container Number" className="input flex-1"/>
+        <button onClick={check} disabled={busy || !containerNo} className="btn-primary flex items-center gap-2 whitespace-nowrap">
+          {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check
         </button>
       </div>
-      {msg && <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{msg}</p>}
+      {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
+      {result && (
+        <div className={`mt-4 border rounded-lg p-3 text-sm ${levelColor}`}>
+          <p><span className="font-semibold">Container:</span> {result.containerNo}</p>
+          {result.vessel && <p><span className="font-semibold">Vessel / Voyage:</span> {result.vessel}</p>}
+          <p className="mt-1">{result.status}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ExportReleaseCheckPanel() {
+  const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
+  const [form, setForm] = useState({ officeCode: '', serial: 'E', cusdecNumber: '', cusdecYear: '', consigneeTIN: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<{ found: boolean; message?: string; text?: string } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+  }, [])
+
+  function pickCusdec(id: string) {
+    const c = cusdecs.find(x => x.id === id)
+    if (!c) return
+    setForm(f => ({ ...f, officeCode: c.code || f.officeCode, cusdecNumber: c.number || '', cusdecYear: (c.date || '').slice(0, 4) || f.cusdecYear }))
+  }
+
+  async function check() {
+    setBusy(true); setError(''); setResult(null)
+    try {
+      const res = await fetch('/api/export-release-check', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setResult(d)
+    } catch (e: any) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card max-w-2xl">
+      <h2 className="font-semibold text-gray-900 text-sm mb-2">Export Release Check</h2>
+      <p className="text-xs text-gray-500 mb-3">Public TrackMyCusDec lookup on Sri Lanka Customs' site — no login required, but needs the exact Office Code / Serial / Number / Year / Company TIN.</p>
+      <Field label="Fill from an existing CUSDEC (optional)">
+        <select onChange={e => pickCusdec(e.target.value)} className="input" defaultValue="">
+          <option value="">Select...</option>
+          {cusdecs.map(c => <option key={c.id} value={c.id}>E {c.number} — {c.exporter?.slice(0, 30)}</option>)}
+        </select>
+      </Field>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+        <Field label="Office Code"><input value={form.officeCode} onChange={e => setForm(f => ({ ...f, officeCode: e.target.value }))} className="input"/></Field>
+        <Field label="Serial"><input value={form.serial} onChange={e => setForm(f => ({ ...f, serial: e.target.value }))} className="input"/></Field>
+        <Field label="Cusdec Number"><input value={form.cusdecNumber} onChange={e => setForm(f => ({ ...f, cusdecNumber: e.target.value }))} className="input"/></Field>
+        <Field label="Cusdec Year"><input value={form.cusdecYear} onChange={e => setForm(f => ({ ...f, cusdecYear: e.target.value }))} className="input"/></Field>
+        <Field label="Company TIN"><input value={form.consigneeTIN} onChange={e => setForm(f => ({ ...f, consigneeTIN: e.target.value }))} className="input"/></Field>
+      </div>
+      <button onClick={check} disabled={busy || !form.officeCode || !form.cusdecNumber || !form.cusdecYear || !form.consigneeTIN}
+        className="btn-primary mt-4 flex items-center gap-2">
+        {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check Status
+      </button>
+      {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
+      {result && !result.found && (
+        <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{result.message}</p>
+      )}
+      {result?.found && (
+        <pre className="mt-4 border border-gray-200 rounded-lg p-3 text-xs bg-gray-50 whitespace-pre-wrap max-h-96 overflow-y-auto">{result.text}</pre>
+      )}
     </div>
   )
 }
