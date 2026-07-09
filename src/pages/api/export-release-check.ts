@@ -14,13 +14,16 @@ const supabaseAdmin = createClient(
 // back as a distinct "No Data" error page (HTTP 500, <h1 class="error-title">
 // No Data</h1>).
 //
-// Pass/fail rule (confirmed against a real result page): the page lists an
-// "Export release" entry with its own timestamp (e.g. "Export release
-// 2026-07-05 01:34 AM") only once it's actually happened — if the phrase
-// isn't present anywhere at all, it hasn't been released, full stop. When it
-// is present, it only counts as passed if that timestamp is later than the
-// CUSDEC's own date (a stray "(Export release)" heading/label with no date
-// attached, or one dated before the CUSDEC was filed, doesn't count).
+// Pass/fail rule (confirmed against a real result page): "Export release"
+// actually appears TWICE — once as the CURRENT STATUS summary near the top
+// (immediately followed by "Reg Date" — a date with no time, e.g.
+// "24-Jun-2026", which is the CUSDEC's registration date, NOT when it was
+// released), and again as the last row of the CUSDEC ACTIVITY log, which
+// carries the real event timestamp with both date and time (e.g.
+// "2026-07-05 01:34 AM"). Only that second one is meaningful, so the date
+// pattern below *requires* a time component — the CURRENT STATUS block's
+// date-only "Reg Date" simply won't match it, leaving only the activity
+// log's real timestamp to be found.
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 const BASE = 'https://services.customs.gov.lk'
 
@@ -30,7 +33,10 @@ function toSanitizedText(html: string): string {
     .replace(/<[^>]+>/g, '\n').replace(/\n\s*\n+/g, '\n').split('\n').map(l => l.trim()).filter(Boolean).join('\n')
 }
 
-const DATE_PATTERN = /\b(\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?|\d{1,2}[./]\d{1,2}[./]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?)\b/i
+// Requires a time-of-day component so a bare "24-Jun-2026" (the Reg Date
+// next to the CURRENT STATUS summary) can never match — only a genuine
+// activity-log timestamp like "2026-07-05 01:34 AM" or "05/07/2026 1:34 AM" does.
+const DATETIME_PATTERN = /\b(\d{4}-\d{1,2}-\d{1,2}[ T]\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?|\d{1,2}[./]\d{1,2}[./]\d{2,4}\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\b/i
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -60,17 +66,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const text = toSanitizedText(dashHtml)
     const lines = text.split('\n')
-    // Find the specific line naming "export release" — a lone "(Export
-    // release)" heading with nothing else on the line has no date to find,
-    // so keep looking for one that also carries a timestamp.
-    const releaseLineIdx = lines.findIndex(l => /export\s*release/i.test(l))
-    const released = releaseLineIdx >= 0
-    const rowLine = released ? lines[releaseLineIdx] : ''
-
-    // The timestamp can be on the same line or the next one over.
-    const nearby = released ? lines.slice(releaseLineIdx, releaseLineIdx + 2).join(' ') : ''
-    const dateStr = nearby.match(DATE_PATTERN)?.[0] || ''
-    const releaseDate = parseFlexibleDate(dateStr)
+    // "Export release" can appear more than once (CURRENT STATUS summary,
+    // then the CUSDEC ACTIVITY log) — only the occurrence followed by a real
+    // date+time (not the Reg Date's date-only value) is the actual event.
+    let releaseDate: Date | null = null
+    let rowLine = ''
+    for (let i = 0; i < lines.length; i++) {
+      if (!/export\s*release/i.test(lines[i])) continue
+      const window = lines.slice(i, i + 2).join(' ')
+      const m = window.match(DATETIME_PATTERN)
+      if (m) { releaseDate = parseFlexibleDate(m[0]); rowLine = window; break }
+    }
+    const released = !!releaseDate
 
     let passed: boolean | null = null
     let cusdecDateForCompare: Date | null = null
