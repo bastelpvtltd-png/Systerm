@@ -7,6 +7,7 @@ import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
   Trash2, Pencil, FileWarning, Eye, RefreshCw, Plus, Lock, Unlock, Mail,
+  CheckSquare, Square, History,
 } from 'lucide-react'
 
 // Three panels here, each gated by its own permission:
@@ -160,6 +161,28 @@ function DocumentsUploadContent() {
   // Email button shows up on any saved item (here and in Preview/Shipment
   // Overview) instead of interrupting every save with a Yes/No prompt.
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
+  // Preview's "select just the PDFs you need" multi-email, mirroring Shipment
+  // Overview's picker.
+  const [selectedPreviewDocs, setSelectedPreviewDocs] = useState<Record<string, EmailAttachment>>({})
+  function togglePreviewDoc(id: string, attachment: EmailAttachment) {
+    setSelectedPreviewDocs(prev => {
+      const next = { ...prev }
+      if (next[id]) delete next[id]; else next[id] = attachment
+      return next
+    })
+  }
+  // Mail History — only this signed-in user's own sent mail (email-history.ts).
+  const [showMailHistory, setShowMailHistory] = useState(false)
+  const [mailHistory, setMailHistory] = useState<any[]>([])
+  const [loadingMailHistory, setLoadingMailHistory] = useState(false)
+  async function loadMailHistory() {
+    setLoadingMailHistory(true)
+    try {
+      const res = await fetch('/api/email-history', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setMailHistory(d.items || [])
+    } finally { setLoadingMailHistory(false) }
+  }
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Full editor state (box drawing, field table) — same as /admin/documents
@@ -819,6 +842,7 @@ function DocumentsUploadContent() {
   }
 
   const readyCount = items.filter(it => it.status === 'ready').length
+  const savedItems = items.filter(it => it.status === 'saved' && it.driveLink)
 
   // Bulk actions — shown on both the normal "Uploaded" list and the "Admin
   // Edit" list, since they're two views onto the same uploaded items.
@@ -908,6 +932,12 @@ function DocumentsUploadContent() {
                     title="Save all" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
                     {savingAll ? <Loader size={11} className="animate-spin"/> : <Save size={11}/>} Save All
                   </button>
+                  {savedItems.length > 0 && (
+                    <button onClick={() => setEmailAttachments(savedItems.map(it => ({ filename: it.fileName, url: it.driveLink })))}
+                      title="Email every saved file in this list together" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white" style={{ background: '#22A87A' }}>
+                      <Mail size={11}/> Email All Saved ({savedItems.length})
+                    </button>
+                  )}
                   <button onClick={handleDeleteAll}
                     title="Remove all from this list" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-red-600 border border-red-200 hover:bg-red-50">
                     <Trash2 size={11}/> Delete All
@@ -1001,6 +1031,10 @@ function DocumentsUploadContent() {
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold text-gray-900">All Documents</h2>
                 <div className="flex items-center gap-2">
+                  <button onClick={() => { setShowMailHistory(x => !x); if (!showMailHistory) loadMailHistory() }}
+                    className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border ${showMailHistory ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+                    <History size={13}/> Mail History
+                  </button>
                   <select value={filterType} onChange={e => setFilterType(e.target.value)}
                     className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-600">
                     <option value="all">All types</option>
@@ -1012,7 +1046,24 @@ function DocumentsUploadContent() {
                 </div>
               </div>
 
-              {loadingRecs ? (
+              {showMailHistory ? (
+                loadingMailHistory ? (
+                  <div className="flex justify-center py-10"><Loader size={20} className="animate-spin text-gray-400"/></div>
+                ) : mailHistory.length === 0 ? (
+                  <div className="text-center py-10 text-gray-400 text-sm">You haven't sent any mail yet</div>
+                ) : (
+                  <div className="space-y-1.5 max-h-[500px] overflow-y-auto">
+                    {mailHistory.map(h => (
+                      <div key={h.id} className="border border-gray-100 rounded-xl p-3 text-xs">
+                        <p className="font-medium text-gray-800">{h.subject}</p>
+                        <p className="text-gray-500 mt-0.5">To: {h.to_addresses}{h.cc_addresses ? ` · Cc: ${h.cc_addresses}` : ''}{h.bcc_addresses ? ` · Bcc: ${h.bcc_addresses}` : ''}</p>
+                        {h.attachment_names && <p className="text-gray-400 mt-0.5">Attached: {h.attachment_names}</p>}
+                        <p className="text-gray-400 mt-0.5">{new Date(h.sent_at).toLocaleString('en-GB')}</p>
+                      </div>
+                    ))}
+                  </div>
+                )
+              ) : loadingRecs ? (
                 <div className="flex justify-center py-10"><Loader size={20} className="animate-spin text-gray-400"/></div>
               ) : records.length === 0 ? (
                 <div className="text-center py-10 text-gray-400 text-sm">No documents found</div>
@@ -1023,11 +1074,18 @@ function DocumentsUploadContent() {
                     const Def = docDef(rec.doc_type)
                     const Icon = Def?.icon || FileText
                     return (
-                      <button key={rec.id} onClick={() => setSelectedRec(rec)}
-                        className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${
+                      <div key={rec.id} role="button" tabIndex={0} onClick={() => setSelectedRec(rec)}
+                        onKeyDown={e => { if (e.key === 'Enter') setSelectedRec(rec) }}
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left cursor-pointer ${
                           selectedRec?.id === rec.id ? 'border-2' : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
                         }`}
                         style={selectedRec?.id === rec.id ? { borderColor: color, backgroundColor: `${color}10` } : {}}>
+                        {rec.drive_url && (
+                          <button onClick={e => { e.stopPropagation(); togglePreviewDoc(rec.id, { filename: rec.file_name, url: rec.drive_url }) }}
+                            className="flex-shrink-0 text-gray-300 hover:text-green-600">
+                            {selectedPreviewDocs[rec.id] ? <CheckSquare size={15} className="text-green-600"/> : <Square size={15}/>}
+                          </button>
+                        )}
                         <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${color}20` }}>
                           <Icon size={15} style={{ color }}/>
                         </div>
@@ -1041,7 +1099,7 @@ function DocumentsUploadContent() {
                           </div>
                         </div>
                         {rec.drive_url && <ExternalLink size={13} className="text-gray-300 flex-shrink-0"/>}
-                      </button>
+                      </div>
                     )
                   })}
                 </div>
@@ -1122,6 +1180,12 @@ function DocumentsUploadContent() {
                     title="Save all" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
                     {savingAll ? <Loader size={11} className="animate-spin"/> : <Save size={11}/>} Save All
                   </button>
+                  {savedItems.length > 0 && (
+                    <button onClick={() => setEmailAttachments(savedItems.map(it => ({ filename: it.fileName, url: it.driveLink })))}
+                      title="Email every saved file in this list together" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white" style={{ background: '#22A87A' }}>
+                      <Mail size={11}/> Email All Saved ({savedItems.length})
+                    </button>
+                  )}
                   <button onClick={handleDeleteAll}
                     title="Remove all from this list" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-red-600 border border-red-200 hover:bg-red-50">
                     <Trash2 size={11}/> Delete All
@@ -1588,6 +1652,18 @@ function DocumentsUploadContent() {
         </div>
       )}
 
+
+      {panel === 'preview' && Object.keys(selectedPreviewDocs).length > 0 && (
+        <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2">
+          <button onClick={() => setSelectedPreviewDocs({})} className="text-xs text-gray-500 bg-white border border-gray-200 rounded-full px-3 py-2 shadow-lg hover:bg-gray-50">
+            Clear ({Object.keys(selectedPreviewDocs).length})
+          </button>
+          <button onClick={() => setEmailAttachments(Object.values(selectedPreviewDocs))}
+            className="flex items-center gap-2 text-sm font-medium text-white rounded-full px-4 py-2.5 shadow-lg" style={{ background: '#22A87A' }}>
+            <Mail size={15}/>Email Selected ({Object.keys(selectedPreviewDocs).length})
+          </button>
+        </div>
+      )}
 
       {emailAttachments && <EmailPdfModal attachments={emailAttachments} onClose={() => setEmailAttachments(null)}/>}
     </>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Mail, X, Loader, AlertTriangle } from 'lucide-react'
+import { authHeader, supabase } from '@/lib/supabase'
 
 export interface EmailAttachment { filename: string; url: string }
 
@@ -8,7 +9,8 @@ export interface EmailAttachment { filename: string; url: string }
 // happen), and from Shipment Overview's document picker. Always sends via
 // the docs.bastel@gmail.com mailbox (useDocsAccount), and remembers both the
 // recipient (saved_recipients) and the last subject used (email_settings)
-// so neither has to be retyped next time.
+// so neither has to be retyped next time. "To" accepts more than one address
+// (comma-separated), plus CC/BCC.
 export default function EmailPdfModal({ attachments, defaultSubject, onClose }: {
   attachments: EmailAttachment[]
   defaultSubject?: string
@@ -16,6 +18,9 @@ export default function EmailPdfModal({ attachments, defaultSubject, onClose }: 
 }) {
   const [emails, setEmails] = useState<string[]>([])
   const [to, setTo] = useState('')
+  const [cc, setCc] = useState('')
+  const [bcc, setBcc] = useState('')
+  const [showCcBcc, setShowCcBcc] = useState(false)
   const [subject, setSubject] = useState(defaultSubject || '')
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
@@ -25,21 +30,38 @@ export default function EmailPdfModal({ attachments, defaultSubject, onClose }: 
   useEffect(() => {
     fetch('/api/saved-recipients').then(r => r.json()).then(d => setEmails(d.emails || [])).catch(() => {})
     if (!defaultSubject) {
-      fetch('/api/email-settings').then(r => r.json()).then(d => { if (d.lastSubject) setSubject(d.lastSubject) }).catch(() => {})
+      // Auto-prefix the subject with the sender's own name — still fully
+      // editable/appendable afterwards, this is just the starting point.
+      Promise.all([
+        fetch('/api/email-settings').then(r => r.json()).catch(() => ({})),
+        supabase.auth.getUser().then(async ({ data: { user } }) => {
+          if (!user) return ''
+          const { data } = await supabase.from('profiles').select('username, full_name').eq('id', user.id).single()
+          return data?.full_name || data?.username || ''
+        }).catch(() => ''),
+      ]).then(([settings, name]) => {
+        const last = settings?.lastSubject || ''
+        setSubject(name ? (last.startsWith(name) ? last : `${name} - ${last}`) : last)
+      })
     }
   }, [defaultSubject])
 
   async function send() {
-    if (!to.trim() || !subject.trim()) return
+    const toAddr = to.trim()
+    if (!toAddr || !subject.trim()) return
     setSending(true); setError('')
     try {
       const res = await fetch('/api/send-email', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: to.trim(), subject: subject.trim(), body, attachments, useDocsAccount: true }),
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ to: toAddr, cc: cc.trim() || undefined, bcc: bcc.trim() || undefined, subject: subject.trim(), body, attachments, useDocsAccount: true }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      fetch('/api/saved-recipients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: to.trim() }) }).catch(() => {})
+      // Remember each individual address (comma-separated "To" support), not
+      // the whole combined string, so the datalist suggests them one at a time.
+      toAddr.split(',').map(e => e.trim()).filter(Boolean).forEach(email => {
+        fetch('/api/saved-recipients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }).catch(() => {})
+      })
       fetch('/api/email-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lastSubject: subject.trim() }) }).catch(() => {})
       setSent(true)
     } catch (e: any) { setError(e.message) }
@@ -59,11 +81,25 @@ export default function EmailPdfModal({ attachments, defaultSubject, onClose }: 
           ) : (
             <>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">To</label>
-                <input value={to} onChange={e => setTo(e.target.value)} list="saved-recipient-emails" placeholder="recipient@email.com"
+                <label className="block text-xs font-medium text-gray-600 mb-1">To <span className="text-gray-400 font-normal">(comma-separate for more than one)</span></label>
+                <input value={to} onChange={e => setTo(e.target.value)} list="saved-recipient-emails" placeholder="recipient@email.com, another@email.com"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
                 <datalist id="saved-recipient-emails">{emails.map(e => <option key={e} value={e}/>)}</datalist>
               </div>
+              {!showCcBcc ? (
+                <button onClick={() => setShowCcBcc(true)} className="text-xs text-blue-600 hover:underline">+ Cc / Bcc</button>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Cc</label>
+                    <input value={cc} onChange={e => setCc(e.target.value)} list="saved-recipient-emails" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Bcc</label>
+                    <input value={bcc} onChange={e => setBcc(e.target.value)} list="saved-recipient-emails" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+                  </div>
+                </>
+              )}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Subject</label>
                 <input value={subject} onChange={e => setSubject(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>

@@ -16,6 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .insert({
         doc_type, file_name, file_url: file_url || '', drive_url: drive_url || '',
         extracted_data: extracted_data || null, uploaded_by: uploaded_by || null,
+        updated_at: new Date().toISOString(),
       })
       .select()
       .single()

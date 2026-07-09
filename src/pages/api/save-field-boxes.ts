@@ -20,17 +20,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { data: existing } = await supabaseAdmin
       .from('pdf_templates')
-      .select('id')
+      .select('id, grid_config')
       .eq('doc_type', doc_type)
       .eq('variant', v)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
 
+    // This client only sends exclude-words/formulas for fields that currently
+    // have a box drawn — a field without one yet (e.g. "code", set via the
+    // per-field auto-save in save-field-rules.ts) was getting silently wiped
+    // every time "Save Format" ran for any OTHER field, because this used to
+    // replace the whole map instead of merging into what's already saved.
     const payload = {
       doc_type,
       variant: v,
-      grid_config: { boxes, excludeWords: excludeWords || {}, formulas: formulas || {} },
+      grid_config: {
+        boxes,
+        excludeWords: { ...(existing?.grid_config?.excludeWords || {}), ...(excludeWords || {}) },
+        formulas: { ...(existing?.grid_config?.formulas || {}), ...(formulas || {}) },
+      },
       field_map: labels,
     }
 

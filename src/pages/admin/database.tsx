@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import {
-  Database, RefreshCw, Trash2, Save, Loader, AlertTriangle, X,
+  Database, RefreshCw, Trash2, Save, Loader, AlertTriangle, X, Undo2, Archive,
 } from 'lucide-react'
 
 const TABLES = [
@@ -41,6 +41,66 @@ function DatabaseContent() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deletingAll, setDeletingAll] = useState(false)
   const [columns, setColumns] = useState<string[]>([])
+  // Recycle Bin — every delete below archives the full row first (see
+  // admin-data.ts), so this is where "what got deleted, by whom, when" lives
+  // and where a delete can be undone instead of it being final and silent.
+  const [showBin, setShowBin] = useState(false)
+  const [binItems, setBinItems] = useState<any[]>([])
+  const [binLoading, setBinLoading] = useState(false)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+
+  const loadBin = useCallback(async () => {
+    setBinLoading(true)
+    try {
+      const res = await fetch('/api/recycle-bin', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setBinItems(d.items || [])
+    } finally {
+      setBinLoading(false)
+    }
+  }, [])
+  useEffect(() => { if (showBin) loadBin() }, [showBin, loadBin])
+
+  async function restoreItem(id: string) {
+    setRestoringId(id)
+    try {
+      const res = await fetch('/api/recycle-bin', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setBinItems(prev => prev.filter(i => i.id !== id))
+      if (d.table === table) load()
+    } catch (e: any) {
+      alert('Restore failed: ' + e.message)
+    } finally {
+      setRestoringId(null)
+    }
+  }
+
+  async function purgeItem(id: string) {
+    if (!confirm("Meka permanent-ma delete wenawa (PDF ekath ekka) — undo karanna bæ. Confirm karanawada?")) return
+    try {
+      const res = await fetch(`/api/recycle-bin?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setBinItems(prev => prev.filter(i => i.id !== id))
+    } catch (e: any) {
+      alert('Purge failed: ' + e.message)
+    }
+  }
+
+  // A readable one-line summary of the archived row — different tables have
+  // different identifying fields, so this tries the ones that actually exist.
+  function binItemSummary(item: any): string {
+    const d = item.record_data || {}
+    if (item.file_name) return item.file_name
+    if (d.code || d.number) return `${d.code || ''} ${d.number || ''}`.trim()
+    if (d.container_no) return d.container_no
+    if (d.username || d.full_name) return d.full_name || d.username
+    return item.record_id
+  }
 
   const load = useCallback(async () => {
     setLoading(true); setError(''); setDrafts({})
@@ -94,7 +154,7 @@ function DatabaseContent() {
   }
 
   async function deleteRow(rowId: string) {
-    if (!confirm('Meka permanent delete ekak — confirm karanna?')) return
+    if (!confirm('Recycle Bin ekata yanawa (aye Restore karanna puluwan) — confirm karanna?')) return
     setDeletingId(rowId)
     try {
       const res = await fetch(`/api/admin-data?table=${table}&id=${rowId}`, { method: 'DELETE', headers: await authHeader() })
@@ -109,8 +169,7 @@ function DatabaseContent() {
   }
 
   async function deleteAll() {
-    if (!confirm(`"${table}" table eke row ${rows.length}ma permanent delete wenawa — confirm karanna?`)) return
-    if (!confirm('Real confirm — meka undo karanna bæ. Ain karannada?')) return
+    if (!confirm(`"${table}" table eke row ${rows.length}ma Recycle Bin ekata yanawa (Restore karanna puluwan) — confirm karanna?`)) return
     setDeletingAll(true)
     try {
       const res = await fetch(`/api/admin-data?table=${table}&all=true`, { method: 'DELETE', headers: await authHeader() })
@@ -132,17 +191,69 @@ function DatabaseContent() {
             <p className="text-gray-500 text-sm mt-0.5">View · Edit · Delete — table wise</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={load} className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
-              <RefreshCw size={13}/> Refresh
+            <button onClick={() => setShowBin(x => !x)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border ${showBin ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+              <Archive size={13}/> Recycle Bin{binItems.length > 0 ? ` (${binItems.length})` : ''}
             </button>
-            <button onClick={deleteAll} disabled={deletingAll || !rows.length}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-40">
-              {deletingAll ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>}
-              Delete All ({rows.length})
-            </button>
+            {!showBin && (
+              <>
+                <button onClick={load} className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
+                  <RefreshCw size={13}/> Refresh
+                </button>
+                <button onClick={deleteAll} disabled={deletingAll || !rows.length}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-40">
+                  {deletingAll ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>}
+                  Delete All ({rows.length})
+                </button>
+              </>
+            )}
           </div>
         </div>
 
+        {showBin && (
+          <div className="card overflow-auto mb-4" style={{ maxHeight: '70vh' }}>
+            {binLoading ? (
+              <div className="flex justify-center py-16"><Loader size={22} className="animate-spin text-gray-400"/></div>
+            ) : binItems.length === 0 ? (
+              <div className="text-center py-16 text-gray-400 text-sm">Recycle Bin eka empty</div>
+            ) : (
+              <table className="w-full text-xs border-collapse">
+                <thead className="sticky top-0 bg-gray-50 z-10">
+                  <tr>
+                    {['Table', 'Item', 'Deleted By', 'Deleted At', ''].map(h => (
+                      <th key={h} className="text-left px-3 py-2 text-gray-500 font-medium whitespace-nowrap border-b border-gray-100">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {binItems.map(item => (
+                    <tr key={item.id} className="border-b border-gray-50 hover:bg-gray-50">
+                      <td className="px-3 py-2 font-medium text-gray-700">{item.table_name}</td>
+                      <td className="px-3 py-2 text-gray-800">{binItemSummary(item)}</td>
+                      <td className="px-3 py-2 text-gray-500">{item.deleted_by_name || '—'}</td>
+                      <td className="px-3 py-2 text-gray-400">{new Date(item.deleted_at).toLocaleString('en-GB')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <button onClick={() => restoreItem(item.id)} disabled={restoringId === item.id}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                            {restoringId === item.id ? <Loader size={12} className="animate-spin"/> : <Undo2 size={12}/>} Restore
+                          </button>
+                          <button onClick={() => purgeItem(item.id)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
+                            <Trash2 size={12}/> Purge
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        {!showBin && (
+        <>
         {/* Table tabs */}
         <div className="flex gap-1.5 mb-4 flex-wrap">
           {visibleTables.map(t => (
@@ -245,6 +356,8 @@ function DatabaseContent() {
           )}
         </div>
         <p className="text-xs text-gray-400 mt-2">Showing latest {rows.length} rows (max 300).</p>
+        </>
+        )}
       </div>
   )
 }

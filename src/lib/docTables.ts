@@ -152,8 +152,9 @@ export async function insertExtractedData(
   }
 
   if (table === 'boat_notes') {
+    const nowIso = new Date().toISOString()
     const { data: inserted, error } = await supabaseAdmin.from('boat_notes').insert({
-      details: data, pdf_url: driveUrl, uploaded_at: new Date().toISOString(), uploaded_by: uploadedBy || null,
+      details: data, pdf_url: driveUrl, uploaded_at: nowIso, updated_at: nowIso, uploaded_by: uploadedBy || null,
       boat_note_no: data.entry_no || data.bl_no || null,
     }).select().single()
     if (error) throw new Error(error.message)
@@ -164,7 +165,8 @@ export async function insertExtractedData(
   await ensureColumns(table, dataKeys)
   const columns = await getTableColumns(table)
 
-  const row: Record<string, any> = { pdf_url: driveUrl, uploaded_at: new Date().toISOString(), uploaded_by: uploadedBy || null }
+  const nowIso = new Date().toISOString()
+  const row: Record<string, any> = { pdf_url: driveUrl, uploaded_at: nowIso, updated_at: nowIso, uploaded_by: uploadedBy || null }
   for (const [k, v] of Object.entries(data)) {
     if (v && columns.includes(k)) row[k] = v
   }
