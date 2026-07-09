@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Ship, Upload,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
-  Database, Loader, MessageSquare, CheckCircle, FileStack,
+  Database, Loader, MessageSquare, CheckCircle, FileStack, Zap,
 } from 'lucide-react'
 
 // Single unified nav list — there is no separate admin/worker site anymore.
@@ -24,6 +24,7 @@ export const TAB_ITEMS = [
   { href: '/admin/drive-files',      icon: Database,        label: 'Shipment Overview' },
   { href: '/admin/boat-note',        icon: FileStack,       label: 'Docs Create' },
   { href: '/admin/templates',        icon: FileStack,       label: 'Templates' },
+  { href: '/admin/automation',       icon: Zap,             label: 'Automation' },
   { href: '/admin/messages',         icon: MessageSquare,   label: 'Messages' },
   { href: '/admin/database',         icon: Database,        label: 'Database' },
   { href: '/admin/financials',       icon: DollarSign,      label: 'Financials' },
@@ -77,6 +78,17 @@ export const SECTION_ITEMS = [
   { key: 'section:database.pdf_templates',      tabHref: '/admin/database', label: 'PDF Templates table' },
   { key: 'section:database.messages',           tabHref: '/admin/database', label: 'Messages table' },
   { key: 'section:database.profiles',           tabHref: '/admin/database', label: 'Users (Profiles) table' },
+  // Automation
+  { key: 'section:automation.xml-generator',      tabHref: '/admin/automation', label: 'Cusdec XML Generator' },
+  { key: 'section:automation.cdn-text',            tabHref: '/admin/automation', label: 'CDN Text Extractor & Database' },
+  { key: 'section:automation.barcode-enter',       tabHref: '/admin/automation', label: 'Barcode Enter' },
+  { key: 'section:automation.trico-gate-pass',     tabHref: '/admin/automation', label: 'Trico Gate Passes' },
+  { key: 'section:automation.data-updates',        tabHref: '/admin/automation', label: 'Data Updates' },
+  { key: 'section:automation.boat-note-create',    tabHref: '/admin/automation', label: 'Boat Note Create' },
+  { key: 'section:automation.boat-note-check',     tabHref: '/admin/automation', label: 'Boat Note Check' },
+  { key: 'section:automation.export-release-check',tabHref: '/admin/automation', label: 'Export Release Check' },
+  { key: 'section:automation.credentials',         tabHref: '/admin/automation', label: 'Credentials Settings' },
+  { key: 'section:automation.notes',               tabHref: '/admin/automation', label: 'System Logic & Integration Notes' },
 ]
 
 interface PermissionValue { isAdmin: boolean; has: (key: string) => boolean }
