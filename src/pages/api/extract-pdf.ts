@@ -362,7 +362,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!base64) return res.status(400).json({ error: 'No file data' })
 
     const buffer = Buffer.from(base64, 'base64')
-    let text = await extractTextFromPdf(buffer)
+    let text = ''
+    let textExtractError = ''
+    try {
+      text = await extractTextFromPdf(buffer)
+    } catch (e: any) {
+      // pdf-parse (pdfjs-dist) failing 3x in a row on the SAME file is a real
+      // parse failure, not the cold-start flake the retry covers — fall
+      // through to OCR (a completely different library, mupdf+tesseract)
+      // instead of failing outright, since it can often still read a file
+      // pdfjs chokes on.
+      textExtractError = e.message
+      console.error('[extract-pdf] pdf-parse failed after retries, falling back to OCR:', e.message)
+    }
     let ocrApplied = false
 
     if (isProbablyScanned(text)) {
@@ -371,6 +383,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!isProbablyScanned(ocrText)) { text = ocrText; ocrApplied = true }
       } catch (e: any) {
         console.error('[extract-pdf] OCR failed:', e.message)
+        if (textExtractError) {
+          throw new Error(`Could not read this PDF — text extraction failed (${textExtractError}) and OCR also failed (${e.message}). The file itself may be corrupted; try re-saving/re-exporting it and upload again.`)
+        }
+      }
+    } else if (textExtractError) {
+      // Text extraction failed but produced no signal either way on whether
+      // it's scanned — still worth trying OCR once before giving up.
+      try {
+        const ocrText = await ocrPdf(buffer)
+        if (!isProbablyScanned(ocrText)) { text = ocrText; ocrApplied = true }
+        else throw new Error('OCR could not extract readable text either')
+      } catch (e: any) {
+        throw new Error(`Could not read this PDF — text extraction failed (${textExtractError}) and OCR also failed (${e.message}). The file itself may be corrupted; try re-saving/re-exporting it and upload again.`)
       }
     }
 

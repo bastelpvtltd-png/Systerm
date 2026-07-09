@@ -25,7 +25,7 @@ type PdfField = {
   locked?: boolean
 }
 type Panel = 'upload' | 'preview' | 'admin-edit'
-type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error'
+type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error' | 'skipped'
 
 interface PctBox { x: number; y: number; w: number; h: number; page?: number }
 
@@ -83,6 +83,7 @@ function statusLabel(it: UploadItem) {
     case 'saving':     return 'Saving...'
     case 'saved':      return 'Saved'
     case 'error':      return it.error || 'Error'
+    case 'skipped':    return 'Skipped — not saved'
   }
 }
 
@@ -259,6 +260,14 @@ function DocumentsUploadContent() {
     // (e.g. FileReader itself failed) — re-read straight from the same File.
     const base64 = await fileToBase64(item.file)
     return extractOne(item.id, base64)
+  }
+
+  // A file that keeps failing shouldn't block the rest of a "Save All" batch
+  // — marking it skipped removes it from that batch (handleSaveAll only
+  // picks up 'ready'/'error') while keeping it visible in the list instead of
+  // silently deleting it.
+  function skipItem(id: string) {
+    updateItem(id, { status: 'skipped' })
   }
 
   async function handleFiles(fileList: FileList | null) {
@@ -949,9 +958,14 @@ function DocumentsUploadContent() {
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
                         {it.status === 'error' && (
-                          <button onClick={e => { e.stopPropagation(); retryExtraction(it) }} title="Retry (same file, no re-upload)" className="text-gray-300 hover:text-amber-600 p-1">
-                            <RefreshCw size={12}/>
-                          </button>
+                          <>
+                            <button onClick={e => { e.stopPropagation(); retryExtraction(it) }} title="Retry (same file, no re-upload)" className="text-gray-300 hover:text-amber-600 p-1">
+                              <RefreshCw size={12}/>
+                            </button>
+                            <button onClick={e => { e.stopPropagation(); skipItem(it.id) }} title="Skip this file — keep saving the rest" className="text-gray-300 hover:text-gray-600 p-1">
+                              <X size={12}/>
+                            </button>
+                          </>
                         )}
                         <button onClick={e => startRename(it, e)} title="Rename" className="text-gray-300 hover:text-gray-600 p-1">
                           <Pencil size={12}/>
@@ -1143,9 +1157,14 @@ function DocumentsUploadContent() {
                         </p>
                       </div>
                       {it.status === 'error' && (
-                        <button onClick={e => { e.stopPropagation(); retryExtraction(it) }} title="Retry (same file, no re-upload)" className="text-gray-300 hover:text-amber-600 p-1 flex-shrink-0">
-                          <RefreshCw size={13}/>
-                        </button>
+                        <>
+                          <button onClick={e => { e.stopPropagation(); retryExtraction(it) }} title="Retry (same file, no re-upload)" className="text-gray-300 hover:text-amber-600 p-1 flex-shrink-0">
+                            <RefreshCw size={13}/>
+                          </button>
+                          <button onClick={e => { e.stopPropagation(); skipItem(it.id) }} title="Skip this file — keep saving the rest" className="text-gray-300 hover:text-gray-600 p-1 flex-shrink-0">
+                            <X size={13}/>
+                          </button>
+                        </>
                       )}
                       <ScanLine size={13} className="text-gray-300 flex-shrink-0"/>
                     </div>

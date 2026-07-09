@@ -14,15 +14,13 @@ const supabaseAdmin = createClient(
 // back as a distinct "No Data" error page (HTTP 500, <h1 class="error-title">
 // No Data</h1>).
 //
-// Pass/fail rule (per the user): the result is only "released" if its status
-// says EXPORT RELEASE (not NOT EXPORT RELEASE) *and* the release date/time is
-// later than the CUSDEC's own date — an EXPORT RELEASE line dated before the
-// CUSDEC was even filed doesn't count. The exact success-page layout wasn't
-// capturable without a genuine CUSDEC + Company TIN pair, so this parses the
-// sanitized text generically (a line containing the office/serial/number/year
-// plus a trailing status, with the nearest date on/after it) — worth
-// eyeballing the raw text on the first few real checks to confirm it's
-// reading the right row.
+// Pass/fail rule (confirmed against a real result page): the page lists an
+// "Export release" entry with its own timestamp (e.g. "Export release
+// 2026-07-05 01:34 AM") only once it's actually happened — if the phrase
+// isn't present anywhere at all, it hasn't been released, full stop. When it
+// is present, it only counts as passed if that timestamp is later than the
+// CUSDEC's own date (a stray "(Export release)" heading/label with no date
+// attached, or one dated before the CUSDEC was filed, doesn't count).
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 const BASE = 'https://services.customs.gov.lk'
 
@@ -32,7 +30,7 @@ function toSanitizedText(html: string): string {
     .replace(/<[^>]+>/g, '\n').replace(/\n\s*\n+/g, '\n').split('\n').map(l => l.trim()).filter(Boolean).join('\n')
 }
 
-const DATE_PATTERN = /\b(\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(:\d{2})?)?|\d{1,2}[./]\d{1,2}[./]\d{2,4}(?:\s+\d{1,2}:\d{2}(:\d{2})?)?)\b/
+const DATE_PATTERN = /\b(\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?|\d{1,2}[./]\d{1,2}[./]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?)\b/i
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -62,16 +60,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const text = toSanitizedText(dashHtml)
     const lines = text.split('\n')
-    const rowIdx = lines.findIndex(l =>
-      l.toUpperCase().includes(String(officeCode).toUpperCase()) &&
-      l.includes(String(cusdecNumber)) && l.includes(String(cusdecYear))
-    )
-    const rowLine = rowIdx >= 0 ? lines[rowIdx] : ''
-    const notReleased = /NOT\s+EXPORT\s+RELEASE/i.test(rowLine)
-    const released = !notReleased && /EXPORT\s+RELEASE/i.test(rowLine)
+    // Find the specific line naming "export release" — a lone "(Export
+    // release)" heading with nothing else on the line has no date to find,
+    // so keep looking for one that also carries a timestamp.
+    const releaseLineIdx = lines.findIndex(l => /export\s*release/i.test(l))
+    const released = releaseLineIdx >= 0
+    const rowLine = released ? lines[releaseLineIdx] : ''
 
-    // Look for a date on the matched line, or the couple of lines around it.
-    const nearby = lines.slice(Math.max(0, rowIdx - 1), rowIdx + 3).join(' ')
+    // The timestamp can be on the same line or the next one over.
+    const nearby = released ? lines.slice(releaseLineIdx, releaseLineIdx + 2).join(' ') : ''
     const dateStr = nearby.match(DATE_PATTERN)?.[0] || ''
     const releaseDate = parseFlexibleDate(dateStr)
 
@@ -81,11 +78,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { data: cusdec } = await supabaseAdmin.from('cusdec').select('date').eq('id', cusdecId).single()
       cusdecDateForCompare = parseFlexibleDate(cusdec?.date || '')
     }
-    if (released) {
-      passed = !releaseDate || !cusdecDateForCompare ? true : releaseDate > cusdecDateForCompare
-    } else if (notReleased) {
+    if (!released) {
       passed = false
+    } else if (releaseDate && cusdecDateForCompare) {
+      passed = releaseDate > cusdecDateForCompare
     }
+    // else: "Export release" text found but no comparable date on either
+    // side — leave passed as null (ambiguous) rather than guessing, so the
+    // raw text is what decides it this time.
 
     if (cusdecId && passed) {
       const nowIso = new Date().toISOString()
@@ -99,7 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    res.json({ found: true, text, rowLine, released, notReleased, releaseDate: releaseDate?.toISOString() || null, passed })
+    res.json({ found: true, text, rowLine, released, releaseDate: releaseDate?.toISOString() || null, passed })
   } catch (err: any) {
     console.error('[export-release-check] error:', err)
     res.status(500).json({ error: err.message })
