@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/router'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { useBoatNoteCreator } from '@/lib/useBoatNoteCreator'
@@ -62,7 +63,15 @@ async function notConnectedYet(action: string): Promise<string> {
 function AutomationContent() {
   const { has } = usePermission()
   const visibleTabs = SUB_TABS.filter(t => has(t.permission))
+  const router = useRouter()
   const [tab, setTab] = useState<AutomationTab>(visibleTabs[0]?.key || 'xml')
+  // Lets the Dashboard's pending-work cards deep-link straight into the
+  // relevant sub-tab, e.g. /admin/automation?tab=export-release.
+  useEffect(() => {
+    const q = router.query.tab
+    if (typeof q === 'string' && visibleTabs.some(t => t.key === q)) setTab(q as AutomationTab)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.query.tab])
 
   return (
     <div className="p-6">
