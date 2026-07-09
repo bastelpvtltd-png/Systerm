@@ -33,11 +33,23 @@ async function runManagementQuery(query: string): Promise<any[]> {
   return res.json()
 }
 
+// Columns barely ever change (only via ensureColumns, when a custom field is
+// added), but this was being re-fetched from the Management API on every
+// single PDF extraction — a slow network round trip that added up across a
+// batch upload. Cache each table's columns for a few minutes per warm
+// serverless instance instead.
+const columnsCache = new Map<string, { columns: string[]; expiresAt: number }>()
+const COLUMNS_CACHE_TTL_MS = 5 * 60 * 1000
+
 export async function getTableColumns(table: string): Promise<string[]> {
+  const cached = columnsCache.get(table)
+  if (cached && cached.expiresAt > Date.now()) return cached.columns
   const rows = await runManagementQuery(
     `select column_name from information_schema.columns where table_schema='public' and table_name='${table}'`
   )
-  return rows.map((r: any) => r.column_name)
+  const columns = rows.map((r: any) => r.column_name)
+  columnsCache.set(table, { columns, expiresAt: Date.now() + COLUMNS_CACHE_TTL_MS })
+  return columns
 }
 
 // Adds any keys that aren't already columns (as text) — lets a newly added
@@ -50,6 +62,7 @@ export async function ensureColumns(table: string, keys: string[]): Promise<void
   for (const key of missing) {
     await runManagementQuery(`alter table public."${table}" add column if not exists "${key}" text`)
   }
+  if (missing.length) columnsCache.delete(table) // next getTableColumns call sees the new column immediately
 }
 
 // Structural columns that must never be dropped even if a matching field key
