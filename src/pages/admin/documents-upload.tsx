@@ -23,6 +23,11 @@ type PdfField = {
   rawValue?: string
   excludeWords?: string
   formula?: string
+  // A free-text note on what this box's data is supposed to look like (e.g.
+  // "numbers only", "DD/MM/YYYY") — documentation for whoever draws/redraws
+  // the box next, not an enforced validator. Saved/loaded the same
+  // merge-safe way as excludeWords/formula (see save-field-rules.ts).
+  specNote?: string
   locked?: boolean
 }
 type Panel = 'upload' | 'preview' | 'admin-edit'
@@ -328,7 +333,7 @@ function DocumentsUploadContent() {
       : it))
   }
 
-  function updateFieldRuleText(id: string, idx: number, patch: Partial<Pick<PdfField, 'excludeWords' | 'formula'>>) {
+  function updateFieldRuleText(id: string, idx: number, patch: Partial<Pick<PdfField, 'excludeWords' | 'formula' | 'specNote'>>) {
     setItems(prev => prev.map(it => it.id === id
       ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, ...patch } : f) }
       : it))
@@ -356,7 +361,7 @@ function DocumentsUploadContent() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           doc_type: docType, key: updatedField.key, label: updatedField.label,
-          excludeWords: updatedField.excludeWords, formula: updatedField.formula, variant,
+          excludeWords: updatedField.excludeWords, formula: updatedField.formula, specNote: updatedField.specNote, variant,
         }),
       })
       const d = await res.json()
@@ -1409,6 +1414,13 @@ function DocumentsUploadContent() {
                                   title="Excel-like code to slice this field's value out of the box text. Steps chain with | — LINE(n), LEFT(n), RIGHT(n), MID(start,len), AFTER(text), BEFORE(text), TRIM(). e.g. LINE(2)|AFTER(:)"
                                   placeholder="code: e.g. LINE(2)|AFTER(:)..."
                                   className="w-full bg-transparent text-[10px] text-gray-400 focus:outline-none focus:text-gray-600 mt-0.5 font-mono"/>
+                                <input value={f.specNote || ''} disabled={f.locked}
+                                  onChange={e => updateFieldRuleText(selectedItem.id, i, { specNote: e.target.value })}
+                                  onBlur={() => commitFieldRules(selectedItem.id, i)}
+                                  onKeyDown={e => { if (e.key === 'Enter') commitFieldRules(selectedItem.id, i) }}
+                                  title="What this box's data is supposed to look like — a note for whoever draws/redraws this box next, not an enforced check"
+                                  placeholder="spec: e.g. numbers only, DD/MM/YYYY..."
+                                  className="w-full bg-transparent text-[10px] text-blue-400 focus:outline-none focus:text-blue-600 mt-0.5"/>
                                 {selectedItem.fields.some((of, oi) => oi !== i && selectedItem.boxes[of.key]) && (
                                   <select value="" disabled={f.locked}
                                     onChange={e => { const si = Number(e.target.value); if (!Number.isNaN(si)) useSharedBox(selectedItem.id, i, si) }}

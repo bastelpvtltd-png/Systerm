@@ -39,6 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         boxes,
         excludeWords: { ...(existing?.grid_config?.excludeWords || {}), ...(excludeWords || {}) },
         formulas: { ...(existing?.grid_config?.formulas || {}), ...(formulas || {}) },
+        specs: existing?.grid_config?.specs || {},
       },
       field_map: labels,
     }

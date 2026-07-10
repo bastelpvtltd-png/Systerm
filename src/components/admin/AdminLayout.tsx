@@ -6,8 +6,28 @@ import {
   LayoutDashboard, Ship, Upload,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
-  Database, Loader, MessageSquare, CheckCircle, FileStack, Zap,
+  Database, Loader, MessageSquare, CheckCircle, FileStack, Zap, Clock,
 } from 'lucide-react'
+import { formatSLDateTime } from '@/lib/slTime'
+
+// Ticks every second in Sri Lanka time (Asia/Colombo) regardless of the
+// viewer's own timezone/device clock — a plain "load-time" timestamp would
+// go stale the moment the page was left open, so this actually re-renders.
+function SidebarClock({ collapsed }: { collapsed: boolean }) {
+  const [now, setNow] = useState(new Date())
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const time = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Colombo', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const date = now.toLocaleDateString('en-GB', { timeZone: 'Asia/Colombo', day: '2-digit', month: 'short', year: 'numeric' })
+  return (
+    <div className="px-3 py-2.5 border-t border-white/10 text-blue-100 flex items-center gap-2">
+      <Clock size={14} className="flex-shrink-0"/>
+      {!collapsed && <div className="text-xs leading-tight"><div className="font-semibold tabular-nums">{time}</div><div className="text-blue-300">{date} · SLT</div></div>}
+    </div>
+  )
+}
 
 // Single unified nav list — there is no separate admin/worker site anymore.
 // Everyone signs into this same area; is_admin accounts see every tab, and
@@ -189,6 +209,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             )
           })}
         </nav>
+
+        {/* Live Sri Lanka time — runs continuously, not just at page load */}
+        <SidebarClock collapsed={collapsed}/>
 
         {/* Collapse + Logout */}
         <div className="p-2 border-t border-white/10 space-y-1">

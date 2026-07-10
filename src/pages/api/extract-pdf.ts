@@ -435,14 +435,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const labels: Record<string, string> = template.field_map || {}
           const excludeWords: Record<string, string> = template.grid_config.excludeWords || {}
           const formulas: Record<string, string> = template.grid_config.formulas || {}
+          const specs: Record<string, string> = template.grid_config.specs || {}
           const rawBoxTexts = await extractBoxes(buffer, boxes)
+          // Echo back the saved excludeWords/formula/specNote on each field —
+          // otherwise every freshly-extracted PDF shows these boxes as blank
+          // in the editor even though the rule is already being applied to
+          // the value underneath, making a saved rule look like it never
+          // "took" once you open a different file of the same doc type.
           const boxedFields = Object.entries(boxes).map(([key, box]) => ({
             key, label: labels[key] || key,
             value: applyTextRules(rawBoxTexts[key], formulas[key], excludeWords[key]),
+            excludeWords: excludeWords[key] || '', formula: formulas[key] || '', specNote: specs[key] || '',
           }))
           const boxedByKey = new Map(boxedFields.map(f => [f.key, f]))
           const schemaFields = await buildFieldsFromSchema(resolvedType, {})
-          fields = schemaFields.map(f => boxedByKey.get(f.key) || f)
+          // A field like "code" that has no box yet still needs its saved
+          // excludeWords/formula/specNote echoed — otherwise it looks blank
+          // in the editor exactly like the boxed ones used to.
+          fields = schemaFields.map(f => boxedByKey.get(f.key) || {
+            ...f, excludeWords: excludeWords[f.key] || '', formula: formulas[f.key] || '', specNote: specs[f.key] || '',
+          })
           for (const bf of boxedFields) if (!fields.find(f => f.key === bf.key)) fields.push(bf)
 
           appliedBoxes = boxes

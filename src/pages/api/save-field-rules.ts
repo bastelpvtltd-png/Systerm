@@ -12,7 +12,7 @@ const supabaseAdmin = createClient(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   try {
-    const { doc_type, key, label, excludeWords, formula, variant } = req.body
+    const { doc_type, key, label, excludeWords, formula, specNote, variant } = req.body
     if (!doc_type || !key) return res.status(400).json({ error: 'doc_type and key required' })
     const v = variant === 'scanned' ? 'scanned' : 'native'
 
@@ -29,15 +29,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fieldMap = { ...(existing?.field_map || {}) }
     const excludeWordsMap = { ...(gridConfig.excludeWords || {}) }
     const formulasMap = { ...(gridConfig.formulas || {}) }
+    const specsMap = { ...(gridConfig.specs || {}) }
 
     if (label) fieldMap[key] = label
     if (excludeWords?.trim()) excludeWordsMap[key] = excludeWords; else delete excludeWordsMap[key]
     if (formula?.trim()) formulasMap[key] = formula; else delete formulasMap[key]
+    if (specNote?.trim()) specsMap[key] = specNote; else delete specsMap[key]
 
     const payload = {
       doc_type,
       variant: v,
-      grid_config: { ...gridConfig, excludeWords: excludeWordsMap, formulas: formulasMap },
+      grid_config: { ...gridConfig, excludeWords: excludeWordsMap, formulas: formulasMap, specs: specsMap },
       field_map: fieldMap,
     }
 

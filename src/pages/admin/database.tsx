@@ -41,6 +41,8 @@ function DatabaseContent() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deletingAll, setDeletingAll] = useState(false)
   const [columns, setColumns] = useState<string[]>([])
+  const [sortCol, setSortCol] = useState('created_at')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   // Recycle Bin — every delete below archives the full row first (see
   // admin-data.ts), so this is where "what got deleted, by whom, when" lives
   // and where a delete can be undone instead of it being final and silent.
@@ -127,6 +129,16 @@ function DatabaseContent() {
   function draftFor(row: Row): Row {
     return drafts[row.id] || row
   }
+
+  const sortedRows = [...rows].sort((a, b) => {
+    const av = a[sortCol], bv = b[sortCol]
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    const an = Number(av), bn = Number(bv)
+    const cmp = !Number.isNaN(an) && !Number.isNaN(bn) ? an - bn : String(av).localeCompare(String(bv))
+    return sortDir === 'asc' ? cmp : -cmp
+  })
 
   function setCell(rowId: string, col: string, value: any) {
     setDrafts(prev => ({ ...prev, [rowId]: { ...(prev[rowId] || rows.find(r => r.id === rowId)), [col]: value } }))
@@ -266,6 +278,20 @@ function DatabaseContent() {
           ))}
         </div>
 
+        {columns.length > 0 && (
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-xs text-gray-500">Sort by</span>
+            <select value={sortCol} onChange={e => setSortCol(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-600">
+              {columns.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <button onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
+              {sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'}
+            </button>
+          </div>
+        )}
+
         {error && (
           <div className="mb-4 flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
             <AlertTriangle size={14}/> {error}
@@ -291,7 +317,7 @@ function DatabaseContent() {
                 {rows.length === 0 && (
                   <tr><td colSpan={columns.length + 1} className="text-center py-10 text-gray-400">No rows in "{table}" yet</td></tr>
                 )}
-                {rows.map(row => {
+                {sortedRows.map(row => {
                   const draft = draftFor(row)
                   const dirty = !!drafts[row.id]
                   return (
