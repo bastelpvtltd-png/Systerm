@@ -99,7 +99,7 @@ function DashboardContent() {
                       <p className="font-medium text-gray-800">{s.shipper} · Inv: {s.invoice_number}</p>
                       <p className="text-gray-400">Ref: {s.reference || '—'} · Packing: {s.packing_number || '—'}</p>
                     </div>
-                    <a href="/admin/shipment-entry" className="text-blue-600 hover:underline flex-shrink-0">Open Shipment Entry →</a>
+                    <a href={`/admin/drive-files?invoiceNumber=${encodeURIComponent(s.invoice_number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                   </div>
                 ))}
               </div>
@@ -121,7 +121,7 @@ function DashboardContent() {
                       <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                     </div>
                     <span className="font-medium text-purple-700">{c.cdnCount}/{c.cap} CDN</span>
-                    <a href="/admin/drive-files" className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                    <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                   </div>
                 ))}
               </div>
@@ -143,7 +143,7 @@ function DashboardContent() {
                       <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                     </div>
                     <span className="font-medium text-blue-700">{c.passedCount}/{c.cdnCount} passed</span>
-                    <a href="/admin/automation?tab=boat-note-check" className="text-blue-600 hover:underline flex-shrink-0">Check →</a>
+                    <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                   </div>
                 ))}
               </div>
@@ -164,7 +164,7 @@ function DashboardContent() {
                       <p className="font-medium text-gray-800">E {c.number}</p>
                       <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                     </div>
-                    <a href="/admin/automation?tab=export-release" className="text-blue-600 hover:underline flex-shrink-0">Check →</a>
+                    <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                   </div>
                 ))}
               </div>
@@ -205,6 +205,8 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
 
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
   const selectedIds = Object.keys(selected).filter(id => selected[id])
+  const allSelected = items.length > 0 && selectedIds.length === items.length
+  function toggleAll() { setSelected(allSelected ? {} : Object.fromEntries(items.map(n => [n.id, true]))) }
 
   async function pickOne(n: any): Promise<boolean> {
     try {
@@ -269,6 +271,9 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
         <p className="text-xs text-gray-400 text-center py-6">Nothing waiting</p>
       ) : (
         <div className="space-y-1.5 max-h-80 overflow-y-auto">
+          <button onClick={toggleAll} className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 px-0.5 pb-1">
+            {allSelected ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>} Select all
+          </button>
           {items.map(n => (
             <div key={n.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
               <div className="flex items-center gap-2 min-w-0">
@@ -339,6 +344,8 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
 
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
   const selectedTasks = tasks.filter(t => selected[t.id])
+  const allSelected = tasks.length > 0 && selectedTasks.length === tasks.length
+  function toggleAll() { setSelected(allSelected ? {} : Object.fromEntries(tasks.map(t => [t.id, true]))) }
 
   async function returnTask(taskId: string) {
     const res = await fetch('/api/user-tasks', {
@@ -418,6 +425,9 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
         <p className="text-xs text-gray-400 text-center py-6">You haven't picked anything</p>
       ) : (
         <div className="space-y-1.5 max-h-80 overflow-y-auto">
+          <button onClick={toggleAll} className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 px-0.5 pb-1">
+            {allSelected ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>} Select all
+          </button>
           {tasks.map(t => (
             <div key={t.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
               <div className="flex items-center gap-2 min-w-0">

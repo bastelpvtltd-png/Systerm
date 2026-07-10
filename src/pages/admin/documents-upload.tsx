@@ -1728,6 +1728,7 @@ function DocumentsUploadContent() {
       {sendModalItem && (
         <SendModal
           label={sendModalItem.fileName}
+          uploaderName={uploaderName}
           onSave={async () => {
             const r = await saveOne(sendModalItem)
             return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink }] : [] }
@@ -1741,6 +1742,7 @@ function DocumentsUploadContent() {
       {sendModalAll && (
         <SendModal
           label={`${readyCount} file${readyCount !== 1 ? 's' : ''}`}
+          uploaderName={uploaderName}
           onSave={sendAllSave}
           onGetDriveLinks={sendAllDriveLinksOnly}
           onClose={() => setSendModalAll(false)}

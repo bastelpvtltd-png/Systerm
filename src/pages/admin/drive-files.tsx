@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
 import AdminLayout from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine, Anchor, Mail, CheckSquare, Square } from 'lucide-react'
@@ -90,6 +91,26 @@ export default function DriveFilesPage() {
     )
   }
 
+  // Dashboard's pending-work "View" buttons deep-link here with the record
+  // already identified (?number=, ?invoiceNumber=, etc.) — prefill those
+  // boxes and run the search automatically so the user only has to check it
+  // looks right and proceed, instead of retyping it.
+  const router = useRouter()
+  const [pendingAutoSearch, setPendingAutoSearch] = useState(false)
+  useEffect(() => {
+    if (!router.isReady) return
+    const q = router.query
+    let any = false
+    if (q.shipper) { setShipper(String(q.shipper)); any = true }
+    if (q.code) { setCode(String(q.code)); any = true }
+    if (q.number) { setNumber(String(q.number)); any = true }
+    if (q.containerNo) { setContainerNo(String(q.containerNo)); any = true }
+    if (q.reference) { setReference(String(q.reference)); any = true }
+    if (q.invoiceNumber) { setInvoiceNumber(String(q.invoiceNumber)); any = true }
+    if (any) setPendingAutoSearch(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady])
+
   // Re-fetch suggestion lists whenever shipper/code/number changes, so
   // picking one narrows the others to what actually exists together.
   useEffect(() => {
@@ -131,6 +152,11 @@ export default function DriveFilesPage() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (pendingAutoSearch) { setPendingAutoSearch(false); search() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAutoSearch])
 
   const cdnCountMatchesCap = (entry: OverviewEntry) => {
     const cap = parseInt(entry.cusdec.cap || '', 10)

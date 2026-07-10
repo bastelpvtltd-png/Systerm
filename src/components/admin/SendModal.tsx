@@ -13,8 +13,9 @@ export interface SendResultFile { fileName: string; driveLink: string }
 // whole "Send All" batch — each file still gets its own document_uploads
 // row (so Notify/Pick tracks them individually), but a batch Mail sends
 // everything in one message.
-export default function SendModal({ label, onSave, onGetDriveLinks, onClose, onDone }: {
+export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks, onClose, onDone }: {
   label: string
+  uploaderName?: string
   onSave: () => Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }>
   onGetDriveLinks: () => Promise<SendResultFile[]>
   onClose: () => void
@@ -54,18 +55,12 @@ export default function SendModal({ label, onSave, onGetDriveLinks, onClose, onD
       // together instead of one-at-a-time is most of what made "Done" feel
       // slow on a multi-file Send All.
       const auth = await authHeader()
-      await Promise.all(files.filter(f => f.driveLink).map(async f => {
-        const docRes = await fetch('/api/document-uploads', {
+      await Promise.all(files.filter(f => f.driveLink).map(f =>
+        fetch('/api/document-uploads', {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
-          body: JSON.stringify({ file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: save }),
+          body: JSON.stringify({ file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: save, notify, uploaded_by_name: uploaderName }),
         })
-        const doc = await docRes.json()
-        if (!docRes.ok || !notify || !doc.document?.id) return
-        await fetch('/api/dashboard-notifications', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
-          body: JSON.stringify({ document_id: doc.document.id }),
-        })
-      }))
+      ))
 
       if (mail && files.length) {
         setEmailAttachments(files.map(f => ({ filename: f.fileName, url: f.driveLink })))
