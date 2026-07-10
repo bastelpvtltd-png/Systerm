@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { supabase, authHeader } from '@/lib/supabase'
-import { Ship, FileText, Package, Clock, AlertCircle, ChevronDown } from 'lucide-react'
+import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
+import {
+  Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
+  Download, Mail, Undo2, Loader, History, Search,
+} from 'lucide-react'
 
 interface PendingGroup<T> { count: number; items: T[] }
 interface Summary {
@@ -44,7 +48,7 @@ function DashboardContent() {
     load()
   }, [])
 
-  const { has } = usePermission()
+  const { has, isAdmin } = usePermission()
 
   const stats = [
     { key: 'section:dashboard.total-shipments',  id: 'total',    label: 'Total Shipments',        value: summary.totalShipments,          icon: Ship,        color: '#1B3A5C' },
@@ -164,6 +168,250 @@ function DashboardContent() {
             )}
           </div>
         )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
+          {has('section:dashboard.incoming') && <IncomingPanel/>}
+          {has('section:dashboard.my-picked-tasks') && <MyPickedTasksPanel/>}
+        </div>
+
+        {isAdmin && <PickHistoryPanel/>}
       </div>
+  )
+}
+
+// ── Incoming (Notify) — every signed-in user sees every still-active
+// notification; Pick locks it to just them (see pick-task.ts's atomic claim).
+function IncomingPanel() {
+  const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [pickingId, setPickingId] = useState<string | null>(null)
+  const [viewing, setViewing] = useState<any | null>(null)
+
+  async function load() {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/dashboard-notifications', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setItems(d.notifications || [])
+    } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  async function pick(n: any) {
+    setPickingId(n.id)
+    try {
+      const res = await fetch('/api/pick-task', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ notification_id: n.id, document_id: n.document_uploads?.id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setItems(prev => prev.filter(x => x.id !== n.id))
+    } catch (e: any) {
+      alert(e.message)
+      load() // someone else likely already picked it — refresh to drop it from view
+    } finally {
+      setPickingId(null)
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2 className="font-semibold text-gray-900 mb-3 text-sm flex items-center gap-2"><Bell size={16} className="text-amber-500"/>Incoming</h2>
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-6">Nothing waiting</p>
+      ) : (
+        <div className="space-y-1.5 max-h-80 overflow-y-auto">
+          {items.map(n => (
+            <div key={n.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
+              <div className="min-w-0">
+                <p className="font-medium text-gray-800 truncate">{n.document_uploads?.file_name}</p>
+                <p className="text-gray-400">{n.uploaded_by_name || 'Someone'} uploaded this</p>
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <button onClick={() => setViewing(n)} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                  <Eye size={12}/> Look Only
+                </button>
+                <button onClick={() => pick(n)} disabled={pickingId === n.id}
+                  className="flex items-center gap-1 px-2 py-1.5 rounded-md text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                  {pickingId === n.id ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Pick
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {viewing && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setViewing(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b">
+              <p className="font-semibold text-sm truncate">{viewing.document_uploads?.file_name}</p>
+              <button onClick={() => setViewing(null)} className="text-gray-400 hover:text-gray-700">✕</button>
+            </div>
+            <div className="flex-1 overflow-auto p-2 bg-gray-50">
+              {viewing.document_uploads?.drive_url ? (
+                <iframe src={viewing.document_uploads.drive_url.replace('/view', '/preview')} className="w-full h-[70vh] rounded-lg border-0"/>
+              ) : (
+                <p className="text-xs text-gray-400 text-center py-10">No file link available</p>
+              )}
+            </div>
+            <p className="text-[10px] text-gray-400 px-4 py-2 border-t">View only — download and mail aren't available here.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── My Picked Tasks — full access (download/mail) to whatever this user
+// picked; Resolve/Return hands it back to Incoming for everyone else.
+function MyPickedTasksPanel() {
+  const [tasks, setTasks] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
+
+  async function load() {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/user-tasks', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setTasks(d.tasks || [])
+    } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  async function returnTask(taskId: string) {
+    setBusyId(taskId)
+    try {
+      const res = await fetch('/api/user-tasks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ task_id: taskId }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setTasks(prev => prev.filter(t => t.id !== taskId))
+    } catch (e: any) {
+      alert(e.message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function logAction(documentId: string, action: 'mail' | 'download') {
+    authHeader().then(h => fetch('/api/log-document-action', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+      body: JSON.stringify({ document_id: documentId, action }),
+    })).catch(() => {})
+  }
+
+  return (
+    <div className="card">
+      <h2 className="font-semibold text-gray-900 mb-3 text-sm flex items-center gap-2"><UserCheck size={16} className="text-green-600"/>My Picked Tasks</h2>
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : tasks.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-6">You haven't picked anything</p>
+      ) : (
+        <div className="space-y-1.5 max-h-80 overflow-y-auto">
+          {tasks.map(t => (
+            <div key={t.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
+              <div className="min-w-0">
+                <p className="font-medium text-gray-800 truncate">{t.document_uploads?.file_name}</p>
+                <p className="text-gray-400">Picked {new Date(t.picked_at).toLocaleString('en-GB')}</p>
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                {t.document_uploads?.drive_url && (
+                  <>
+                    <a href={t.document_uploads.drive_url} target="_blank" rel="noreferrer" onClick={() => logAction(t.document_uploads.id, 'download')}
+                      className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                      <Download size={12}/>
+                    </a>
+                    <button onClick={() => { logAction(t.document_uploads.id, 'mail'); setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }]) }}
+                      className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                      <Mail size={12}/>
+                    </button>
+                  </>
+                )}
+                <button onClick={() => returnTask(t.id)} disabled={busyId === t.id}
+                  className="flex items-center gap-1 px-2 py-1.5 rounded-md text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
+                  {busyId === t.id ? <Loader size={12} className="animate-spin"/> : <Undo2 size={12}/>} Resolve/Return
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {emailAttachments && <EmailPdfModal attachments={emailAttachments} onClose={() => setEmailAttachments(null)}/>}
+    </div>
+  )
+}
+
+// ── Admin/Overview "Pick History" audit log ───────────────────────────────
+function PickHistoryPanel() {
+  const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [fileName, setFileName] = useState('')
+  const [user, setUser] = useState('')
+  const [action, setAction] = useState('')
+
+  async function load() {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (fileName) params.set('fileName', fileName)
+      if (user) params.set('user', user)
+      if (action) params.set('action', action)
+      const res = await fetch(`/api/pick-history?${params.toString()}`, { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setItems(d.items || [])
+    } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="card mt-4">
+      <h2 className="font-semibold text-gray-900 mb-3 text-sm flex items-center gap-2"><History size={16} className="text-gray-500"/>Pick History</h2>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <input value={fileName} onChange={e => setFileName(e.target.value)} placeholder="File name..." className="input max-w-[160px]"/>
+        <input value={user} onChange={e => setUser(e.target.value)} placeholder="User..." className="input max-w-[140px]"/>
+        <select value={action} onChange={e => setAction(e.target.value)} className="input max-w-[120px]">
+          <option value="">All actions</option>
+          <option value="pick">Pick</option>
+          <option value="return">Return</option>
+          <option value="mail">Mail</option>
+          <option value="download">Download</option>
+        </select>
+        <button onClick={load} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
+          <Search size={12}/> Search
+        </button>
+      </div>
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-6">No history yet</p>
+      ) : (
+        <div className="overflow-x-auto max-h-96 overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 sticky top-0"><tr>
+              {['File', 'User', 'Action', 'When'].map(h => <th key={h} className="text-left px-2 py-1.5 text-gray-500 font-medium">{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {items.map(h => (
+                <tr key={h.id} className="border-t border-gray-50">
+                  <td className="px-2 py-1.5 text-gray-800">{h.document_uploads?.file_name || '—'}</td>
+                  <td className="px-2 py-1.5 text-gray-600">{h.user_name || '—'}</td>
+                  <td className="px-2 py-1.5 text-gray-600 capitalize">{h.action}</td>
+                  <td className="px-2 py-1.5 text-gray-400">{new Date(h.action_timestamp).toLocaleString('en-GB')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }

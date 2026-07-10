@@ -7,8 +7,9 @@ import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
   Trash2, Pencil, FileWarning, Eye, RefreshCw, Plus, Lock, Unlock, Mail,
-  CheckSquare, Square, History,
+  CheckSquare, Square, History, Send,
 } from 'lucide-react'
+import SendModal from '@/components/admin/SendModal'
 
 // Three panels here, each gated by its own permission:
 // - Upload PDFs + Uploaded (normal access — simple view/rename/save/delete)
@@ -166,6 +167,9 @@ function DocumentsUploadContent() {
   // Email button shows up on any saved item (here and in Preview/Shipment
   // Overview) instead of interrupting every save with a Yes/No prompt.
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
+  // Upload workflow's Save/Mail/Notify "Send" modal (replaces the old
+  // immediate one-click Save in the simple popup).
+  const [sendModalItem, setSendModalItem] = useState<UploadItem | null>(null)
   // Preview's "select just the PDFs you need" multi-email, mirroring Shipment
   // Overview's picker.
   const [selectedPreviewDocs, setSelectedPreviewDocs] = useState<Record<string, EmailAttachment>>({})
@@ -448,10 +452,25 @@ function DocumentsUploadContent() {
       }
 
       updateItem(item.id, { status: 'saved', driveLink: link })
+      return { ok: true, driveLink: link }
     } catch (e: any) {
       updateItem(item.id, { status: 'error', error: e.message })
       setError(e.message)
+      return { ok: false, error: e.message }
     }
+  }
+
+  // Send modal's "Mail/Notify without Save" path — uploads to Drive so the
+  // file has a real, viewable link, but never touches uploaded_documents or
+  // the structured table (that's what makes it distinct from a real Save).
+  async function uploadToDriveOnly(item: UploadItem): Promise<string> {
+    const res = await fetch('/api/upload-to-drive', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64: item.base64, fileName: item.fileName, mimeType: 'application/pdf', docType: item.detectedType || 'cusdec' }),
+    })
+    const d = await res.json()
+    if (!res.ok || !d.driveLink) throw new Error(d.error || 'Drive upload failed')
+    return d.driveLink
   }
 
   // Before actually saving: check whether this looks like a document that's
@@ -468,12 +487,12 @@ function DocumentsUploadContent() {
     if (!item.detectedType) {
       setError(`"${item.fileName}" — document type could not be identified. Select it manually before saving.`)
       updateItem(item.id, { status: 'error', error: 'Type not identified' })
-      return
+      return { ok: false, error: 'Type not identified' }
     }
     if (!item.fields.some(f => f.value && f.value.trim())) {
       setError(`"${item.fileName}" — no data could be extracted from this PDF. It can't be saved until fields have values (draw boxes in Admin Edit).`)
       updateItem(item.id, { status: 'error', error: 'No data extracted' })
-      return
+      return { ok: false, error: 'No data extracted' }
     }
     const docType = item.detectedType || 'cusdec'
     const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
@@ -486,17 +505,17 @@ function DocumentsUploadContent() {
       if (!res.ok) throw new Error(d.error || 'Duplicate check failed')
       if (d.matches?.length) {
         setMatchModal({ item, matches: d.matches, capInfo: d.capInfo, table: DOC_TYPE_TABLE[docType] })
-        return
+        return { ok: false, error: 'A matching document already exists — resolve it above, then Send again.' }
       }
       if (d.capInfo && d.capInfo.currentCount >= d.capInfo.cap) {
         setCapModal({ item, capInfo: d.capInfo })
-        return
+        return { ok: false, error: "This CUSDEC's CAP is already full — resolve it above, then Send again." }
       }
     } catch (e: any) {
       setError(e.message)
-      return
+      return { ok: false, error: e.message }
     }
-    await persistItem(item, 'insert')
+    return await persistItem(item, 'insert')
   }
 
   async function resolveMatchReplace(matchId: string) {
@@ -1530,10 +1549,10 @@ function DocumentsUploadContent() {
                       className="px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100">
                       Close
                     </button>
-                    <button onClick={() => saveOne(selectedItem)} disabled={selectedItem.status === 'saving'}
+                    <button onClick={() => setSendModalItem(selectedItem)} disabled={selectedItem.status === 'saving'}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ background: '#1B3A5C' }}>
-                      {selectedItem.status === 'saving' ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}
-                      Save
+                      {selectedItem.status === 'saving' ? <Loader size={13} className="animate-spin"/> : <Send size={13}/>}
+                      Send
                     </button>
                   </div>
                 </div>
@@ -1678,6 +1697,16 @@ function DocumentsUploadContent() {
       )}
 
       {emailAttachments && <EmailPdfModal attachments={emailAttachments} onClose={() => setEmailAttachments(null)}/>}
+
+      {sendModalItem && (
+        <SendModal
+          fileName={sendModalItem.fileName}
+          onSave={() => saveOne(sendModalItem)}
+          onGetDriveLink={() => uploadToDriveOnly(sendModalItem)}
+          onClose={() => setSendModalItem(null)}
+          onDone={() => { setSendModalItem(null); setSelectedId(null) }}
+        />
+      )}
     </>
   )
 }

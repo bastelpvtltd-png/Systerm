@@ -1,0 +1,28 @@
+import type { NextApiRequest, NextApiResponse } from 'next'
+import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
+
+// Logs a 'mail' or 'download' action against a picked document — fills out
+// the rest of pick_history_log's action set beyond pick/return.
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') return res.status(405).end()
+  try {
+    const authed = await requireAuth(req)
+    if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
+    const { document_id, action } = req.body as { document_id: string; action: 'mail' | 'download' }
+    if (!document_id || !['mail', 'download'].includes(action)) return res.status(400).json({ error: 'document_id and a valid action required' })
+
+    const { data: prof } = await supabaseAdmin.from('profiles').select('username, full_name').eq('id', authed.userId).maybeSingle()
+    const userName = prof?.full_name || prof?.username || ''
+    await supabaseAdmin.from('pick_history_log').insert({ document_id, user_id: authed.userId, user_name: userName, action })
+    res.json({ ok: true })
+  } catch (err: any) {
+    console.error('[log-document-action] error:', err)
+    res.status(500).json({ error: err.message })
+  }
+}
