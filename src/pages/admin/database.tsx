@@ -3,6 +3,7 @@ import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import {
   Database, RefreshCw, Trash2, Save, Loader, AlertTriangle, X, Undo2, Archive,
+  ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react'
 
 const TABLES = [
@@ -278,27 +279,13 @@ function DatabaseContent() {
           ))}
         </div>
 
-        {columns.length > 0 && (
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-xs text-gray-500">Sort by</span>
-            <select value={sortCol} onChange={e => setSortCol(e.target.value)}
-              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-600">
-              {columns.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <button onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
-              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
-              {sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'}
-            </button>
-          </div>
-        )}
-
         {error && (
           <div className="mb-4 flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
             <AlertTriangle size={14}/> {error}
           </div>
         )}
 
-        <div className="card overflow-auto" style={{ maxHeight: '70vh' }}>
+        <div className="card overflow-auto" style={{ maxHeight: '85vh' }}>
           {loading ? (
             <div className="flex justify-center py-16"><Loader size={22} className="animate-spin text-gray-400"/></div>
           ) : columns.length === 0 ? (
@@ -308,7 +295,17 @@ function DatabaseContent() {
               <thead className="sticky top-0 bg-gray-50 z-10">
                 <tr>
                   {columns.map(col => (
-                    <th key={col} className="text-left px-3 py-2 text-gray-500 font-medium whitespace-nowrap border-b border-gray-100">{col}</th>
+                    <th key={col} onClick={() => setSortCol(prev => {
+                        if (prev === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); return prev }
+                        setSortDir('asc'); return col
+                      })}
+                      title="Click to sort by this column"
+                      className="text-left px-3 py-2 text-gray-500 font-medium whitespace-nowrap border-b border-gray-100 cursor-pointer select-none hover:text-gray-800">
+                      <span className="flex items-center gap-1">
+                        {col}
+                        {sortCol === col ? (sortDir === 'asc' ? <ArrowUp size={11}/> : <ArrowDown size={11}/>) : <ArrowUpDown size={11} className="text-gray-300"/>}
+                      </span>
+                    </th>
                   ))}
                   <th className="w-24 border-b border-gray-100"></th>
                 </tr>
@@ -320,8 +317,9 @@ function DatabaseContent() {
                 {sortedRows.map(row => {
                   const draft = draftFor(row)
                   const dirty = !!drafts[row.id]
+                  const statusColor = row.export_release_passed ? 'border-l-4 border-l-green-500' : row.boat_note_passed ? 'border-l-4 border-l-blue-500' : ''
                   return (
-                    <tr key={row.id} className={`border-b border-gray-50 ${dirty ? 'bg-amber-50' : 'hover:bg-gray-50'}`}>
+                    <tr key={row.id} className={`border-b border-gray-50 ${dirty ? 'bg-amber-50' : 'hover:bg-gray-50'} ${statusColor}`}>
                       {columns.map(col => {
                         const val = draft[col]
                         const readOnly = col === 'id' || col === 'created_at'
