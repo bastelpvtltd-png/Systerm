@@ -9,7 +9,7 @@ import {
   Trash2, Pencil, FileWarning, Eye, RefreshCw, Plus, Lock, Unlock, Mail,
   CheckSquare, Square, History, Send,
 } from 'lucide-react'
-import SendModal from '@/components/admin/SendModal'
+import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
 
 // Three panels here, each gated by its own permission:
 // - Upload PDFs + Uploaded (normal access — simple view/rename/save/delete)
@@ -170,6 +170,7 @@ function DocumentsUploadContent() {
   // Upload workflow's Save/Mail/Notify "Send" modal (replaces the old
   // immediate one-click Save in the simple popup).
   const [sendModalItem, setSendModalItem] = useState<UploadItem | null>(null)
+  const [sendModalAll, setSendModalAll] = useState(false)
   // Preview's "select just the PDFs you need" multi-email, mirroring Shipment
   // Overview's picker.
   const [selectedPreviewDocs, setSelectedPreviewDocs] = useState<Record<string, EmailAttachment>>({})
@@ -877,6 +878,32 @@ function DocumentsUploadContent() {
     for (const it of toSave) await saveOne(it)
     setSavingAll(false)
   }
+
+  // "Send All" batch path for SendModal — saves (or just Drive-uploads, if
+  // Save was unticked) every ready/error item in this list, one at a time,
+  // and reports back only the ones that actually succeeded.
+  async function sendAllSave(): Promise<{ ok: boolean; results: SendResultFile[] }> {
+    setSavingAll(true)
+    const toSave = items.filter(it => it.status === 'ready' || it.status === 'error')
+    const results: SendResultFile[] = []
+    for (const it of toSave) {
+      const r = await saveOne(it)
+      if (r?.ok && r.driveLink) results.push({ fileName: it.fileName, driveLink: r.driveLink })
+    }
+    setSavingAll(false)
+    return { ok: true, results }
+  }
+  async function sendAllDriveLinksOnly(): Promise<SendResultFile[]> {
+    const toSend = items.filter(it => it.status === 'ready' || it.status === 'error')
+    const results: SendResultFile[] = []
+    for (const it of toSend) {
+      try {
+        const link = await uploadToDriveOnly(it)
+        results.push({ fileName: it.fileName, driveLink: link })
+      } catch { /* skip files that fail to upload, keep going */ }
+    }
+    return results
+  }
   function handleDeleteAll() {
     if (!items.length) return
     if (!confirm(`${items.length} file${items.length !== 1 ? 's' : ''} okkoma me list eken ain karannada? (Dhannma save unu dewal database eke thiyenawa — meken ain wenne me upload session eke list eka witharai.)`)) return
@@ -952,9 +979,9 @@ function DocumentsUploadContent() {
               <h2 className="font-semibold text-gray-900 text-sm">Uploaded ({items.length})</h2>
               {items.length > 0 && (
                 <div className="flex items-center gap-1.5">
-                  <button onClick={handleSaveAll} disabled={savingAll || readyCount === 0}
-                    title="Save all" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
-                    {savingAll ? <Loader size={11} className="animate-spin"/> : <Save size={11}/>} Save All
+                  <button onClick={() => setSendModalAll(true)} disabled={savingAll || readyCount === 0}
+                    title="Send all — same Save/Mail/Notify choice as a single file" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
+                    {savingAll ? <Loader size={11} className="animate-spin"/> : <Send size={11}/>} Send All
                   </button>
                   {savedItems.length > 0 && (
                     <button onClick={() => setEmailAttachments(savedItems.map(it => ({ filename: it.fileName, url: it.driveLink })))}
@@ -1200,9 +1227,9 @@ function DocumentsUploadContent() {
               </h2>
               {items.length > 0 && (
                 <div className="flex items-center gap-1.5">
-                  <button onClick={handleSaveAll} disabled={savingAll || readyCount === 0}
-                    title="Save all" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
-                    {savingAll ? <Loader size={11} className="animate-spin"/> : <Save size={11}/>} Save All
+                  <button onClick={() => setSendModalAll(true)} disabled={savingAll || readyCount === 0}
+                    title="Send all — same Save/Mail/Notify choice as a single file" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
+                    {savingAll ? <Loader size={11} className="animate-spin"/> : <Send size={11}/>} Send All
                   </button>
                   {savedItems.length > 0 && (
                     <button onClick={() => setEmailAttachments(savedItems.map(it => ({ filename: it.fileName, url: it.driveLink })))}
@@ -1511,11 +1538,11 @@ function DocumentsUploadContent() {
                       className="px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100">
                       Close
                     </button>
-                    <button onClick={() => saveOne(selectedItem)} disabled={selectedItem.status === 'saving'}
+                    <button onClick={() => setSendModalItem(selectedItem)} disabled={selectedItem.status === 'saving'}
                       className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs text-white font-medium disabled:opacity-50"
                       style={{ background: docDef(selectedItem.detectedType)?.color || '#1B3A5C' }}>
-                      {selectedItem.status === 'saving' ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}
-                      {selectedItem.status === 'saved' ? 'Re-save' : 'Save'}
+                      {selectedItem.status === 'saving' ? <Loader size={13} className="animate-spin"/> : <Send size={13}/>}
+                      {selectedItem.status === 'saved' ? 'Re-send' : 'Send'}
                     </button>
                   </div>
                 </div>
@@ -1700,11 +1727,24 @@ function DocumentsUploadContent() {
 
       {sendModalItem && (
         <SendModal
-          fileName={sendModalItem.fileName}
-          onSave={() => saveOne(sendModalItem)}
-          onGetDriveLink={() => uploadToDriveOnly(sendModalItem)}
+          label={sendModalItem.fileName}
+          onSave={async () => {
+            const r = await saveOne(sendModalItem)
+            return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink }] : [] }
+          }}
+          onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem) }]}
           onClose={() => setSendModalItem(null)}
           onDone={() => { setSendModalItem(null); setSelectedId(null) }}
+        />
+      )}
+
+      {sendModalAll && (
+        <SendModal
+          label={`${readyCount} file${readyCount !== 1 ? 's' : ''}`}
+          onSave={sendAllSave}
+          onGetDriveLinks={sendAllDriveLinksOnly}
+          onClose={() => setSendModalAll(false)}
+          onDone={() => setSendModalAll(false)}
         />
       )}
     </>
