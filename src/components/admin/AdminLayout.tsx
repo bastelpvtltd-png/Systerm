@@ -69,6 +69,7 @@ export const SECTION_ITEMS = [
   { key: 'section:dashboard.pending-summary', tabHref: '/admin', label: 'Pending Work Summary panel' },
   { key: 'section:dashboard.incoming',        tabHref: '/admin', label: 'Incoming (Notify) panel' },
   { key: 'section:dashboard.my-picked-tasks', tabHref: '/admin', label: 'My Picked Tasks panel' },
+  { key: 'section:dashboard.pick-history',    tabHref: '/admin', label: 'Pick History panel' },
   // Shipment Entry
   { key: 'section:shipment-entry.form', tabHref: '/admin/shipment-entry', label: 'Shipment entry form' },
   // Templates

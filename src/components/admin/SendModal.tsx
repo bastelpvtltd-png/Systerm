@@ -24,6 +24,14 @@ export default function SendModal({ label, onSave, onGetDriveLinks, onClose, onD
   const [mail, setMail] = useState(false)
   const [notify, setNotify] = useState(false)
   const [busy, setBusy] = useState(false)
+
+  // Notify requires Save (you can't let people Pick something that was never
+  // actually persisted) — Mail has no such requirement. Ticking Notify forces
+  // Save on and locks it; unticking Notify frees Save again.
+  function setNotifyChecked(checked: boolean) {
+    setNotify(checked)
+    if (checked) setSave(true)
+  }
   const [error, setError] = useState('')
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
 
@@ -42,22 +50,22 @@ export default function SendModal({ label, onSave, onGetDriveLinks, onClose, onD
         files = await onGetDriveLinks()
       }
 
+      // One file's bookkeeping doesn't depend on another's — running them
+      // together instead of one-at-a-time is most of what made "Done" feel
+      // slow on a multi-file Send All.
       const auth = await authHeader()
-      for (const f of files) {
-        if (!f.driveLink) continue
+      await Promise.all(files.filter(f => f.driveLink).map(async f => {
         const docRes = await fetch('/api/document-uploads', {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
           body: JSON.stringify({ file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: save }),
         })
         const doc = await docRes.json()
-        if (!docRes.ok) continue
-        if (notify && doc.document?.id) {
-          await fetch('/api/dashboard-notifications', {
-            method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
-            body: JSON.stringify({ document_id: doc.document.id }),
-          })
-        }
-      }
+        if (!docRes.ok || !notify || !doc.document?.id) return
+        await fetch('/api/dashboard-notifications', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
+          body: JSON.stringify({ document_id: doc.document.id }),
+        })
+      }))
 
       if (mail && files.length) {
         setEmailAttachments(files.map(f => ({ filename: f.fileName, url: f.driveLink })))
@@ -85,8 +93,8 @@ export default function SendModal({ label, onSave, onGetDriveLinks, onClose, onD
         </div>
         <div className="p-5 space-y-3">
           <p className="text-xs text-gray-500 truncate">{label}</p>
-          <label className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50">
-            <input type="checkbox" checked={save} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
+          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
+            <input type="checkbox" checked={save} disabled={notify} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
             <Save size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Save (to Drive + Database)</span>
           </label>
@@ -96,10 +104,11 @@ export default function SendModal({ label, onSave, onGetDriveLinks, onClose, onD
             <span className="text-sm text-gray-800">Mail</span>
           </label>
           <label className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50">
-            <input type="checkbox" checked={notify} onChange={e => setNotify(e.target.checked)} className="w-4 h-4"/>
+            <input type="checkbox" checked={notify} onChange={e => setNotifyChecked(e.target.checked)} className="w-4 h-4"/>
             <Bell size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Notify (everyone's Dashboard)</span>
           </label>
+          {notify && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
           {error && <p className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
         </div>
         <div className="flex gap-3 p-5 border-t">

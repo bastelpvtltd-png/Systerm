@@ -4,7 +4,7 @@ import { supabase, authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
 import {
   Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
-  Download, Mail, Undo2, Loader, History, Search,
+  Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square,
 } from 'lucide-react'
 
 interface PendingGroup<T> { count: number; items: T[] }
@@ -29,6 +29,9 @@ function DashboardContent() {
     totalShipments: 0, shipmentsPending: emptyGroup, cdnPending: emptyGroup, boatNotePending: emptyGroup, releasePending: emptyGroup,
   })
   const [expanded, setExpanded] = useState<string | null>(null)
+  // Bumped whenever Incoming's Pick succeeds, so My Picked Tasks re-fetches
+  // immediately instead of needing a page refresh to show the new task.
+  const [pickRefreshKey, setPickRefreshKey] = useState(0)
 
   useEffect(() => {
     async function load() {
@@ -48,7 +51,7 @@ function DashboardContent() {
     load()
   }, [])
 
-  const { has, isAdmin } = usePermission()
+  const { has } = usePermission()
 
   const stats = [
     { key: 'section:dashboard.total-shipments',  id: 'total',    label: 'Total Shipments',        value: summary.totalShipments,          icon: Ship,        color: '#1B3A5C' },
@@ -170,22 +173,25 @@ function DashboardContent() {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
-          {has('section:dashboard.incoming') && <IncomingPanel/>}
-          {has('section:dashboard.my-picked-tasks') && <MyPickedTasksPanel/>}
+          {has('section:dashboard.incoming') && <IncomingPanel onPicked={() => setPickRefreshKey(k => k + 1)}/>}
+          {has('section:dashboard.my-picked-tasks') && <MyPickedTasksPanel refreshKey={pickRefreshKey}/>}
         </div>
 
-        {isAdmin && <PickHistoryPanel/>}
+        {has('section:dashboard.pick-history') && <PickHistoryPanel/>}
       </div>
   )
 }
 
 // ── Incoming (Notify) — every signed-in user sees every still-active
 // notification; Pick locks it to just them (see pick-task.ts's atomic claim).
-function IncomingPanel() {
+// Multiple can be ticked and picked together in one go.
+function IncomingPanel({ onPicked }: { onPicked: () => void }) {
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [pickingId, setPickingId] = useState<string | null>(null)
+  const [pickingAll, setPickingAll] = useState(false)
   const [viewing, setViewing] = useState<any | null>(null)
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
 
   async function load() {
     setLoading(true)
@@ -197,8 +203,10 @@ function IncomingPanel() {
   }
   useEffect(() => { load() }, [])
 
-  async function pick(n: any) {
-    setPickingId(n.id)
+  function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
+  const selectedIds = Object.keys(selected).filter(id => selected[id])
+
+  async function pickOne(n: any): Promise<boolean> {
     try {
       const res = await fetch('/api/pick-task', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
@@ -206,18 +214,55 @@ function IncomingPanel() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setItems(prev => prev.filter(x => x.id !== n.id))
+      return true
     } catch (e: any) {
-      alert(e.message)
-      load() // someone else likely already picked it — refresh to drop it from view
-    } finally {
-      setPickingId(null)
+      return false
+    }
+  }
+
+  async function pick(n: any) {
+    setPickingId(n.id)
+    const ok = await pickOne(n)
+    if (ok) { setItems(prev => prev.filter(x => x.id !== n.id)); onPicked() }
+    else { alert('Someone else already picked this'); load() }
+    setPickingId(null)
+  }
+
+  async function pickSelected() {
+    setPickingAll(true)
+    const toPick = items.filter(n => selected[n.id])
+    let anyOk = false
+    for (const n of toPick) {
+      const ok = await pickOne(n)
+      if (ok) { anyOk = true; setItems(prev => prev.filter(x => x.id !== n.id)) }
+    }
+    setSelected({})
+    setPickingAll(false)
+    if (anyOk) onPicked()
+    load()
+  }
+
+  function look(n: any) {
+    setViewing(n)
+    if (n.document_uploads?.id) {
+      authHeader().then(h => fetch('/api/log-document-action', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ document_id: n.document_uploads.id, action: 'look' }),
+      })).catch(() => {})
     }
   }
 
   return (
     <div className="card">
-      <h2 className="font-semibold text-gray-900 mb-3 text-sm flex items-center gap-2"><Bell size={16} className="text-amber-500"/>Incoming</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Bell size={16} className="text-amber-500"/>Incoming</h2>
+        {selectedIds.length > 0 && (
+          <button onClick={pickSelected} disabled={pickingAll}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+            {pickingAll ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Pick Selected ({selectedIds.length})
+          </button>
+        )}
+      </div>
       {loading ? (
         <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
       ) : items.length === 0 ? (
@@ -226,12 +271,17 @@ function IncomingPanel() {
         <div className="space-y-1.5 max-h-80 overflow-y-auto">
           {items.map(n => (
             <div key={n.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
-              <div className="min-w-0">
-                <p className="font-medium text-gray-800 truncate">{n.document_uploads?.file_name}</p>
-                <p className="text-gray-400">{n.uploaded_by_name || 'Someone'} uploaded this</p>
+              <div className="flex items-center gap-2 min-w-0">
+                <button onClick={() => toggle(n.id)} className="flex-shrink-0 text-gray-300 hover:text-green-600">
+                  {selected[n.id] ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>}
+                </button>
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 truncate">{n.document_uploads?.file_name}</p>
+                  <p className="text-gray-400">{n.uploaded_by_name || 'Someone'} uploaded this</p>
+                </div>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                <button onClick={() => setViewing(n)} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                <button onClick={() => look(n)} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                   <Eye size={12}/> Look Only
                 </button>
                 <button onClick={() => pick(n)} disabled={pickingId === n.id}
@@ -267,12 +317,15 @@ function IncomingPanel() {
 }
 
 // ── My Picked Tasks — full access (download/mail) to whatever this user
-// picked; Resolve/Return hands it back to Incoming for everyone else.
-function MyPickedTasksPanel() {
+// picked; Resolve/Return hands it back to Incoming for everyone else. Ticks
+// let several be downloaded/mailed/returned together in one action.
+function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   const [tasks, setTasks] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
 
   async function load() {
     setLoading(true)
@@ -282,23 +335,40 @@ function MyPickedTasksPanel() {
       if (res.ok) setTasks(d.tasks || [])
     } finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [refreshKey])
+
+  function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
+  const selectedTasks = tasks.filter(t => selected[t.id])
 
   async function returnTask(taskId: string) {
+    const res = await fetch('/api/user-tasks', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+      body: JSON.stringify({ task_id: taskId }),
+    })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.error)
+  }
+
+  async function handleReturn(taskId: string) {
     setBusyId(taskId)
     try {
-      const res = await fetch('/api/user-tasks', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ task_id: taskId }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error)
+      await returnTask(taskId)
       setTasks(prev => prev.filter(t => t.id !== taskId))
     } catch (e: any) {
       alert(e.message)
     } finally {
       setBusyId(null)
     }
+  }
+
+  async function returnSelected() {
+    setBulkBusy(true)
+    for (const t of selectedTasks) {
+      try { await returnTask(t.id) } catch { /* keep going through the rest */ }
+    }
+    setSelected({})
+    setBulkBusy(false)
+    load()
   }
 
   function logAction(documentId: string, action: 'mail' | 'download') {
@@ -308,9 +378,40 @@ function MyPickedTasksPanel() {
     })).catch(() => {})
   }
 
+  function downloadSelected() {
+    for (const t of selectedTasks) {
+      if (!t.document_uploads?.drive_url) continue
+      logAction(t.document_uploads.id, 'download')
+      window.open(t.document_uploads.drive_url, '_blank')
+    }
+  }
+
+  function mailSelected() {
+    const attachments = selectedTasks
+      .filter(t => t.document_uploads?.drive_url)
+      .map(t => { logAction(t.document_uploads.id, 'mail'); return { filename: t.document_uploads.file_name, url: t.document_uploads.drive_url } })
+    if (attachments.length) setEmailAttachments(attachments)
+  }
+
   return (
     <div className="card">
-      <h2 className="font-semibold text-gray-900 mb-3 text-sm flex items-center gap-2"><UserCheck size={16} className="text-green-600"/>My Picked Tasks</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><UserCheck size={16} className="text-green-600"/>My Picked Tasks</h2>
+        {selectedTasks.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <button onClick={downloadSelected} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs">
+              <Download size={12}/> ({selectedTasks.length})
+            </button>
+            <button onClick={mailSelected} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs">
+              <Mail size={12}/> ({selectedTasks.length})
+            </button>
+            <button onClick={returnSelected} disabled={bulkBusy}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
+              {bulkBusy ? <Loader size={12} className="animate-spin"/> : <Undo2 size={12}/>} Resolve Selected
+            </button>
+          </div>
+        )}
+      </div>
       {loading ? (
         <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
       ) : tasks.length === 0 ? (
@@ -319,9 +420,14 @@ function MyPickedTasksPanel() {
         <div className="space-y-1.5 max-h-80 overflow-y-auto">
           {tasks.map(t => (
             <div key={t.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
-              <div className="min-w-0">
-                <p className="font-medium text-gray-800 truncate">{t.document_uploads?.file_name}</p>
-                <p className="text-gray-400">Picked {new Date(t.picked_at).toLocaleString('en-GB')}</p>
+              <div className="flex items-center gap-2 min-w-0">
+                <button onClick={() => toggle(t.id)} className="flex-shrink-0 text-gray-300 hover:text-green-600">
+                  {selected[t.id] ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>}
+                </button>
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 truncate">{t.document_uploads?.file_name}</p>
+                  <p className="text-gray-400">Picked {new Date(t.picked_at).toLocaleString('en-GB')}</p>
+                </div>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 {t.document_uploads?.drive_url && (
@@ -336,7 +442,7 @@ function MyPickedTasksPanel() {
                     </button>
                   </>
                 )}
-                <button onClick={() => returnTask(t.id)} disabled={busyId === t.id}
+                <button onClick={() => handleReturn(t.id)} disabled={busyId === t.id}
                   className="flex items-center gap-1 px-2 py-1.5 rounded-md text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
                   {busyId === t.id ? <Loader size={12} className="animate-spin"/> : <Undo2 size={12}/>} Resolve/Return
                 </button>
@@ -384,6 +490,7 @@ function PickHistoryPanel() {
           <option value="return">Return</option>
           <option value="mail">Mail</option>
           <option value="download">Download</option>
+          <option value="look">Look</option>
         </select>
         <button onClick={load} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
           <Search size={12}/> Search
