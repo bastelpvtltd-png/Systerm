@@ -40,3 +40,45 @@ body {
 .badge-pending  { @apply bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full font-medium; }
 .badge-done     { @apply bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-medium; }
 .badge-released { @apply bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-medium; }
+
+/* ── Dark mode ──────────────────────────────────────────────────────────
+   The app was built light-only, with every page using plain Tailwind gray/
+   white utility classes directly (no dark: variants anywhere). Rather than
+   touch every className in every page — high risk of missing spots and
+   leaving a half-inverted page — this overrides the actual utility classes
+   already in use, scoped under :root.dark (toggled by AdminLayout's theme
+   switch). Same approach as a CSS custom-property re-theme, just keyed off
+   Tailwind's own class names since that's what's already everywhere. */
+:root.dark body { background: #0f172a; color: #e2e8f0; }
+:root.dark .card { background: #1e293b; border-color: #334155; }
+:root.dark .input {
+  background: #0f172a; border-color: #334155; color: #e2e8f0;
+}
+:root.dark .input::placeholder { color: #64748b; }
+:root.dark .btn-secondary { background: #1e293b; border-color: #3b82f6; color: #93c5fd; }
+:root.dark .btn-secondary:hover { background: #1e3a5f; }
+
+:root.dark .bg-white { background-color: #1e293b !important; }
+:root.dark .bg-gray-50 { background-color: #0f172a !important; }
+:root.dark .bg-gray-100 { background-color: #1e293b !important; }
+:root.dark .bg-blue-50 { background-color: #1e3a5f !important; }
+:root.dark .bg-green-50 { background-color: #14372c !important; }
+:root.dark .bg-amber-50 { background-color: #3a2e14 !important; }
+:root.dark .bg-red-50 { background-color: #3a1414 !important; }
+:root.dark .bg-purple-50 { background-color: #2e1a3a !important; }
+
+:root.dark .text-gray-900 { color: #f1f5f9 !important; }
+:root.dark .text-gray-800 { color: #e2e8f0 !important; }
+:root.dark .text-gray-700 { color: #cbd5e1 !important; }
+:root.dark .text-gray-600 { color: #94a3b8 !important; }
+:root.dark .text-gray-500 { color: #94a3b8 !important; }
+:root.dark .text-gray-400 { color: #64748b !important; }
+:root.dark .text-gray-300 { color: #475569 !important; }
+
+:root.dark .border-gray-50 { border-color: #1e293b !important; }
+:root.dark .border-gray-100 { border-color: #334155 !important; }
+:root.dark .border-gray-200 { border-color: #334155 !important; }
+:root.dark .divide-gray-50 > * + * { border-color: #334155 !important; }
+
+:root.dark .hover\:bg-gray-50:hover { background-color: #1e293b !important; }
+:root.dark .hover\:bg-gray-100:hover { background-color: #334155 !important; }

@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Ship, Upload,
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
-  Database, Loader, MessageSquare, CheckCircle, FileStack, Zap, Clock,
+  Database, Loader, MessageSquare, CheckCircle, FileStack, Zap, Clock, Sun, Moon,
 } from 'lucide-react'
 import { formatSLDateTime } from '@/lib/slTime'
 
@@ -129,6 +129,26 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [checking, setChecking] = useState(true)
   const [isAdmin, setIsAdmin] = useState(false)
   const [allowedTabs, setAllowedTabs] = useState<string[]>([])
+  const [dark, setDark] = useState(false)
+
+  // Theme preference persists in localStorage (not tied to any one page,
+  // so it survives navigation and reload) — the actual re-theming happens
+  // via plain CSS overrides in globals.css keyed off :root.dark, since the
+  // app's pages use raw Tailwind gray/white classes with no dark: variants.
+  useEffect(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('theme') : null
+    const isDark = saved === 'dark'
+    setDark(isDark)
+    document.documentElement.classList.toggle('dark', isDark)
+  }, [])
+  function toggleTheme() {
+    setDark(d => {
+      const next = !d
+      document.documentElement.classList.toggle('dark', next)
+      localStorage.setItem('theme', next ? 'dark' : 'light')
+      return next
+    })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -198,6 +218,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           className="flex items-center gap-3 px-3 py-2 mx-2 mt-2 rounded-lg text-sm text-blue-200 hover:bg-white/10 flex-shrink-0">
           {collapsed ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}
           {!collapsed && <span>Collapse</span>}
+        </button>
+
+        {/* Dark / Light theme toggle */}
+        <button onClick={toggleTheme}
+          className="flex items-center gap-3 px-3 py-2 mx-2 mt-1 rounded-lg text-sm text-blue-200 hover:bg-white/10 flex-shrink-0">
+          {dark ? <Sun size={18}/> : <Moon size={18}/>}
+          {!collapsed && <span>{dark ? 'Light Mode' : 'Dark Mode'}</span>}
         </button>
 
         {/* Nav */}
