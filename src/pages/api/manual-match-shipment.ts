@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { mergeShipmentIntoCusdec } from '@/lib/docTables'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,6 +14,8 @@ const supabaseAdmin = createClient(
 // merge-then-delete logic as the automatic path.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { cusdec_id, shipment_id } = req.body
     if (!cusdec_id || !shipment_id) return res.status(400).json({ error: 'cusdec_id and shipment_id required' })

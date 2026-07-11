@@ -363,7 +363,7 @@ function DocumentsUploadContent() {
     if (!docType || !updatedField) return
     try {
       const res = await fetch('/api/save-field-rules', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({
           doc_type: docType, key: updatedField.key, label: updatedField.label,
           excludeWords: updatedField.excludeWords, formula: updatedField.formula, specNote: updatedField.specNote, variant,
@@ -408,7 +408,7 @@ function DocumentsUploadContent() {
       let link = ''
       try {
         const dr = await fetch('/api/upload-to-drive', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
           body: JSON.stringify({ base64: item.base64, fileName: item.fileName, mimeType: 'application/pdf', docType }),
         })
         const dd = await dr.json()
@@ -419,7 +419,7 @@ function DocumentsUploadContent() {
       // independent writes — neither depends on the other's result, so run
       // them together instead of one-after-the-other.
       const savePromise = fetch('/api/save-document', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({
           // uploaded_documents.uploaded_by is a uuid column — must be the
           // user's id, not their display name (that was the invalid-input-
@@ -430,8 +430,8 @@ function DocumentsUploadContent() {
       })
       const tablePromise = item.fields.length
         ? fetch('/api/save-to-table', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ doc_type: docType, data: Object.fromEntries(item.fields.map(f => [f.key, f.value])), drive_url: link, mode, replace_id: replaceId, uploaded_by: uploader.name }),
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+            body: JSON.stringify({ doc_type: docType, data: Object.fromEntries(item.fields.map(f => [f.key, f.value])), drive_url: link, mode, replace_id: replaceId }),
           })
         : null
 
@@ -466,7 +466,7 @@ function DocumentsUploadContent() {
   // the structured table (that's what makes it distinct from a real Save).
   async function uploadToDriveOnly(item: UploadItem): Promise<string> {
     const res = await fetch('/api/upload-to-drive', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
       body: JSON.stringify({ base64: item.base64, fileName: item.fileName, mimeType: 'application/pdf', docType: item.detectedType || 'cusdec' }),
     })
     const d = await res.json()
@@ -566,7 +566,7 @@ function DocumentsUploadContent() {
     if (!shipmentPickModal) return
     try {
       const res = await fetch('/api/manual-match-shipment', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ cusdec_id: shipmentPickModal.cusdecId, shipment_id: shipmentId }),
       })
       const d = await res.json()
@@ -735,7 +735,7 @@ function DocumentsUploadContent() {
 
     try {
       const res = await fetch('/api/ensure-column', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ doc_type: docType, key }),
       })
       const d = await res.json()
@@ -791,7 +791,7 @@ function DocumentsUploadContent() {
     if (docType) {
       try {
         const res = await fetch('/api/delete-field', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
           body: JSON.stringify({ doc_type: docType, key: field.key }),
         })
         const d = await res.json()
@@ -813,7 +813,7 @@ function DocumentsUploadContent() {
       const excludeWords = Object.fromEntries(boxedFields.filter(f => f.excludeWords?.trim()).map(f => [f.key, f.excludeWords]))
       const formulas = Object.fromEntries(boxedFields.filter(f => f.formula?.trim()).map(f => [f.key, f.formula]))
       const res = await fetch('/api/save-field-boxes', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ doc_type: selectedItem.detectedType, boxes: selectedItem.boxes, labels, excludeWords, formulas, variant: selectedItem.variant }),
       })
       const d = await res.json()
@@ -833,7 +833,7 @@ function DocumentsUploadContent() {
     setCopyingBoxes(true)
     try {
       const res = await fetch('/api/copy-field-boxes', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ doc_type: selectedItem.detectedType, fromVariant: otherVariant, toVariant: selectedItem.variant }),
       })
       const d = await res.json()

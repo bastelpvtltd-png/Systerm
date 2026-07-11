@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireSection } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -11,6 +12,8 @@ const supabaseAdmin = createClient(
 // or the user to click "Save Format", so the rule survives a reload right away.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireSection(req, 'section:documents-upload.admin-edit')
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { doc_type, key, label, excludeWords, formula, specNote, variant } = req.body
     if (!doc_type || !key) return res.status(400).json({ error: 'doc_type and key required' })

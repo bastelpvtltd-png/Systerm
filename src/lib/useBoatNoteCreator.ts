@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { authHeader } from '@/lib/supabase'
 
 // Same CUSDEC -> CDN -> Boat Note generation logic as Docs Create's Boat Note
 // tab (src/pages/admin/boat-note.tsx) — pulled into a hook so the Automation
@@ -49,7 +50,7 @@ export function useBoatNoteCreator() {
     setGenerating(true); setBoatNotes([])
     try {
       const r = await fetch('/api/generate-boat-note', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ cusdec_id: selCusdec, cdn_ids: selCdns }),
       })
       const d = await r.json()

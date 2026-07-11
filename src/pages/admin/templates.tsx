@@ -51,7 +51,7 @@ function TemplatesContent() {
       let driveUrl = ''
       try {
         const dr = await fetch('/api/upload-to-drive', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
           body: JSON.stringify({ base64, fileName: file.name, mimeType: file.type, docType: 'template' }),
         })
         const dd = await dr.json()
@@ -256,7 +256,7 @@ function ExcelTemplatesContent() {
 
   async function loadTemplates() {
     if (!typeKey) return
-    const res = await fetch(`/api/document-templates?type_key=${typeKey}`)
+    const res = await fetch(`/api/document-templates?type_key=${typeKey}`, { headers: await authHeader() })
     const d = await res.json()
     if (res.ok) setTemplates(d.templates || [])
   }
@@ -318,7 +318,7 @@ function ExcelTemplatesContent() {
     try {
       let driveUrl = ''
       const dr = await fetch('/api/upload-to-drive', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ base64, fileName, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docType: 'excel_template' }),
       })
       const dd = await dr.json()
@@ -326,7 +326,7 @@ function ExcelTemplatesContent() {
       if (!driveUrl) throw new Error('Drive upload failed')
 
       const res = await fetch('/api/document-templates', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ type_key: typeKey, name: name.trim(), file_name: fileName, drive_url: driveUrl, mapping: [], confirmUpdate }),
       })
       const d = await res.json()
@@ -355,7 +355,7 @@ function ExcelTemplatesContent() {
 
   async function handleDeleteTemplate(id: string) {
     if (!confirm('Delete this template?')) return
-    await fetch(`/api/document-templates?id=${id}`, { method: 'DELETE' })
+    await fetch(`/api/document-templates?id=${id}`, { method: 'DELETE', headers: await authHeader() })
     if (selectedId === id) setSelectedId('')
     await loadTemplates()
   }
@@ -375,7 +375,7 @@ function ExcelTemplatesContent() {
     setSavingMapping(true)
     try {
       const res = await fetch('/api/document-templates', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping }),
       })
       const d = await res.json()

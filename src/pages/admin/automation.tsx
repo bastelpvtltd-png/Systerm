@@ -9,13 +9,13 @@ import { yearOf } from '@/lib/flexibleDate'
 import {
   Zap, FileCode, ScanText, Barcode as BarcodeIcon, Truck, RefreshCw, Anchor,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Download, Plus, Trash2,
-  Key, StickyNote, Save, Mail, CheckSquare, Square, FileDown, AlertTriangle, Clock,
+  StickyNote, Save, Mail, CheckSquare, Square, FileDown, AlertTriangle, Clock,
 } from 'lucide-react'
 
 type AutomationTab =
   | 'xml' | 'cdn-text' | 'barcode' | 'trico' | 'data-updates'
   | 'boat-note' | 'boat-note-check' | 'export-release'
-  | 'credentials' | 'notes'
+  | 'notes'
 
 interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean; tin_vat?: string }
 
@@ -33,7 +33,6 @@ const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: stri
   { key: 'boat-note', label: 'Boat Note Create', icon: Anchor, permission: 'section:automation.boat-note-create' },
   { key: 'boat-note-check', label: 'Boat Note Check', icon: ClipboardCheck, permission: 'section:automation.boat-note-check' },
   { key: 'export-release', label: 'Export Release Check', icon: ShieldCheck, permission: 'section:automation.export-release-check' },
-  { key: 'credentials', label: 'Credentials Settings', icon: Key, permission: 'section:automation.credentials' },
   { key: 'notes', label: 'System Logic & Integration Notes', icon: StickyNote, permission: 'section:automation.notes' },
 ]
 
@@ -99,7 +98,6 @@ function AutomationContent() {
       {tab === 'boat-note' && <BoatNoteCreate/>}
       {tab === 'boat-note-check' && <BoatNoteCheckPanel/>}
       {tab === 'export-release' && <ExportReleaseCheckPanel/>}
-      {tab === 'credentials' && <CredentialsSettings/>}
       {tab === 'notes' && <SystemNotes/>}
     </div>
   )
@@ -407,99 +405,10 @@ function CdnTextExtractor() {
   )
 }
 
-// ── 2.3 Credentials Settings ──────────────────────────────────────────────
+// Credentials Settings itself now lives on the Settings page
+// (settings.tsx, section:settings.credentials) — this interface stays here
+// since TricoGatePasses below still reads saved credentials.
 interface Credential { id: string; identity_name: string; url: string; username: string | null; created_at: string }
-const KNOWN_SITES = [
-  { identity_name: 'Navis', url: 'https://n4cap.slpa.lk/apex/cap.zul', afterLoginUrl: 'https://n4cap.slpa.lk/apex/capHomeView.zul' },
-  { identity_name: 'SLPA', url: 'https://n4cms.slpa.lk/auth/login', afterLoginUrl: 'https://n4cms.slpa.lk/wapp/export/service-orders/container-consolidation' },
-  { identity_name: 'Trico', url: 'https://s2.tricologi.net/webuser/?option=user', afterLoginUrl: 'https://s2.tricologi.net/webuser/?option=gatepass&action=gatepass_exp' },
-]
-
-function CredentialsSettings() {
-  const [creds, setCreds] = useState<Credential[]>([])
-  const [form, setForm] = useState({ identity_name: '', url: '', username: '', password: '' })
-  const [error, setError] = useState('')
-  const [status, setStatus] = useState('')
-
-  async function load() {
-    try {
-      const res = await fetch('/api/automation-credentials', { headers: await authHeader() })
-      const d = await res.json()
-      if (res.ok) setCreds(d.credentials || [])
-    } catch {}
-  }
-  useEffect(() => { load() }, [])
-
-  async function save() {
-    setError('')
-    if (!form.identity_name || !form.url) { setError('Identity Name and URL are required'); return }
-    try {
-      const res = await fetch('/api/automation-credentials', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify(form),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error)
-      setStatus(`✓ Saved "${form.identity_name}"`)
-      setForm({ identity_name: '', url: '', username: '', password: '' })
-      load()
-    } catch (e: any) { setError(e.message) }
-  }
-
-  async function remove(id: string) {
-    if (!confirm('Delete this credential?')) return
-    await fetch(`/api/automation-credentials?id=${id}`, { method: 'DELETE', headers: await authHeader() })
-    load()
-  }
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      <div className="card">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Add / Update Login</h2>
-        <p className="text-xs text-gray-500 mb-3">Asycuda has no automated-login benefit, so it's left out on purpose. Pick an Identity Name below and it auto-fills the known URL.</p>
-        {error && <div className="mb-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg px-3 py-2"><AlertTriangle size={13}/>{error}</div>}
-        {status && <p className="text-xs text-green-600 mb-3">{status}</p>}
-        <div className="space-y-3">
-          <Field label="Identity Name">
-            <select value={form.identity_name} onChange={e => {
-              const site = KNOWN_SITES.find(s => s.identity_name === e.target.value)
-              setForm(f => ({ ...f, identity_name: e.target.value, url: site?.url || f.url }))
-            }} className="input">
-              <option value="">Choose or type below...</option>
-              {KNOWN_SITES.map(s => <option key={s.identity_name} value={s.identity_name}>{s.identity_name}</option>)}
-            </select>
-            <input value={form.identity_name} onChange={e => setForm(f => ({ ...f, identity_name: e.target.value }))} placeholder="or type a custom name" className="input mt-1.5"/>
-          </Field>
-          <Field label="Login URL"><input value={form.url} onChange={e => setForm(f => ({ ...f, url: e.target.value }))} className="input"/></Field>
-          <Field label="Username"><input value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} className="input"/></Field>
-          <Field label="Password"><input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} className="input"/></Field>
-        </div>
-        <button onClick={save} className="btn-primary mt-4 flex items-center gap-2"><Save size={14}/>Save Credential</button>
-      </div>
-
-      <div className="card">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Saved Logins</h2>
-        <div className="space-y-2">
-          {creds.map(c => {
-            const site = KNOWN_SITES.find(s => s.identity_name === c.identity_name)
-            return (
-              <div key={c.id} className="border border-gray-100 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <p className="font-semibold text-sm text-gray-800">{c.identity_name}</p>
-                  <button onClick={() => remove(c.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">Login URL: <a href={c.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{c.url}</a></p>
-                {site && <p className="text-xs text-gray-400">After login: {site.afterLoginUrl}</p>}
-                <p className="text-xs text-gray-400">Username: {c.username || '—'} · Password: ••••••••</p>
-              </div>
-            )
-          })}
-          {creds.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No credentials saved yet</p>}
-        </div>
-      </div>
-    </div>
-  )
-}
 
 // ── 2.4 Barcode Enter (stub) & Trico Gate Passes ─────────────────────────
 function RpaStub({ title, action, description }: { title: string; action: string; description: string }) {
@@ -530,7 +439,7 @@ function TricoGatePasses() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    fetch('/api/automation-credentials', {}).then(r => r.json()).then(d => setCreds((d.credentials || []).filter((c: Credential) => c.identity_name === 'Trico'))).catch(() => {})
+    authHeader().then(headers => fetch('/api/automation-credentials', { headers })).then(r => r.json()).then(d => setCreds((d.credentials || []).filter((c: Credential) => c.identity_name === 'Trico'))).catch(() => {})
   }, [])
 
   // Trico Gate Pass Trigger: ask which username + how many gate passes,
@@ -933,10 +842,10 @@ function ExportReleaseCheckPanel() {
       // just-typed correction is respected), and remembers it for next time.
       if (form.consigneeTIN) {
         const shipperName = (selected.exporter || '').split('\n')[0].trim()
-        fetch('/api/shipper-profile', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        authHeader().then(h => fetch('/api/shipper-profile', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
           body: JSON.stringify({ shipper: shipperName, tin: form.consigneeTIN }),
-        }).catch(() => {})
+        })).catch(() => {})
       }
       const res = await fetch('/api/export-release-check', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },

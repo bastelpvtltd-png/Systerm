@@ -2,11 +2,14 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { google } from 'googleapis'
 import { Readable } from 'stream'
 import { resolveUploadFolderId } from '@/lib/driveFolders'
+import { requireAuth } from '@/lib/serverAuth'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { base64, fileName, mimeType = 'application/pdf', docType } = req.body
     if (!base64 || !fileName) return res.status(400).json({ error: 'Missing base64 or fileName' })

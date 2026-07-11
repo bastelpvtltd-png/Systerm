@@ -87,6 +87,7 @@ export const SECTION_ITEMS = [
   { key: 'section:settings.general',  tabHref: '/admin/settings', label: 'General Info tab' },
   { key: 'section:settings.database', tabHref: '/admin/settings', label: 'Document Records tab' },
   { key: 'section:settings.logs',     tabHref: '/admin/settings', label: 'Login Logs tab (view-only; clearing is admin-only)' },
+  { key: 'section:settings.credentials', tabHref: '/admin/settings', label: 'Credentials tab (automation portal logins — moved here from Automation)' },
   // Docs Create (Invoice / Packing List / Boat Note)
   { key: 'section:boat-note.invoice',       tabHref: '/admin/boat-note', label: 'Invoice panel' },
   { key: 'section:boat-note.packing-list',  tabHref: '/admin/boat-note', label: 'Packing List panel' },
@@ -112,7 +113,6 @@ export const SECTION_ITEMS = [
   { key: 'section:automation.boat-note-create',    tabHref: '/admin/automation', label: 'Boat Note Create' },
   { key: 'section:automation.boat-note-check',     tabHref: '/admin/automation', label: 'Boat Note Check' },
   { key: 'section:automation.export-release-check',tabHref: '/admin/automation', label: 'Export Release Check' },
-  { key: 'section:automation.credentials',         tabHref: '/admin/automation', label: 'Credentials Settings' },
   { key: 'section:automation.notes',               tabHref: '/admin/automation', label: 'System Logic & Integration Notes' },
 ]
 

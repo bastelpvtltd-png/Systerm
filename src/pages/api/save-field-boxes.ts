@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireSection } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,6 +13,8 @@ const supabaseAdmin = createClient(
 // instead of { vLines, hLines }, which extract-pdf.ts tells apart at read time.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireSection(req, 'section:documents-upload.admin-edit')
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { doc_type, boxes, labels, excludeWords, formulas, variant } = req.body
     if (!doc_type || !boxes || !labels)

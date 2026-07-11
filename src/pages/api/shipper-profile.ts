@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -20,6 +21,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
+      const authed = await requireAuth(req)
+      if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
       const { shipper, consignee, bank_details, tin } = req.body
       if (!shipper) return res.status(400).json({ error: 'shipper required' })
       const patch: Record<string, any> = { shipper, consignee: consignee || null, bank_details: bank_details || null, updated_at: new Date().toISOString() }

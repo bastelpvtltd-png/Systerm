@@ -406,24 +406,24 @@ function BoatNoteContent() {
 
       // Persist shipper defaults for next time (Bank Details / Consignee auto-fill).
       if (docForm.exporter.trim()) {
-        fetch('/api/shipper-profile', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        authHeader().then(h => fetch('/api/shipper-profile', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
           body: JSON.stringify({ shipper: docForm.exporter.trim(), consignee: docForm.consignee, bank_details: docForm.bankDetails }),
-        }).catch(() => {})
+        })).catch(() => {})
       }
 
       // Auto-attach: upload to Drive, log it, then link onto the matching shipment.
       const base64 = await fileToBase64FromBlob(doc.output('blob'))
       const docType = kind === 'invoice' ? 'invoice' : 'packing_list'
       const dr = await fetch('/api/upload-to-drive', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ base64, fileName, mimeType: 'application/pdf', docType }),
       })
       const dd = await dr.json()
       if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
 
       await fetch('/api/save-document', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ doc_type: docType, file_name: fileName, drive_url: dd.driveLink, extracted_data: { invoice_number: docForm.invoiceNumber } }),
       })
 
@@ -470,7 +470,7 @@ function BoatNoteContent() {
     setGen(true); setBoatNotes([])
     try {
       const r = await fetch('/api/generate-boat-note', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ cusdec_id: selCusdec, cdn_ids: selCdns }),
       })
       const d = await r.json()

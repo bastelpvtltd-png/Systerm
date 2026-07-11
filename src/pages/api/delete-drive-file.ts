@@ -1,8 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { google } from 'googleapis'
+import { requireSection } from '@/lib/serverAuth'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireSection(req, 'section:database.delete')
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { fileId } = req.body
     if (!fileId) return res.status(400).json({ error: 'fileId required' })
