@@ -193,15 +193,23 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
   const [viewing, setViewing] = useState<any | null>(null)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
 
-  async function load() {
-    setLoading(true)
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
     try {
       const res = await fetch('/api/dashboard-notifications', { headers: await authHeader() })
       const d = await res.json()
       if (res.ok) setItems(d.notifications || [])
-    } finally { setLoading(false) }
+    } finally { if (!silent) setLoading(false) }
   }
-  useEffect(() => { load() }, [])
+  // Live updates: a new upload shows up here within a few seconds without a
+  // page refresh — polling rather than a Realtime subscription since it
+  // needs zero Supabase publication setup and the spec explicitly allows
+  // either. Silent (no loading spinner) so it doesn't flicker every tick.
+  useEffect(() => {
+    load()
+    const t = setInterval(() => load(true), 6000)
+    return () => clearInterval(t)
+  }, [])
 
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
   const selectedIds = Object.keys(selected).filter(id => selected[id])
@@ -475,9 +483,11 @@ function PickHistoryPanel() {
   const [fileName, setFileName] = useState('')
   const [user, setUser] = useState('')
   const [action, setAction] = useState('')
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
+  const [clearing, setClearing] = useState(false)
 
-  async function load() {
-    setLoading(true)
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
     try {
       const params = new URLSearchParams()
       if (fileName) params.set('fileName', fileName)
@@ -486,9 +496,15 @@ function PickHistoryPanel() {
       const res = await fetch(`/api/pick-history?${params.toString()}`, { headers: await authHeader() })
       const d = await res.json()
       if (res.ok) setItems(d.items || [])
-    } finally { setLoading(false) }
+    } finally { if (!silent) setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Live updates — same polling approach as Incoming, so a new pick/return/
+  // mail/download shows up here without a manual Search click.
+  useEffect(() => {
+    const t = setInterval(() => load(true), 8000)
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function remove(id: string) {
     if (!confirm('Delete this Pick History entry?')) return
@@ -497,9 +513,38 @@ function PickHistoryPanel() {
     else { const d = await res.json().catch(() => ({})); alert(d.error || 'Delete failed') }
   }
 
+  function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
+  const selectedIds = Object.keys(selected).filter(id => selected[id])
+  const allSelected = items.length > 0 && selectedIds.length === items.length
+  function toggleAll() { setSelected(allSelected ? {} : Object.fromEntries(items.map(i => [i.id, true]))) }
+
+  // Admin-only bulk purge — only ever removes the pick_history_log row (and
+  // its audit copy in deleted_records, same as the single-delete path). The
+  // uploaded file, its Drive copy, and the extracted data in the doc-type
+  // table are never touched by this — it's strictly clearing the audit trail,
+  // not the underlying documents.
+  async function clearSelected() {
+    if (!confirm(`Delete ${selectedIds.length} Pick History entr${selectedIds.length === 1 ? 'y' : 'ies'}? This only clears the history log — uploaded files and extracted data are not affected.`)) return
+    setClearing(true)
+    for (const id of selectedIds) {
+      try { await fetch(`/api/pick-history?id=${id}`, { method: 'DELETE', headers: await authHeader() }) } catch {}
+    }
+    setSelected({})
+    setClearing(false)
+    load()
+  }
+
   return (
     <div className="card mt-4">
-      <h2 className="font-semibold text-gray-900 mb-3 text-sm flex items-center gap-2"><History size={16} className="text-gray-500"/>Pick History</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><History size={16} className="text-gray-500"/>Pick History</h2>
+        {canDelete && selectedIds.length > 0 && (
+          <button onClick={clearSelected} disabled={clearing}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
+            {clearing ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>} Clear ({selectedIds.length})
+          </button>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input value={fileName} onChange={e => setFileName(e.target.value)} placeholder="File name..." className="input max-w-[160px]"/>
         <input value={user} onChange={e => setUser(e.target.value)} placeholder="User..." className="input max-w-[140px]"/>
@@ -511,7 +556,7 @@ function PickHistoryPanel() {
           <option value="download">Download</option>
           <option value="look">Look</option>
         </select>
-        <button onClick={load} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
+        <button onClick={() => load()} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
           <Search size={12}/> Search
         </button>
       </div>
@@ -523,11 +568,26 @@ function PickHistoryPanel() {
         <div className="overflow-x-auto max-h-96 overflow-y-auto">
           <table className="w-full text-xs">
             <thead className="bg-gray-50 sticky top-0"><tr>
-              {['File', 'User', 'Action', 'When'].concat(canDelete ? [''] : []).map((h, i) => <th key={h || i} className="text-left px-2 py-1.5 text-gray-500 font-medium">{h}</th>)}
+              {(canDelete ? [''] : []).concat(['File', 'User', 'Action', 'When']).concat(canDelete ? [''] : []).map((h, i) => (
+                <th key={h || `h${i}`} className="text-left px-2 py-1.5 text-gray-500 font-medium">
+                  {canDelete && i === 0 ? (
+                    <button onClick={toggleAll} className="text-gray-400 hover:text-gray-600">
+                      {allSelected ? <CheckSquare size={13} className="text-green-600"/> : <Square size={13}/>}
+                    </button>
+                  ) : h}
+                </th>
+              ))}
             </tr></thead>
             <tbody>
               {items.map(h => (
                 <tr key={h.id} className="border-t border-gray-50">
+                  {canDelete && (
+                    <td className="px-2 py-1.5">
+                      <button onClick={() => toggle(h.id)} className="text-gray-300 hover:text-green-600">
+                        {selected[h.id] ? <CheckSquare size={13} className="text-green-600"/> : <Square size={13}/>}
+                      </button>
+                    </td>
+                  )}
                   <td className="px-2 py-1.5 text-gray-800">{h.document_uploads?.file_name || '—'}</td>
                   <td className="px-2 py-1.5 text-gray-600">{h.user_name || '—'}</td>
                   <td className="px-2 py-1.5 text-gray-600 capitalize">{h.action}</td>

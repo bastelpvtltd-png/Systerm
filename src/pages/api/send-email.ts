@@ -8,7 +8,10 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-interface Attachment { filename: string; url: string }
+// Most attachments are Drive-hosted files fetched by url; a few callers
+// (e.g. Done Boat Note's merge, which is deliberately never saved anywhere)
+// only have the bytes in memory, so they send base64 directly instead.
+interface Attachment { filename: string; url?: string; base64?: string }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -34,7 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let mailAttachments: { filename: string; content: Buffer }[] | undefined
     if (attachments?.length) {
       mailAttachments = await Promise.all(attachments.map(async a => {
-        const r = await fetch(a.url)
+        if (a.base64) return { filename: a.filename, content: Buffer.from(a.base64, 'base64') }
+        const r = await fetch(a.url!)
         const buf = Buffer.from(await r.arrayBuffer())
         return { filename: a.filename, content: buf }
       }))

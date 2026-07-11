@@ -94,6 +94,7 @@ export const SECTION_ITEMS = [
   { key: 'section:boat-note.select-cusdec', tabHref: '/admin/boat-note', label: 'Boat Note: Select CUSDEC card' },
   { key: 'section:boat-note.select-cdn',     tabHref: '/admin/boat-note', label: 'Boat Note: Select Containers (CDN) card' },
   { key: 'section:boat-note.output',         tabHref: '/admin/boat-note', label: 'Boat Note: Download / Email card' },
+  { key: 'section:boat-note.done',           tabHref: '/admin/boat-note', label: 'Done Boat Note archive tab' },
   // Database — per table, since some tables (Users/Profiles, PDF Templates) are more sensitive than others
   { key: 'section:database.cusdec',             tabHref: '/admin/database', label: 'CUSDEC table' },
   { key: 'section:database.cdn',                tabHref: '/admin/database', label: 'CDN table' },

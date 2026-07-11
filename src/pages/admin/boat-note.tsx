@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock } from 'lucide-react'
+import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search } from 'lucide-react'
 
-type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note'
+type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note' | 'done-boat-note'
 
-interface CusdecRec { id: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string }
-interface CdnRec    { id: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string }
+interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean }
+interface CdnRec    { id: string; code?: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; boat_note_passed?: boolean }
 
 interface DocTemplate { id: string; name: string; file_name: string; drive_url: string | null; raw_text: string; placeholders: string[]; created_at: string }
 
@@ -93,14 +93,18 @@ function BoatNoteContent() {
   const canInvoice = has('section:boat-note.invoice')
   const canPackingList = has('section:boat-note.packing-list')
   const canBoatNote = canSelectCusdec || canSelectCdn || canOutput
+  const canDoneBoatNote = has('section:boat-note.done')
   const subTabs = ([
     ['invoice', Receipt, 'Invoice', canInvoice],
     ['packing-list', Package, 'Packing List', canPackingList],
     ['boat-note', Anchor, 'Boat Note', canBoatNote],
+    ['done-boat-note', ClipboardCheck, 'Done Boat Note', canDoneBoatNote],
   ] as const).filter(([, , , can]) => can)
   const [subTab, setSubTab] = useState<DocsCreateTab>(subTabs[0]?.[0] || 'boat-note')
   const [cusdecs, setCusdecs]   = useState<CusdecRec[]>([])
   const [cdns, setCdns]         = useState<CdnRec[]>([])
+  const [allCdns, setAllCdns]   = useState<CdnRec[]>([])
+  const [showCompleted, setShowCompleted] = useState(false)
   const [selCusdec, setSelCusdec] = useState('')
   const [selCdns, setSelCdns]   = useState<string[]>([])
   const [boatNotes, setBoatNotes] = useState<BoatNote[]>([])
@@ -448,10 +452,28 @@ function BoatNoteContent() {
   async function loadCusdecs() {
     setLoading(true)
     try {
-      const r = await fetch('/api/list-records?table=cusdec&limit=200')
-      if (r.ok) { const d = await r.json(); setCusdecs(d.records || []) }
+      const [cr, dr] = await Promise.all([
+        fetch('/api/list-records?table=cusdec&limit=200'),
+        fetch('/api/list-records?table=cdn&limit=1000'),
+      ])
+      if (cr.ok) { const d = await cr.json(); setCusdecs(d.records || []) }
+      if (dr.ok) { const d = await dr.json(); setAllCdns(d.records || []) }
     } finally { setLoading(false) }
   }
+
+  // A CUSDEC counts as "completed" (hidden by default) once it's Export
+  // Released, or every one of its CDN containers has passed Boat Note check —
+  // same rule Automation's Export Release panel uses, so the two screens
+  // never disagree about what's actually done.
+  function isCompleted(c: CusdecRec): boolean {
+    if (c.export_release_passed) return true
+    const own = allCdns.filter(d => d.code === c.code && d.cusdec_number === c.number)
+    if (!own.length) return false
+    const cap = parseInt(c.cap || '', 10)
+    if (cap && own.length < cap) return false
+    return own.every(d => d.boat_note_passed)
+  }
+  const visibleCusdecs = showCompleted ? cusdecs : cusdecs.filter(c => !isCompleted(c))
 
   async function loadCdns() {
     const cur = cusdecs.find(c => c.id === selCusdec)
@@ -637,12 +659,73 @@ function BoatNoteContent() {
     return doc
   }
 
+  // Naming convention the spec calls for: B{CUSDEC_Number}, e.g. B12345 —
+  // used for every Boat Note file this page produces (direct download,
+  // Save Only, and the Done Boat Note archive's own downloads/merges).
+  function boatNoteFileName(ext: 'pdf' | 'xlsx') {
+    const num = (cusdecNo || 'UNKNOWN').replace(/\D/g, '') || cusdecNo
+    return `B${num}.${ext}`
+  }
+
   async function downloadPdf() {
     if (!boatNotes.length) return
     const doc = await buildBoatNotePdf(boatNotes, cusdecNo)
-    const dt = new Date().toISOString().slice(0,10)
-    doc.save(`BOAT_NOTE_${cusdecNo}_${dt}.pdf`)
+    doc.save(boatNoteFileName('pdf'))
     setStatus('✓ PDF downloaded')
+  }
+
+  // Excel isn't a pixel copy of the government Exp 3a form (that's a fixed-
+  // layout PDF format) — it's the same field data in flat rows, one per
+  // container, for whoever needs to work with it in a spreadsheet.
+  async function downloadExcel() {
+    if (!boatNotes.length) return
+    const XLSX = await import('xlsx')
+    const rows = boatNotes.map((bn, i) => ({
+      '#': i + 1, 'Shipper': bn.shipper, 'Consignee': bn.consignee, 'Entry No': bn.entry_no, 'B/L No': bn.bl_no,
+      'SLPA No': bn.slpa_no, 'Voyage': bn.voyage, 'Voyage Date': bn.voyage_date, 'Vessel': bn.vessel, 'Terminal': bn.terminal,
+      'Container No': bn.container_no, 'Con Type': bn.con_type, 'Seal No': bn.seal_no, 'Goods': bn.goods,
+      'Gross Mass': bn.gross_mass, 'Net Mass': bn.net_mass, 'CDN No': bn.cdn_no, 'Pkg No': bn.pkg_no, 'Pkg Type': bn.pkg_type,
+      'VOC': bn.voc, 'COC': bn.coc, 'Loading Port': bn.loading_port, 'Discharge Port': bn.discharge_port,
+      'Volume': bn.volume, 'Marks': bn.marks, 'Lorry/Trailer': `${bn.lorry_no} ${bn.trailer_no}`, 'Driver': bn.driver_name,
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Boat Note')
+    XLSX.writeFile(wb, boatNoteFileName('xlsx'))
+    setStatus('✓ Excel downloaded')
+  }
+
+  const [savingOnly, setSavingOnly] = useState(false)
+  // "Save Only": generates the same PDF, uploads it to Drive, and records
+  // just the file path on the CUSDEC row (cusdec.boat_note_drive_url) — no
+  // auto-download, for when this is being filed rather than handed to
+  // someone right now.
+  async function saveOnly() {
+    if (!boatNotes.length || !selCusdec) return
+    setSavingOnly(true); setStatus('')
+    try {
+      const doc = await buildBoatNotePdf(boatNotes, cusdecNo)
+      const base64 = await fileToBase64FromBlob(doc.output('blob'))
+      const fileName = boatNoteFileName('pdf')
+      const dr = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ base64, fileName, mimeType: 'application/pdf', docType: 'boat_note' }),
+      })
+      const dd = await dr.json()
+      if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
+
+      const res = await fetch('/api/save-boat-note', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ cusdec_id: selCusdec, drive_url: dd.driveLink, file_name: fileName }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setStatus(`✓ Saved to database — ${fileName} (no download)`)
+    } catch (e: any) {
+      setStatus(`✗ ${e.message}`)
+    } finally {
+      setSavingOnly(false)
+    }
   }
 
   async function sendEmail() {
@@ -835,23 +918,31 @@ function BoatNoteContent() {
           {/* Step 1 — CUSDEC */}
           {canSelectCusdec && (
           <div className="card">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-1.5">
               <h2 className="font-semibold text-gray-900 text-sm">1 · Select CUSDEC</h2>
               <button onClick={loadCusdecs} className="text-gray-400 hover:text-gray-600"><RefreshCw size={13}/></button>
             </div>
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-500 mb-2.5 cursor-pointer">
+              <input type="checkbox" checked={showCompleted} onChange={e => setShowCompleted(e.target.checked)}/>
+              Show Completed Records (Export Released / Boat Note Passed)
+            </label>
             {loading ? (
               <div className="flex justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
-            ) : cusdecs.length === 0 ? (
-              <p className="text-xs text-gray-400 text-center py-6">No CUSDECs — import Excel file first</p>
+            ) : visibleCusdecs.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-6">{cusdecs.length === 0 ? 'No CUSDECs — import Excel file first' : 'Nothing pending — tick "Show Completed Records" to see them'}</p>
             ) : (
               <div className="space-y-1 max-h-72 overflow-y-auto">
-                {cusdecs.map(c => (
+                {visibleCusdecs.map(c => (
                   <button key={c.id}
                     onClick={() => { setSelCusdec(c.id); setSelCdns([]); setBoatNotes([]) }}
                     className={`w-full text-left p-2.5 rounded-lg border text-xs transition-all ${
                       selCusdec === c.id ? 'bg-blue-50 border-blue-300 shadow-sm' : 'border-gray-100 hover:bg-gray-50'
-                    }`}>
-                    <p className="font-bold text-gray-800">E {c.number}</p>
+                    } ${isCompleted(c) ? '!border-l-4 !border-l-green-500' : ''}`}>
+                    <p className="font-bold text-gray-800 flex items-center gap-1.5">
+                      E {c.number}
+                      {c.cap && <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">CAP {c.cap}</span>}
+                      {c.export_release_passed && <span className="text-[10px] font-normal text-blue-600">· Released</span>}
+                    </p>
                     <p className="text-gray-600 truncate mt-0.5">{c.exporter?.slice(0,40)}</p>
                     <p className="text-gray-400 mt-0.5">{c.vessel} · {c.voyage_no}</p>
                   </button>
@@ -933,10 +1024,21 @@ function BoatNoteContent() {
                   </div>
                 </div>
 
-                <button onClick={downloadPdf}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 mb-3 rounded-lg text-sm text-white font-medium"
-                  style={{ background: '#1B3A5C' }}>
-                  <FileDown size={14}/> Download PDF (Exp 3a format)
+                <div className="flex gap-2 mb-2">
+                  <button onClick={downloadPdf}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium"
+                    style={{ background: '#1B3A5C' }}>
+                    <FileDown size={14}/> PDF
+                  </button>
+                  <button onClick={downloadExcel}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium"
+                    style={{ background: '#22A87A' }}>
+                    <FileDown size={14}/> Excel
+                  </button>
+                </div>
+                <button onClick={saveOnly} disabled={savingOnly}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 mb-3 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                  {savingOnly ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>} Save Only (no download)
                 </button>
 
                 <div className="border-t border-gray-100 pt-3 space-y-2">
@@ -1027,6 +1129,175 @@ function BoatNoteContent() {
         )}
         </>
         )}
+
+        {subTab === 'done-boat-note' && canDoneBoatNote && <DoneBoatNotePanel/>}
       </div>
+  )
+}
+
+// ── Done Boat Note — archive of every Boat Note ever saved via Save Only ──
+interface DoneBoatNote { id: string; cusdec_number: string | null; file_name: string; drive_url: string; created_at: string; created_by_name: string | null }
+
+function DoneBoatNotePanel() {
+  const [items, setItems] = useState<DoneBoatNote[]>([])
+  const [loading, setLoading] = useState(false)
+  const [cusdecNumber, setCusdecNumber] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
+  const [merging, setMerging] = useState(false)
+  const [merged, setMerged] = useState<{ base64: string; fileName: string } | null>(null)
+  const [emailTo, setEmailTo] = useState('')
+  const [sendingMail, setSendingMail] = useState(false)
+  const [status, setStatus] = useState('')
+
+  async function load() {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (cusdecNumber) params.set('cusdecNumber', cusdecNumber)
+      if (from) params.set('from', from)
+      if (to) params.set('to', to)
+      const res = await fetch(`/api/generated-boat-notes?${params.toString()}`, { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setItems(d.items || [])
+    } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
+  const selectedIds = Object.keys(selected).filter(id => selected[id])
+  const allSelected = items.length > 0 && selectedIds.length === items.length
+  function toggleAll() { setSelected(allSelected ? {} : Object.fromEntries(items.map(i => [i.id, true]))) }
+
+  async function mergeSelected() {
+    setMerging(true); setStatus(''); setMerged(null)
+    try {
+      const res = await fetch('/api/merge-boat-notes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ ids: selectedIds }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setMerged({ base64: d.base64, fileName: d.fileName })
+      setStatus(`✓ Merged ${selectedIds.length} Boat Notes — download or email below (not saved anywhere)`)
+    } catch (e: any) {
+      setStatus(`✗ ${e.message}`)
+    } finally {
+      setMerging(false)
+    }
+  }
+
+  function downloadMerged() {
+    if (!merged) return
+    const bytes = Uint8Array.from(atob(merged.base64), c => c.charCodeAt(0))
+    const blob = new Blob([bytes], { type: 'application/pdf' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = merged.fileName
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function emailMerged() {
+    if (!merged || !emailTo) return
+    setSendingMail(true); setStatus('')
+    try {
+      const res = await fetch('/api/send-email', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({
+          to: emailTo, subject: `Merged Boat Notes — ${merged.fileName}`,
+          body: `Attached: ${selectedIds.length} merged Boat Note(s).`,
+          attachments: [{ filename: merged.fileName, base64: merged.base64 }],
+        }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setStatus(`✓ Emailed to ${emailTo}`)
+    } catch (e: any) {
+      setStatus(`✗ ${e.message}`)
+    } finally {
+      setSendingMail(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-gray-500 text-sm -mt-2">Archive of every Boat Note saved via "Save Only" — filter, then select several to merge into one PDF.</p>
+
+      <div className="card">
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <input value={cusdecNumber} onChange={e => setCusdecNumber(e.target.value)} placeholder="CUSDEC number..." className="input max-w-[160px]"/>
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="input max-w-[150px]"/>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} className="input max-w-[150px]"/>
+          <button onClick={load} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
+            <Search size={12}/> Search
+          </button>
+          {selectedIds.length > 1 && (
+            <button onClick={mergeSelected} disabled={merging}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#8b5cf6' }}>
+              {merging ? <Loader size={12} className="animate-spin"/> : <FileStack size={12}/>} Merge Selected ({selectedIds.length})
+            </button>
+          )}
+        </div>
+        {status && <p className={`text-xs mb-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
+
+        {merged && (
+          <div className="mb-3 bg-purple-50 border border-purple-200 rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-purple-700 flex-1">{merged.fileName}</p>
+              <button onClick={downloadMerged} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-white text-xs" style={{ background: '#1B3A5C' }}>
+                <FileDown size={12}/> Download
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <input value={emailTo} onChange={e => setEmailTo(e.target.value)} placeholder="recipient@email.com"
+                className="input text-xs flex-1"/>
+              <button onClick={emailMerged} disabled={sendingMail || !emailTo}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-white text-xs disabled:opacity-50" style={{ background: '#22A87A' }}>
+                {sendingMail ? <Loader size={12} className="animate-spin"/> : <Mail size={12}/>} Email
+              </button>
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
+        ) : items.length === 0 ? (
+          <p className="text-xs text-gray-400 text-center py-6">No saved Boat Notes yet</p>
+        ) : (
+          <div className="overflow-x-auto max-h-96 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 sticky top-0"><tr>
+                <th className="text-left px-2 py-1.5"><button onClick={toggleAll} className="text-gray-400 hover:text-gray-600">{allSelected ? <CheckSquare size={13} className="text-green-600"/> : <Square size={13}/>}</button></th>
+                <th className="text-left px-2 py-1.5 text-gray-500 font-medium">File</th>
+                <th className="text-left px-2 py-1.5 text-gray-500 font-medium">CUSDEC</th>
+                <th className="text-left px-2 py-1.5 text-gray-500 font-medium">Saved By</th>
+                <th className="text-left px-2 py-1.5 text-gray-500 font-medium">When</th>
+                <th className="text-left px-2 py-1.5 text-gray-500 font-medium"></th>
+              </tr></thead>
+              <tbody>
+                {items.map(it => (
+                  <tr key={it.id} className="border-t border-gray-50">
+                    <td className="px-2 py-1.5">
+                      <button onClick={() => toggle(it.id)} className="text-gray-300 hover:text-green-600">
+                        {selected[it.id] ? <CheckSquare size={13} className="text-green-600"/> : <Square size={13}/>}
+                      </button>
+                    </td>
+                    <td className="px-2 py-1.5 text-gray-800">{it.file_name}</td>
+                    <td className="px-2 py-1.5 text-gray-600">{it.cusdec_number ? `E ${it.cusdec_number}` : '—'}</td>
+                    <td className="px-2 py-1.5 text-gray-600">{it.created_by_name || '—'}</td>
+                    <td className="px-2 py-1.5 text-gray-400">{new Date(it.created_at).toLocaleString('en-GB')}</td>
+                    <td className="px-2 py-1.5">
+                      <a href={it.drive_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><FileDown size={13}/></a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
