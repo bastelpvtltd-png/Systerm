@@ -22,3 +22,8 @@ drop policy if exists "admin_all_automation_runs" on automation_runs;
 create policy "admin_all_automation_runs" on automation_runs for all
   using (exists (select 1 from profiles where id = auth.uid() and is_admin = true))
   with check (exists (select 1 from profiles where id = auth.uid() and is_admin = true));
+
+-- Persistent on/off switch — the cron already runs regardless of any
+-- browser being open; this just lets a panel be paused without deleting
+-- its saved interval.
+alter table automation_runs add column if not exists enabled boolean not null default true;

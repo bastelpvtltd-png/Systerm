@@ -40,10 +40,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const results: Record<string, any> = {}
 
   const boatNoteRun = runByPanel['boat_note']
-  const dueBoatNote = !boatNoteRun?.last_run_at ||
-    (now.getTime() - new Date(boatNoteRun.last_run_at).getTime()) >= (boatNoteRun.interval_minutes || 60) * 60_000
+  const dueBoatNote = boatNoteRun?.enabled !== false && (!boatNoteRun?.last_run_at ||
+    (now.getTime() - new Date(boatNoteRun.last_run_at).getTime()) >= (boatNoteRun.interval_minutes || 60) * 60_000)
 
-  if (dueBoatNote) {
+  if (boatNoteRun?.enabled === false) {
+    results.boat_note = { skipped: true, reason: 'paused' }
+  } else if (dueBoatNote) {
     const { data: cdns } = await supabaseAdmin.from('cdn').select('id, container_no, boat_note_passed')
     const pending = (cdns || []).filter(c => !c.boat_note_passed && c.container_no)
     let passedCount = 0
@@ -60,10 +62,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const exportReleaseRun = runByPanel['export_release']
-  const dueExportRelease = !exportReleaseRun?.last_run_at ||
-    (now.getTime() - new Date(exportReleaseRun.last_run_at).getTime()) >= (exportReleaseRun.interval_minutes || 60) * 60_000
+  const dueExportRelease = exportReleaseRun?.enabled !== false && (!exportReleaseRun?.last_run_at ||
+    (now.getTime() - new Date(exportReleaseRun.last_run_at).getTime()) >= (exportReleaseRun.interval_minutes || 60) * 60_000)
 
-  if (dueExportRelease) {
+  if (exportReleaseRun?.enabled === false) {
+    results.export_release = { skipped: true, reason: 'paused' }
+  } else if (dueExportRelease) {
     const [{ data: cusdecs }, { data: cdns }] = await Promise.all([
       supabaseAdmin.from('cusdec').select('id, code, number, date, cap, tin_vat, exporter, export_release_passed'),
       supabaseAdmin.from('cdn').select('code, cusdec_number, boat_note_passed'),

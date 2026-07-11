@@ -607,14 +607,16 @@ function BoatNoteCreate() {
 function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_release'; label: string }) {
   const [minutes, setMinutes] = useState<string>('')
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
+  const [enabled, setEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savedMsg, setSavedMsg] = useState('')
+  const [toggling, setToggling] = useState(false)
 
   async function load() {
     const res = await fetch('/api/automation-runs', { headers: await authHeader() })
     const d = await res.json()
     const row = (d.runs || []).find((r: any) => r.panel === panel)
-    if (row) { setMinutes(String(row.interval_minutes)); setLastRunAt(row.last_run_at) }
+    if (row) { setMinutes(String(row.interval_minutes)); setLastRunAt(row.last_run_at); setEnabled(row.enabled !== false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -635,9 +637,34 @@ function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_relea
     }
   }
 
+  // Persistent on/off switch — the cron itself already runs independent of
+  // any browser session, so "persists across refresh" is automatic here;
+  // this is just whether cron-check-pending.ts is allowed to act on this
+  // panel or should skip it entirely until switched back on.
+  async function toggleEnabled() {
+    const next = !enabled
+    setToggling(true)
+    try {
+      const res = await fetch('/api/automation-runs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ panel, enabled: next }),
+      })
+      if (res.ok) setEnabled(next)
+    } finally {
+      setToggling(false)
+    }
+  }
+
   return (
     <div>
       <div className="flex items-center gap-2 text-xs flex-wrap">
+        <button onClick={toggleEnabled} disabled={toggling}
+          className={`flex items-center gap-1.5 px-2 py-1 rounded-full font-medium disabled:opacity-50 ${
+            enabled ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-100 text-gray-500 border border-gray-200'
+          }`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${enabled ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}/>
+          {enabled ? 'Live · Active' : 'Paused'}
+        </button>
         <Clock size={13} className="text-gray-400"/>
         <span className="text-gray-500">{label} every</span>
         <input type="number" min={1} value={minutes} onChange={e => setMinutes(e.target.value)}
@@ -648,6 +675,32 @@ function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_relea
         {lastRunAt && <span className="text-gray-400">· last ran {new Date(lastRunAt).toLocaleString('en-GB')}</span>}
       </div>
       <p className="text-[11px] text-gray-400 mt-1">This project's Vercel plan (Hobby) only fires the scheduler once/day — a shorter interval here just means it won't skip a day early once you upgrade to Pro; it can't run more than once a day until then.</p>
+    </div>
+  )
+}
+
+// Orphaned Data Monitor — surfaces records that can never be auto-checked
+// (missing the one field the lookup needs) without cluttering the main
+// pending queue above; collapsed by default since this is an audit view,
+// not something that needs attention every time the panel opens.
+function OrphanedDataMonitor({ label, count, items }: { label: string; count: number; items: { id: string; title: string; subtitle?: string }[] }) {
+  const [open, setOpen] = useState(false)
+  if (count === 0) return null
+  return (
+    <div className="mt-3 border-t border-gray-100 pt-2">
+      <button onClick={() => setOpen(o => !o)} className="flex items-center gap-1.5 text-xs text-amber-600 hover:underline">
+        <AlertTriangle size={12}/> {label} ({count}) {open ? '▲' : '▼'}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+          {items.map(it => (
+            <div key={it.id} className="text-[11px] border border-amber-100 bg-amber-50 rounded p-1.5">
+              <p className="font-medium text-amber-800">{it.title}</p>
+              {it.subtitle && <p className="text-amber-600 truncate">{it.subtitle}</p>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -739,6 +792,11 @@ function BoatNoteCheckPanel() {
           ))}
           {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CDNs found</p>}
         </div>
+        <OrphanedDataMonitor
+          label="Empty Data (no Container No.)"
+          count={cdns.filter(c => !c.container_no).length}
+          items={cdns.filter(c => !c.container_no).map(c => ({ id: c.id, title: c.cdn_no || '(no CDN No.)', subtitle: c.shipper }))}
+        />
       </div>
 
       <div className="card">
@@ -900,6 +958,11 @@ function ExportReleaseCheckPanel() {
           ))}
           {eligible.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDEC has passed Boat Note check yet</p>}
         </div>
+        <OrphanedDataMonitor
+          label="Non-Matched (no Company TIN on record)"
+          count={eligible.filter(c => !c.tin_vat).length}
+          items={eligible.filter(c => !c.tin_vat).map(c => ({ id: c.id, title: `E ${c.number}`, subtitle: c.exporter }))}
+        />
       </div>
 
       <div className="card">
