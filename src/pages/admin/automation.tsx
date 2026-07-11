@@ -9,7 +9,7 @@ import { yearOf } from '@/lib/flexibleDate'
 import {
   Zap, FileCode, ScanText, Barcode as BarcodeIcon, Truck, RefreshCw, Anchor,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Download, Plus, Trash2,
-  Key, StickyNote, Save, Mail, CheckSquare, Square, FileDown, AlertTriangle,
+  Key, StickyNote, Save, Mail, CheckSquare, Square, FileDown, AlertTriangle, Clock,
 } from 'lucide-react'
 
 type AutomationTab =
@@ -692,6 +692,54 @@ function BoatNoteCreate() {
 // blue; a passed Export Release turns the CUSDEC (and its already-blue CDNs)
 // green. Export Release only ever runs against CDNs/CUSDECs that already
 // passed Boat Note.
+// Shared by both check panels — plain-minutes interval editor + "last ran"
+// readout for the scheduled cron (cron-check-pending.ts), which is what
+// actually applies this interval; this control only reads/writes the number.
+function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_release'; label: string }) {
+  const [minutes, setMinutes] = useState<string>('')
+  const [lastRunAt, setLastRunAt] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [savedMsg, setSavedMsg] = useState('')
+
+  async function load() {
+    const res = await fetch('/api/automation-runs', { headers: await authHeader() })
+    const d = await res.json()
+    const row = (d.runs || []).find((r: any) => r.panel === panel)
+    if (row) { setMinutes(String(row.interval_minutes)); setLastRunAt(row.last_run_at) }
+  }
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function save() {
+    setSaving(true); setSavedMsg('')
+    try {
+      const res = await fetch('/api/automation-runs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ panel, interval_minutes: Number(minutes) }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setSavedMsg('✓ Saved')
+    } catch (e: any) {
+      setSavedMsg(`✗ ${e.message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <Clock size={13} className="text-gray-400"/>
+      <span className="text-gray-500">{label} every</span>
+      <input type="number" min={1} value={minutes} onChange={e => setMinutes(e.target.value)}
+        className="input text-xs w-16 py-1"/>
+      <span className="text-gray-500">min</span>
+      <button onClick={save} disabled={saving} className="text-blue-600 hover:underline disabled:opacity-50">Save</button>
+      {savedMsg && <span className={savedMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}>{savedMsg}</span>}
+      {lastRunAt && <span className="text-gray-400">· last ran {new Date(lastRunAt).toLocaleString('en-GB')}</span>}
+    </div>
+  )
+}
+
 function BoatNoteCheckPanel() {
   const [cdns, setCdns] = useState<CdnRec[]>([])
   const [search, setSearch] = useState('')
@@ -714,7 +762,7 @@ function BoatNoteCheckPanel() {
 
   async function runOne(cdn: CdnRec) {
     const res = await fetch('/api/boat-note-check', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
       body: JSON.stringify({ containerNo: cdn.container_no, cdnId: cdn.id }),
     })
     const d = await res.json()
@@ -758,12 +806,13 @@ function BoatNoteCheckPanel() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <div className="card">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h2 className="font-semibold text-gray-900 text-sm">Select CDN</h2>
           <button onClick={autoTrigger} disabled={autoBusy} className="btn-secondary flex items-center gap-2 text-xs">
             {autoBusy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Auto Trigger (all pending)
           </button>
         </div>
+        <div className="mb-3"><SchedulerControl panel="boat_note" label="Auto-check"/></div>
         {autoProgress && <p className="text-xs text-gray-500 mb-2">{autoProgress}</p>}
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container or shipper..." className="input mb-3"/>
         <div className="space-y-1 max-h-96 overflow-y-auto">
@@ -865,7 +914,7 @@ function ExportReleaseCheckPanel() {
     const tin = tinOverride || await resolveTin(c)
     if (!tin) throw new Error(`No Company TIN found for CUSDEC E ${c.number} (not on the record or in the saved shipper profile) — enter it once manually first`)
     const res = await fetch('/api/export-release-check', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
       body: JSON.stringify({ officeCode: c.code, serial: 'E', cusdecNumber: cleanCusdecNumber(c.number), cusdecYear: yearOf(c.date), consigneeTIN: tin, cusdecId: c.id }),
     })
     const d = await res.json()
@@ -887,7 +936,7 @@ function ExportReleaseCheckPanel() {
         }).catch(() => {})
       }
       const res = await fetch('/api/export-release-check', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ ...form, cusdecId: selected.id }),
       })
       const d = await res.json()
@@ -919,12 +968,13 @@ function ExportReleaseCheckPanel() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <div className="card">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h2 className="font-semibold text-gray-900 text-sm">Select CUSDEC (Boat Note passed only)</h2>
           <button onClick={autoTrigger} disabled={autoBusy} className="btn-secondary flex items-center gap-2 text-xs">
             {autoBusy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Auto Trigger (all pending)
           </button>
         </div>
+        <div className="mb-3"><SchedulerControl panel="export_release" label="Auto-check"/></div>
         {autoProgress && <p className="text-xs text-gray-500 mb-2">{autoProgress}</p>}
         <div className="space-y-1 max-h-96 overflow-y-auto">
           {eligible.map(c => (
