@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { downloadDriveFile } from '@/lib/driveDownload'
 import { fillExcelTemplate, type TemplateMappingEntry } from '@/lib/excelTemplateFill'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -17,6 +18,8 @@ const supabaseAdmin = createClient(
 // have), matching the spec's "or the uploaded template's own format" option.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { template_id, cusdec_id, manual_values } = req.body as {
       template_id: string; cusdec_id?: string; manual_values?: Record<string, string>

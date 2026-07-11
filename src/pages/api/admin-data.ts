@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { getTableColumns } from '@/lib/docTables'
-import { requireAuth } from '@/lib/serverAuth'
+import { requireAuth, requireSection } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -47,6 +47,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'DELETE') {
+      const gated = await requireSection(req, 'section:database.delete')
+      if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
       const { id, all } = req.query
       const urlColumn = DRIVE_URL_COLUMN[table]
       const { data: prof } = await supabaseAdmin.from('profiles').select('username, full_name').eq('id', auth.userId).maybeSingle()

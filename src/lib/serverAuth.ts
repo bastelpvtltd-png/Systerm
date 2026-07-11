@@ -34,3 +34,22 @@ export async function requireAdmin(req: NextApiRequest): Promise<{ ok: true; use
 
   return authed
 }
+
+// Mirrors AdminLayout.tsx's usePermission().has(key) check server-side: an
+// is_admin account passes everything, otherwise the caller needs the exact
+// section key in profiles.allowed_tabs. This is what makes destructive
+// per-panel actions (e.g. "delete" on one Database table) grantable to a
+// specific non-admin user without making them a full admin — the client and
+// server enforce the identical rule off the same allowed_tabs array.
+export async function requireSection(req: NextApiRequest, sectionKey: string): Promise<{ ok: true; userId: string } | { ok: false; status: number; error: string }> {
+  const authed = await requireAuth(req)
+  if (!authed.ok) return authed
+
+  const { data: prof } = await supabaseAdmin.from('profiles').select('is_admin, allowed_tabs').eq('id', authed.userId).single()
+  const isAdmin = !!prof?.is_admin
+  const allowed: string[] = prof?.allowed_tabs || []
+  if (!isAdmin && !allowed.includes(sectionKey)) {
+    return { ok: false, status: 403, error: `Access required: ${sectionKey}` }
+  }
+  return authed
+}

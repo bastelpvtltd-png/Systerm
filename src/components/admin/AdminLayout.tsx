@@ -70,6 +70,7 @@ export const SECTION_ITEMS = [
   { key: 'section:dashboard.incoming',        tabHref: '/admin', label: 'Incoming (Notify) panel' },
   { key: 'section:dashboard.my-picked-tasks', tabHref: '/admin', label: 'My Picked Tasks panel' },
   { key: 'section:dashboard.pick-history',    tabHref: '/admin', label: 'Pick History panel' },
+  { key: 'section:pick-history.delete',       tabHref: '/admin', label: 'Pick History: delete entries (audit-log — grant carefully)' },
   // Shipment Entry
   { key: 'section:shipment-entry.form', tabHref: '/admin/shipment-entry', label: 'Shipment entry form' },
   // Templates
@@ -101,6 +102,7 @@ export const SECTION_ITEMS = [
   { key: 'section:database.pdf_templates',      tabHref: '/admin/database', label: 'PDF Templates table' },
   { key: 'section:database.messages',           tabHref: '/admin/database', label: 'Messages table' },
   { key: 'section:database.profiles',           tabHref: '/admin/database', label: 'Users (Profiles) table' },
+  { key: 'section:database.delete',             tabHref: '/admin/database', label: 'Delete/Restore/Purge rows (Recycle Bin) — grant carefully' },
   // Automation
   { key: 'section:automation.xml-generator',      tabHref: '/admin/automation', label: 'Cusdec XML Generator' },
   { key: 'section:automation.cdn-text',            tabHref: '/admin/automation', label: 'CDN Text Extractor & Database' },

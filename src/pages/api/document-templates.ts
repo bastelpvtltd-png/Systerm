@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,6 +13,8 @@ const supabaseAdmin = createClient(
 // silently creating a second template with a clashing name — the client
 // shows the "Update instead?" prompt when this returns needsConfirm:true.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     if (req.method === 'GET') {
       const { type_key } = req.query

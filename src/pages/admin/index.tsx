@@ -4,7 +4,7 @@ import { supabase, authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
 import {
   Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
-  Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square,
+  Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square, Trash2,
 } from 'lucide-react'
 
 interface PendingGroup<T> { count: number; items: T[] }
@@ -468,6 +468,8 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
 
 // ── Admin/Overview "Pick History" audit log ───────────────────────────────
 function PickHistoryPanel() {
+  const { has } = usePermission()
+  const canDelete = has('section:pick-history.delete')
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [fileName, setFileName] = useState('')
@@ -487,6 +489,13 @@ function PickHistoryPanel() {
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function remove(id: string) {
+    if (!confirm('Delete this Pick History entry?')) return
+    const res = await fetch(`/api/pick-history?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+    if (res.ok) setItems(prev => prev.filter(i => i.id !== id))
+    else { const d = await res.json().catch(() => ({})); alert(d.error || 'Delete failed') }
+  }
 
   return (
     <div className="card mt-4">
@@ -514,7 +523,7 @@ function PickHistoryPanel() {
         <div className="overflow-x-auto max-h-96 overflow-y-auto">
           <table className="w-full text-xs">
             <thead className="bg-gray-50 sticky top-0"><tr>
-              {['File', 'User', 'Action', 'When'].map(h => <th key={h} className="text-left px-2 py-1.5 text-gray-500 font-medium">{h}</th>)}
+              {['File', 'User', 'Action', 'When'].concat(canDelete ? [''] : []).map((h, i) => <th key={h || i} className="text-left px-2 py-1.5 text-gray-500 font-medium">{h}</th>)}
             </tr></thead>
             <tbody>
               {items.map(h => (
@@ -523,6 +532,13 @@ function PickHistoryPanel() {
                   <td className="px-2 py-1.5 text-gray-600">{h.user_name || '—'}</td>
                   <td className="px-2 py-1.5 text-gray-600 capitalize">{h.action}</td>
                   <td className="px-2 py-1.5 text-gray-400">{new Date(h.action_timestamp).toLocaleString('en-GB')}</td>
+                  {canDelete && (
+                    <td className="px-2 py-1.5">
+                      <button onClick={() => remove(h.id)} className="text-red-400 hover:text-red-600" title="Delete">
+                        <Trash2 size={12}/>
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

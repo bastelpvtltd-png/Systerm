@@ -33,6 +33,7 @@ DatabasePage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</Admi
 function DatabaseContent() {
   const { has } = usePermission()
   const visibleTables = TABLES.filter(t => has(`section:database.${t.key}`))
+  const canDelete = has('section:database.delete')
   const [table, setTable] = useState('cusdec')
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
@@ -213,11 +214,13 @@ function DatabaseContent() {
                 <button onClick={load} className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
                   <RefreshCw size={13}/> Refresh
                 </button>
-                <button onClick={deleteAll} disabled={deletingAll || !rows.length}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-40">
-                  {deletingAll ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>}
-                  Delete All ({rows.length})
-                </button>
+                {canDelete && (
+                  <button onClick={deleteAll} disabled={deletingAll || !rows.length}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-40">
+                    {deletingAll ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>}
+                    Delete All ({rows.length})
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -247,14 +250,18 @@ function DatabaseContent() {
                       <td className="px-3 py-2 text-gray-400">{new Date(item.deleted_at).toLocaleString('en-GB')}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
-                          <button onClick={() => restoreItem(item.id)} disabled={restoringId === item.id}
-                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
-                            {restoringId === item.id ? <Loader size={12} className="animate-spin"/> : <Undo2 size={12}/>} Restore
-                          </button>
-                          <button onClick={() => purgeItem(item.id)}
-                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
-                            <Trash2 size={12}/> Purge
-                          </button>
+                          {canDelete ? (
+                            <>
+                              <button onClick={() => restoreItem(item.id)} disabled={restoringId === item.id}
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                                {restoringId === item.id ? <Loader size={12} className="animate-spin"/> : <Undo2 size={12}/>} Restore
+                              </button>
+                              <button onClick={() => purgeItem(item.id)}
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
+                                <Trash2 size={12}/> Purge
+                              </button>
+                            </>
+                          ) : <span className="text-gray-300 text-xs">No access</span>}
                         </div>
                       </td>
                     </tr>
@@ -365,11 +372,13 @@ function DatabaseContent() {
                               {savingId === row.id ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}
                             </button>
                           )}
-                          <button onClick={() => deleteRow(row.id)} disabled={deletingId === row.id}
-                            title="Delete row"
-                            className="w-7 h-7 rounded-md border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-300 flex items-center justify-center disabled:opacity-50">
-                            {deletingId === row.id ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>}
-                          </button>
+                          {canDelete && (
+                            <button onClick={() => deleteRow(row.id)} disabled={deletingId === row.id}
+                              title="Delete row"
+                              className="w-7 h-7 rounded-md border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-300 flex items-center justify-center disabled:opacity-50">
+                              {deletingId === row.id ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>}
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

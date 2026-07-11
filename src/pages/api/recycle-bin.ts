@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { requireAuth } from '@/lib/serverAuth'
+import { requireAuth, requireSection } from '@/lib/serverAuth'
 import { deleteDriveFileByUrl } from '@/lib/driveFolders'
 
 const supabaseAdmin = createClient(
@@ -24,6 +24,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
+      // Restore is exactly as sensitive as the delete that put something
+      // here — same access gate as admin-data.ts's DELETE branch.
+      const gated = await requireSection(req, 'section:database.delete')
+      if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
       // Restore — re-insert the archived row (same id) into its original
       // table, then drop it from the bin.
       const id = String(req.body.id || '')
@@ -39,6 +43,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'DELETE') {
       // Purge permanently — this is the only place that actually deletes the
       // Drive PDF, since a normal delete from Database no longer does.
+      const gated = await requireSection(req, 'section:database.delete')
+      if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
       const id = String(req.query.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })
       const { data: entry } = await supabaseAdmin.from('deleted_records').select('drive_url').eq('id', id).maybeSingle()
