@@ -101,6 +101,31 @@ function TemplatesContent() {
     doc.save(`${selected.name.replace(/[^\w.-]+/g, '_')}.pdf`)
   }
 
+  const [generatingWord, setGeneratingWord] = useState(false)
+  async function generateWord() {
+    if (!selected) return
+    setError(''); setGeneratingWord(true)
+    try {
+      const res = await fetch('/api/generate-template-docx', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ template_id: selected.id, values }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Generate failed')
+      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
+      const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = d.fileName
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setGeneratingWord(false)
+    }
+  }
+
   if (!canUse) return <div className="p-6 text-gray-400 text-sm">You don't have access to this page.</div>
 
   return (
@@ -169,9 +194,14 @@ function TemplatesContent() {
                       </div>
                     ))}
                   </div>
-                  <button onClick={generatePdf} className="btn-primary flex items-center gap-2">
-                    <FileDown size={14}/>Generate PDF
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={generatePdf} className="btn-primary flex items-center gap-2">
+                      <FileDown size={14}/>Generate PDF
+                    </button>
+                    <button onClick={generateWord} disabled={generatingWord} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50" style={{ background: '#2563eb' }}>
+                      {generatingWord ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}Generate Word
+                    </button>
+                  </div>
                 </>
               )}
             </div>
@@ -184,7 +214,7 @@ function TemplatesContent() {
 
 // ── Excel Templates: Type management + cell mapping + generate ───────────
 interface TemplateType { id: string; key: string; label: string; is_auto_capable: boolean }
-interface MappingEntry { key: string; label: string; source: 'cusdec' | 'cdn' | 'manual'; dbColumn?: string; isArray: boolean; cellRef?: string; cellRange?: string }
+interface MappingEntry { key: string; label: string; source: 'cusdec' | 'cdn' | 'manual'; dbColumn?: string; isArray: boolean; cellRef?: string; cellRange?: string; sheetName?: string }
 interface ExcelTemplate { id: string; type_key: string; name: string; file_name: string; drive_url: string; mapping: MappingEntry[] }
 interface CusdecRec { id: string; code: string; number: string; exporter: string; cap: string }
 
@@ -211,6 +241,8 @@ function ExcelTemplatesContent() {
   const [manualValues, setManualValues] = useState<Record<string, string>>({})
   const [generating, setGenerating] = useState(false)
   const [autoModal, setAutoModal] = useState(false)
+  const [sheetNames, setSheetNames] = useState<string[]>([])
+  const [columnsByTable, setColumnsByTable] = useState<{ cusdec: string[]; cdn: string[] }>({ cusdec: [], cdn: [] })
 
   async function loadTypes() {
     const res = await fetch('/api/template-types')
@@ -233,6 +265,32 @@ function ExcelTemplatesContent() {
   useEffect(() => {
     fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    async function loadCols() {
+      const headers = await authHeader()
+      const [cusdecRes, cdnRes] = await Promise.all([
+        fetch('/api/table-columns?table=cusdec', { headers }).then(r => r.json()).catch(() => ({ columns: [] })),
+        fetch('/api/table-columns?table=cdn', { headers }).then(r => r.json()).catch(() => ({ columns: [] })),
+      ])
+      setColumnsByTable({ cusdec: cusdecRes.columns || [], cdn: cdnRes.columns || [] })
+    }
+    loadCols()
+  }, [])
+
+  // Which sheets exist in the currently selected template — populates the
+  // per-field sheet picker below (multi-sheet mapping support).
+  useEffect(() => {
+    if (!selectedId) { setSheetNames([]); return }
+    let cancelled = false
+    authHeader().then(headers =>
+      fetch(`/api/excel-template-sheets?template_id=${selectedId}`, { headers })
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setSheetNames(d.sheets || []) })
+        .catch(() => { if (!cancelled) setSheetNames([]) })
+    )
+    return () => { cancelled = true }
+  }, [selectedId])
 
   const selected = templates.find(t => t.id === selectedId) || null
   const selectedType = types.find(t => t.key === typeKey) || null
@@ -331,18 +389,19 @@ function ExcelTemplatesContent() {
     }
   }
 
-  async function generate(cusdecId?: string) {
+  async function generate(cusdecId?: string, format: 'xlsx' | 'pdf' = 'xlsx') {
     if (!selected) return
     setGenerating(true); setError('')
     try {
       const res = await fetch('/api/generate-from-template', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template_id: selected.id, cusdec_id: cusdecId || genCusdecId || undefined, manual_values: manualValues }),
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ template_id: selected.id, cusdec_id: cusdecId || genCusdecId || undefined, manual_values: manualValues, format }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
-      const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const mime = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      const blob = new Blob([bytes], { type: mime })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url; a.download = d.fileName
@@ -432,15 +491,26 @@ function ExcelTemplatesContent() {
                       <button onClick={() => removeMappingRow(i)} className="text-gray-300 hover:text-red-500 flex-shrink-0"><X size={14}/></button>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <select value={m.source} onChange={e => updateMappingRow(i, { source: e.target.value as MappingEntry['source'], isArray: e.target.value !== 'cdn' ? false : m.isArray })} className="input text-xs">
+                      <select value={m.source} onChange={e => updateMappingRow(i, { source: e.target.value as MappingEntry['source'], isArray: e.target.value !== 'cdn' ? false : m.isArray, dbColumn: undefined })} className="input text-xs">
                         <option value="manual">Manual Input</option>
                         <option value="cusdec">CUSDEC column</option>
                         <option value="cdn">CDN column</option>
                       </select>
                       {m.source !== 'manual' && (
-                        <input value={m.dbColumn || ''} onChange={e => updateMappingRow(i, { dbColumn: e.target.value })} placeholder="column name" className="input text-xs flex-1"/>
+                        <select value={m.dbColumn || ''} onChange={e => updateMappingRow(i, { dbColumn: e.target.value })} className="input text-xs flex-1">
+                          <option value="">Pick column...</option>
+                          {columnsByTable[m.source].map(col => <option key={col} value={col}>{col}</option>)}
+                        </select>
                       )}
                     </div>
+                    {sheetNames.length > 1 && (
+                      <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                        <span className="flex-shrink-0">Sheet:</span>
+                        <select value={m.sheetName || sheetNames[0]} onChange={e => updateMappingRow(i, { sheetName: e.target.value })} className="input text-xs flex-1">
+                          {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                    )}
                     {m.source === 'cdn' && (
                       <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
                         <input type="checkbox" checked={m.isArray} onChange={e => updateMappingRow(i, { isArray: e.target.checked })}/>
@@ -480,8 +550,11 @@ function ExcelTemplatesContent() {
                   </div>
                 ))}
                 <div className="flex items-center gap-2 mt-2">
-                  <button onClick={() => generate()} disabled={generating} className="btn-primary text-xs px-3 py-2 flex items-center gap-1.5">
-                    {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate
+                  <button onClick={() => generate(undefined, 'xlsx')} disabled={generating} className="btn-primary text-xs px-3 py-2 flex items-center gap-1.5">
+                    {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate Excel
+                  </button>
+                  <button onClick={() => generate(undefined, 'pdf')} disabled={generating} className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg text-white disabled:opacity-50" style={{ background: '#dc2626' }}>
+                    {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate PDF
                   </button>
                   {selectedType?.is_auto_capable && (
                     <button onClick={() => setAutoModal(true)} className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg text-white" style={{ background: '#8b5cf6' }}>

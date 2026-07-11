@@ -1,7 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { downloadDriveFile } from '@/lib/driveDownload'
-import { fillExcelTemplate, type TemplateMappingEntry } from '@/lib/excelTemplateFill'
+import { fillExcelTemplateWorkbook, type TemplateMappingEntry } from '@/lib/excelTemplateFill'
+import { workbookSheetToPdf } from '@/lib/excelToPdf'
 import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
@@ -13,16 +14,18 @@ const supabaseAdmin = createClient(
 // pulled once) and its CDN rows (array fields, filled down the field's cell
 // range in order — this is the "Complex CDN Data Handling" the spec calls
 // for) plus whatever the user typed into the Manual Input fields. Returns
-// the filled workbook as base64 — same original .xlsx format, not a PDF
-// conversion (which would need a headless office renderer this app doesn't
-// have), matching the spec's "or the uploaded template's own format" option.
+// either the filled .xlsx as-is, or (format:'pdf') a best-effort PDF render
+// of the first sheet via excelToPdf.ts — there's no headless office renderer
+// available here, so multi-sheet templates only render their first sheet to
+// PDF (the .xlsx download still has everything); pick format:'xlsx' for the
+// full, exact workbook.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   const authed = await requireAuth(req)
   if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
-    const { template_id, cusdec_id, manual_values } = req.body as {
-      template_id: string; cusdec_id?: string; manual_values?: Record<string, string>
+    const { template_id, cusdec_id, manual_values, format } = req.body as {
+      template_id: string; cusdec_id?: string; manual_values?: Record<string, string>; format?: 'xlsx' | 'pdf'
     }
     if (!template_id) return res.status(400).json({ error: 'template_id required' })
 
@@ -42,9 +45,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const templateBuffer = await downloadDriveFile(template.drive_url)
-    const filled = await fillExcelTemplate(templateBuffer, mapping, cusdecRow, cdnRows, manual_values || {})
+    const workbook = await fillExcelTemplateWorkbook(templateBuffer, mapping, cusdecRow, cdnRows, manual_values || {})
+    const dateStamp = new Date().toISOString().slice(0, 10)
 
-    res.json({ fileName: `${template.name}_${new Date().toISOString().slice(0, 10)}.xlsx`, base64: filled.toString('base64') })
+    if (format === 'pdf') {
+      const pdfBuffer = workbookSheetToPdf(workbook.worksheets[0], template.name)
+      return res.json({ fileName: `${template.name}_${dateStamp}.pdf`, base64: pdfBuffer.toString('base64') })
+    }
+
+    const out = await workbook.xlsx.writeBuffer()
+    res.json({ fileName: `${template.name}_${dateStamp}.xlsx`, base64: Buffer.from(out).toString('base64') })
   } catch (err: any) {
     console.error('[generate-from-template] error:', err)
     res.status(500).json({ error: err.message })

@@ -10,8 +10,9 @@ export interface TemplateMappingEntry {
   source: 'cusdec' | 'cdn' | 'manual'
   dbColumn?: string
   isArray: boolean
-  cellRef?: string   // e.g. "B5" — used when isArray is false
-  cellRange?: string // e.g. "A10:A20" — used when isArray is true
+  cellRef?: string    // e.g. "B5" — used when isArray is false
+  cellRange?: string  // e.g. "A10:A20" — used when isArray is true
+  sheetName?: string  // which worksheet this field's cell/range lives on — defaults to the first sheet when unset (older templates saved before multi-sheet support)
 }
 
 function parseRange(range: string): { col: string; startRow: number; endRow: number } {
@@ -20,19 +21,31 @@ function parseRange(range: string): { col: string; startRow: number; endRow: num
   return { col: m[1], startRow: Number(m[2]), endRow: Number(m[3]) }
 }
 
-export async function fillExcelTemplate(
+// Returns the workbook itself (already filled) rather than serialized bytes —
+// the PDF export path needs to read the filled cell values/layout back out,
+// not just get a file handed to the user.
+export async function fillExcelTemplateWorkbook(
   templateBuffer: Buffer,
   mapping: TemplateMappingEntry[],
   cusdecRow: Record<string, any> | null,
   cdnRows: Record<string, any>[],
   manualValues: Record<string, string>
-): Promise<Buffer> {
+): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook()
   await workbook.xlsx.load(templateBuffer as any)
-  const sheet = workbook.worksheets[0]
-  if (!sheet) throw new Error('Template has no worksheet')
+  const firstSheet = workbook.worksheets[0]
+  if (!firstSheet) throw new Error('Template has no worksheet')
+
+  // Each field resolves its own sheet (falls back to the first sheet for
+  // templates saved before multi-sheet support existed) — this is what lets
+  // fields mapped from different sheets in the same workbook both get filled,
+  // no separate "merge" step needed since each field already knows where it lives.
+  function sheetFor(field: TemplateMappingEntry) {
+    return (field.sheetName && workbook.getWorksheet(field.sheetName)) || firstSheet
+  }
 
   for (const field of mapping) {
+    const sheet = sheetFor(field)
     if (field.source === 'cdn' && field.isArray) {
       if (!field.cellRange) continue
       const { col, startRow, endRow } = parseRange(field.cellRange)
@@ -51,6 +64,17 @@ export async function fillExcelTemplate(
     sheet.getCell(field.cellRef).value = value
   }
 
+  return workbook
+}
+
+export async function fillExcelTemplate(
+  templateBuffer: Buffer,
+  mapping: TemplateMappingEntry[],
+  cusdecRow: Record<string, any> | null,
+  cdnRows: Record<string, any>[],
+  manualValues: Record<string, string>
+): Promise<Buffer> {
+  const workbook = await fillExcelTemplateWorkbook(templateBuffer, mapping, cusdecRow, cdnRows, manualValues)
   const out = await workbook.xlsx.writeBuffer()
   return Buffer.from(out)
 }
