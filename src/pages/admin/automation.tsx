@@ -727,15 +727,18 @@ function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_relea
   }
 
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <Clock size={13} className="text-gray-400"/>
-      <span className="text-gray-500">{label} every</span>
-      <input type="number" min={1} value={minutes} onChange={e => setMinutes(e.target.value)}
-        className="input text-xs w-16 py-1"/>
-      <span className="text-gray-500">min</span>
-      <button onClick={save} disabled={saving} className="text-blue-600 hover:underline disabled:opacity-50">Save</button>
-      {savedMsg && <span className={savedMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}>{savedMsg}</span>}
-      {lastRunAt && <span className="text-gray-400">· last ran {new Date(lastRunAt).toLocaleString('en-GB')}</span>}
+    <div>
+      <div className="flex items-center gap-2 text-xs flex-wrap">
+        <Clock size={13} className="text-gray-400"/>
+        <span className="text-gray-500">{label} every</span>
+        <input type="number" min={1} value={minutes} onChange={e => setMinutes(e.target.value)}
+          className="input text-xs w-16 py-1"/>
+        <span className="text-gray-500">min</span>
+        <button onClick={save} disabled={saving} className="text-blue-600 hover:underline disabled:opacity-50">Save</button>
+        {savedMsg && <span className={savedMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}>{savedMsg}</span>}
+        {lastRunAt && <span className="text-gray-400">· last ran {new Date(lastRunAt).toLocaleString('en-GB')}</span>}
+      </div>
+      <p className="text-[11px] text-gray-400 mt-1">This project's Vercel plan (Hobby) only fires the scheduler once/day — a shorter interval here just means it won't skip a day early once you upgrade to Pro; it can't run more than once a day until then.</p>
     </div>
   )
 }

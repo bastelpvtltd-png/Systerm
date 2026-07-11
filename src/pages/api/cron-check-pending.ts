@@ -20,6 +20,13 @@ const supabaseAdmin = createClient(
 // so this can run frequently (the cron schedule itself is fixed) while each
 // panel only actually does work once its own configured interval has
 // elapsed — an idle panel costs nothing beyond one cheap timestamp check.
+//
+// Vercel's Hobby plan only allows a cron to fire once per day (a shorter
+// vercel.json schedule gets the whole deployment rejected at build time —
+// confirmed the hard way), so today this only ever runs once/day regardless
+// of what's configured in automation_runs; the interval field is real and
+// will matter as soon as the project is on Pro (which allows finer cron
+// schedules), it's just capped by the plan for now.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const expected = process.env.CRON_SECRET
   const authHeader = req.headers.authorization || ''
