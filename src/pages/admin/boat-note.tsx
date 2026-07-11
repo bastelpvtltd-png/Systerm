@@ -69,8 +69,24 @@ export default function BoatNotePage() {
 }
 BoatNotePage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
+const emptyBoatNote = (): BoatNote => ({
+  shipper: '', consignee: '', entry_no: '', bl_no: '', slpa_no: '', voyage: '', voyage_date: '',
+  vessel: '', terminal: '', lorry_no: '', trailer_no: '', driver_name: '', container_no: '',
+  con_type: '', seal_no: '', goods: '', gross_mass: '', net_mass: '', cdn_no: '', pkg_no: '',
+  pkg_type: '', voc: '', coc: '', loading_port: '', discharge_port: '', volume: '', marks: '',
+})
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
 function BoatNoteContent() {
-  const { has } = usePermission()
+  const { has, isAdmin } = usePermission()
   const canSelectCusdec = has('section:boat-note.select-cusdec')
   const canSelectCdn = has('section:boat-note.select-cdn')
   const canOutput = has('section:boat-note.output')
@@ -94,6 +110,71 @@ function BoatNoteContent() {
   const [emailTo, setEmailTo]   = useState('bathiyapradeep7788@gmail.com')
   const [sending, setSending]   = useState(false)
   const [status, setStatus]     = useState('')
+
+  // ── Boat Note: Quick Upload (CUSDEC XML + PDF, ephemeral) ─────────────
+  // Admin-only per spec. Nothing here ever reaches Supabase/Drive — the
+  // XML is parsed in-memory server-side (parse-cusdec-xml.ts) purely to
+  // read its field values, and the PDF the user attaches is never sent
+  // anywhere at all (kept only for the admin's own reference while filling
+  // in the container-level fields the XML doesn't carry). Reload the page
+  // and every trace of this is gone, which is the point.
+  const [quickXmlFile, setQuickXmlFile] = useState<File | null>(null)
+  const [quickPdfFile, setQuickPdfFile] = useState<File | null>(null)
+  const [quickFields, setQuickFields] = useState<BoatNote>(emptyBoatNote())
+  const [quickParsing, setQuickParsing] = useState(false)
+  const [quickGenerating, setQuickGenerating] = useState(false)
+  const [quickStatus, setQuickStatus] = useState('')
+
+  function setQuickField<K extends keyof BoatNote>(key: K, value: BoatNote[K]) {
+    setQuickFields(f => ({ ...f, [key]: value }))
+  }
+
+  async function parseQuickXml() {
+    if (!quickXmlFile) return
+    setQuickParsing(true); setQuickStatus('')
+    try {
+      const xmlBase64 = await fileToBase64(quickXmlFile)
+      const res = await fetch('/api/parse-cusdec-xml', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ xmlBase64 }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Could not parse this XML')
+      setQuickFields(f => ({
+        ...f,
+        shipper: d.parsed.exporter || f.shipper,
+        consignee: d.parsed.consignee || f.consignee,
+        entry_no: d.parsed.number ? `E ${d.parsed.number}` : f.entry_no,
+        bl_no: d.parsed.bl_no || f.bl_no,
+        vessel: d.parsed.vessel || f.vessel,
+        gross_mass: d.parsed.gross_mass || f.gross_mass,
+        goods: d.parsed.goods_description || f.goods,
+      }))
+      setQuickStatus('✓ XML parsed — review the fields below, fill in the rest, then Generate')
+    } catch (e: any) {
+      setQuickStatus(`✗ ${e.message}`)
+    } finally {
+      setQuickParsing(false)
+    }
+  }
+
+  async function generateQuickBoatNote() {
+    setQuickGenerating(true); setQuickStatus('')
+    try {
+      const doc = await buildBoatNotePdf([quickFields], quickFields.entry_no || 'QUICK')
+      const dt = new Date().toISOString().slice(0, 10)
+      doc.save(`BOAT_NOTE_QUICK_${dt}.pdf`)
+      setQuickStatus('✓ PDF downloaded — nothing from this form was saved anywhere')
+    } catch (e: any) {
+      setQuickStatus(`✗ ${e.message}`)
+    } finally {
+      setQuickGenerating(false)
+    }
+  }
+
+  function resetQuickUpload() {
+    setQuickXmlFile(null); setQuickPdfFile(null); setQuickFields(emptyBoatNote()); setQuickStatus('')
+  }
 
   // ── Invoice / Packing List (shared form) ──────────────────────────────
   const [docForm, setDocForm] = useState<DocForm>(emptyDocForm())
@@ -401,15 +482,17 @@ function BoatNoteContent() {
     finally { setGen(false) }
   }
 
-  async function downloadPdf() {
-    if (!boatNotes.length) return
+  // Shared by both the CUSDEC-record flow (below) and the Quick Upload
+  // (XML+PDF) ephemeral flow — same Exp 3a layout either way, just a
+  // different source for the BoatNote field values.
+  async function buildBoatNotePdf(notes: BoatNote[], cusdecNoForFooter: string) {
     const { jsPDF } = await import('jspdf')
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
 
     const PW = 277  // landscape A4 width - margins
     const M  = 10   // margin
 
-    boatNotes.forEach((bn, pi) => {
+    notes.forEach((bn, pi) => {
       if (pi > 0) doc.addPage()
 
       let y = M
@@ -548,9 +631,15 @@ function BoatNoteContent() {
 
       // ── Footer ──
       doc.setFont('helvetica','italic').setFontSize(6.5)
-      doc.text(`Generated by Export Management System  ·  CUSDEC ${cusdecNo}  ·  ${new Date().toLocaleDateString('en-GB')}`, M + PW/2, y+5, { align:'center' })
+      doc.text(`Generated by Export Management System  ·  CUSDEC ${cusdecNoForFooter}  ·  ${new Date().toLocaleDateString('en-GB')}`, M + PW/2, y+5, { align:'center' })
     })
 
+    return doc
+  }
+
+  async function downloadPdf() {
+    if (!boatNotes.length) return
+    const doc = await buildBoatNotePdf(boatNotes, cusdecNo)
     const dt = new Date().toISOString().slice(0,10)
     doc.save(`BOAT_NOTE_${cusdecNo}_${dt}.pdf`)
     setStatus('✓ PDF downloaded')
@@ -877,6 +966,65 @@ function BoatNoteContent() {
         <div className="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-100 text-xs text-blue-700">
           <span className="font-semibold">PDF Format:</span> SHIPPING NOTE / BOAT NOTE – Exp 3a · Landscape A4 · All fields from Excel b2 sheet (Shipper, Consignee, Voyage, Vessel, Port of Loading/Discharge, Container, CDN No., Gross Weight, Cube, SLPA, Company, Declarant)
         </div>
+
+        {/* Quick Upload — CUSDEC XML + PDF, ephemeral, admin-only */}
+        {isAdmin && (
+          <div className="card mt-5">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Anchor size={15}/>Quick Upload (CUSDEC XML + PDF)</h2>
+              <button onClick={resetQuickUpload} className="text-xs text-gray-400 hover:text-gray-600">Reset</button>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">Admin only · Temporary — nothing uploaded here is saved to the database or Drive. Upload a CUSDEC XML to auto-fill what it has, fill in the rest, then Generate & Download. Refresh the page and it's all gone.</p>
+
+            {quickStatus && (
+              <p className={`text-xs mb-3 font-medium ${quickStatus.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{quickStatus}</p>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">CUSDEC XML</label>
+                <div className="flex items-center gap-2">
+                  <input type="file" accept=".xml" onChange={e => setQuickXmlFile(e.target.files?.[0] || null)} className="text-xs flex-1"/>
+                  <button onClick={parseQuickXml} disabled={!quickXmlFile || quickParsing} className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 flex-shrink-0">
+                    {quickParsing ? <Loader size={12} className="animate-spin"/> : null}Parse
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Supporting PDF (kept on this page only, not uploaded anywhere)</label>
+                <input type="file" accept=".pdf" onChange={e => setQuickPdfFile(e.target.files?.[0] || null)} className="text-xs"/>
+                {quickPdfFile && <p className="text-[11px] text-gray-400 mt-1">{quickPdfFile.name}</p>}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-3">
+              <Field label="Shipper"><input value={quickFields.shipper} onChange={e => setQuickField('shipper', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Consignee"><input value={quickFields.consignee} onChange={e => setQuickField('consignee', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Entry No."><input value={quickFields.entry_no} onChange={e => setQuickField('entry_no', e.target.value)} className="input text-xs"/></Field>
+              <Field label="B/L No."><input value={quickFields.bl_no} onChange={e => setQuickField('bl_no', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Vessel"><input value={quickFields.vessel} onChange={e => setQuickField('vessel', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Voyage / Date"><input value={quickFields.voyage} onChange={e => setQuickField('voyage', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Gross Weight (Kg)"><input value={quickFields.gross_mass} onChange={e => setQuickField('gross_mass', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Goods Description"><input value={quickFields.goods} onChange={e => setQuickField('goods', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Container No."><input value={quickFields.container_no} onChange={e => setQuickField('container_no', e.target.value)} className="input text-xs"/></Field>
+              <Field label="CDN No."><input value={quickFields.cdn_no} onChange={e => setQuickField('cdn_no', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Seal No."><input value={quickFields.seal_no} onChange={e => setQuickField('seal_no', e.target.value)} className="input text-xs"/></Field>
+              <Field label="SLPA No."><input value={quickFields.slpa_no} onChange={e => setQuickField('slpa_no', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Terminal"><input value={quickFields.terminal} onChange={e => setQuickField('terminal', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Loading Port"><input value={quickFields.loading_port} onChange={e => setQuickField('loading_port', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Discharge Port"><input value={quickFields.discharge_port} onChange={e => setQuickField('discharge_port', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Lorry / Trailer"><input value={quickFields.lorry_no} onChange={e => setQuickField('lorry_no', e.target.value)} className="input text-xs"/></Field>
+              <Field label="Driver"><input value={quickFields.driver_name} onChange={e => setQuickField('driver_name', e.target.value)} className="input text-xs"/></Field>
+            </div>
+
+            <button onClick={generateQuickBoatNote} disabled={quickGenerating}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+              style={{ background: '#1B3A5C' }}>
+              {quickGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+              Generate & Download PDF
+            </button>
+          </div>
+        )}
         </>
         )}
       </div>

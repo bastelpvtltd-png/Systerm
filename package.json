@@ -15,6 +15,7 @@
     "date-fns": "^3.3.1",
     "docxtemplater": "^3.69.0",
     "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.10.0",
     "googleapis": "^173.0.0",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.1",
