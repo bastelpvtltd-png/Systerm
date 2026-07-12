@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'POST') {
       const authed = await requireAuth(req)
       if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
-      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name } = req.body
+      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note } = req.body
       if (!file_name) return res.status(400).json({ error: 'file_name required' })
 
       let uploadedByName = uploaded_by_name || ''
@@ -38,6 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
         status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
         uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
+        reason: reason || null, reason_note: reason === 'Other' ? (reason_note || null) : null,
       }).select().single()
       if (error) throw error
 

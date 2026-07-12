@@ -27,10 +27,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const authed = await requireAuth(req)
     if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
 
-    const [{ data: shipments }, { data: cusdecs }, { data: cdns }] = await Promise.all([
+    const [{ data: shipments }, { data: cusdecs }, { data: cdns }, { data: reasonDocs }] = await Promise.all([
       supabaseAdmin.from('temporary_shipments').select('id, reference, shipper, invoice_number, packing_number, created_at').order('created_at', { ascending: false }),
       supabaseAdmin.from('cusdec').select('id, code, number, exporter, cap, export_release_passed'),
       supabaseAdmin.from('cdn').select('id, code, cusdec_number, container_no, boat_note_passed'),
+      // Reason-tagged Quick Upload queue — a document tagged reason:'CUSDEC
+      // Passed' counts as pending until whoever picks it does Mail/Download
+      // (which deletes it — see delete-reason-document.ts), so the count is
+      // just "how many of these rows currently exist", not a status field.
+      supabaseAdmin.from('document_uploads').select('id, file_name, reason, reason_note, created_at').eq('reason', 'CUSDEC Passed').order('created_at', { ascending: false }),
     ])
 
     const cdnPending: any[] = []
@@ -60,6 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       cdnPending: { count: cdnPending.length, items: cdnPending },
       boatNotePending: { count: boatNotePending.length, items: boatNotePending },
       releasePending: { count: releasePending.length, items: releasePending },
+      pendingCusdecPassed: { count: (reasonDocs || []).length, items: reasonDocs || [] },
     })
   } catch (err: any) {
     console.error('[dashboard-summary] error:', err)

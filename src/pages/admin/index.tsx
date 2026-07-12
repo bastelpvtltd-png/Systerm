@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { supabase, authHeader } from '@/lib/supabase'
+import { authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
 import {
   Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
@@ -9,13 +9,27 @@ import {
 
 interface PendingGroup<T> { count: number; items: T[] }
 interface Summary {
-  totalShipments: number
+  pendingCusdecPassed: PendingGroup<{ id: string; file_name: string; reason: string; reason_note: string | null; created_at: string }>
   shipmentsPending: PendingGroup<{ id: string; reference: string; shipper: string; invoice_number: string; packing_number: string; created_at: string }>
   cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number }>
   boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number }>
   releasePending: PendingGroup<{ cusdecId: string; number: string; exporter: string }>
 }
 const emptyGroup = { count: 0, items: [] }
+
+// Small tag shown next to a document wherever it appears (Activity Log, My
+// Picked Tasks, Processed History) when it came through Quick Upload's
+// reason-tagged flow — "CUSDEC Passed" gets its own color since that's the
+// one reason that feeds the Dashboard's Pending CUSDEC Passed count.
+function ReasonBadge({ reason, note }: { reason?: string | null; note?: string | null }) {
+  if (!reason) return null
+  const isCusdec = reason === 'CUSDEC Passed'
+  return (
+    <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-medium ${isCusdec ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+      {reason === 'Other' && note ? note : reason}
+    </span>
+  )
+}
 
 // getLayout (see _app.tsx) keeps AdminLayout mounted across navigations
 // instead of remounting the sidebar on every tab click.
@@ -26,7 +40,7 @@ AdminDashboard.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</Ad
 
 function DashboardContent() {
   const [summary, setSummary] = useState<Summary>({
-    totalShipments: 0, shipmentsPending: emptyGroup, cdnPending: emptyGroup, boatNotePending: emptyGroup, releasePending: emptyGroup,
+    pendingCusdecPassed: emptyGroup, shipmentsPending: emptyGroup, cdnPending: emptyGroup, boatNotePending: emptyGroup, releasePending: emptyGroup,
   })
   const [expanded, setExpanded] = useState<string | null>(null)
   // Bumped whenever Incoming's Pick succeeds, so My Picked Tasks re-fetches
@@ -35,12 +49,11 @@ function DashboardContent() {
 
   useEffect(() => {
     async function load() {
-      const { count: total } = await supabase.from('temporary_shipments').select('*', { count: 'exact', head: true })
       const res = await fetch('/api/dashboard-summary', { headers: await authHeader() })
       const d = await res.json()
       if (res.ok) {
         setSummary({
-          totalShipments: total ?? 0,
+          pendingCusdecPassed: d.pendingCusdecPassed || emptyGroup,
           shipmentsPending: d.shipmentsPending || emptyGroup,
           cdnPending: d.cdnPending || emptyGroup,
           boatNotePending: d.boatNotePending || emptyGroup,
@@ -54,7 +67,7 @@ function DashboardContent() {
   const { has } = usePermission()
 
   const stats = [
-    { key: 'section:dashboard.total-shipments',  id: 'total',    label: 'Total Shipments',        value: summary.totalShipments,          icon: Ship,        color: '#1B3A5C' },
+    { key: 'section:dashboard.total-shipments',  id: 'pendingCusdec', label: 'Pending CUSDEC Passed',  value: summary.pendingCusdecPassed.count, icon: Ship,        color: '#1B3A5C' },
     { key: 'section:dashboard.cusdec-pending',   id: 'shipments',label: 'Shipments Pending (no CUSDEC yet)', value: summary.shipmentsPending.count, icon: FileText,    color: '#f59e0b' },
     { key: 'section:dashboard.cdn-pending',      id: 'cdn',      label: 'CDN Pending (CAP not complete)',    value: summary.cdnPending.count,       icon: Clock,       color: '#8b5cf6' },
     { key: 'section:dashboard.boatnote-pending', id: 'boatnote', label: 'Boat Note Pending',       value: summary.boatNotePending.count,    icon: Package,     color: '#3b82f6' },
@@ -83,6 +96,27 @@ function DashboardContent() {
                 <div className="text-xs text-gray-500 mt-1">{label}</div>
               </button>
             ))}
+          </div>
+        )}
+
+        {expanded === 'pendingCusdec' && (
+          <div className="card mb-4">
+            <h2 className="font-semibold text-gray-900 mb-3 text-sm">Reason-tagged uploads awaiting Mail/Download (Quick Upload)</h2>
+            <p className="text-xs text-gray-400 mb-3">These are temporary Drive-only uploads (Upload Docs → Quick Upload), not saved to any structured table. Whoever picks one and does Mail or Download removes it from this count.</p>
+            {summary.pendingCusdecPassed.items.length === 0 ? (
+              <p className="text-xs text-gray-400 py-4 text-center">None pending</p>
+            ) : (
+              <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                {summary.pendingCusdecPassed.items.map(r => (
+                  <div key={r.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
+                    <div>
+                      <p className="font-medium text-gray-800">{r.file_name}</p>
+                      <p className="text-gray-400">{new Date(r.created_at).toLocaleString('en-GB')}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -289,7 +323,10 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
                   {selected[n.id] ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>}
                 </button>
                 <div className="min-w-0">
-                  <p className="font-medium text-gray-800 truncate">{n.document_uploads?.file_name}</p>
+                  <p className="font-medium text-gray-800 truncate flex items-center gap-1.5">
+                    {n.document_uploads?.file_name}
+                    <ReasonBadge reason={n.document_uploads?.reason} note={n.document_uploads?.reason_note}/>
+                  </p>
                   <p className="text-gray-400">{n.uploaded_by_name || 'Someone'} uploaded this</p>
                 </div>
               </div>
@@ -395,14 +432,32 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     })).catch(() => {})
   }
 
+  // Reason-tagged Quick Uploads are meant to be temporary: Mail or Download
+  // is the last thing that happens to them, so confirming here both permits
+  // the action AND deletes the document (Drive file + every trace of it) —
+  // that delete is what takes it out of the Dashboard's Pending CUSDEC
+  // Passed count. Declining the confirm blocks the mail/download entirely.
+  function confirmReasonDelete(reason?: string | null): boolean {
+    if (!reason) return true
+    return confirm(`This document (reason: ${reason}) will be permanently removed after this. Continue with Mail/Download?`)
+  }
+  function deleteReasonDoc(documentId: string) {
+    authHeader().then(h => fetch('/api/delete-reason-document', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+      body: JSON.stringify({ document_id: documentId }),
+    })).catch(() => {})
+  }
+
   // Mail or Download — whichever happens first — auto-resolves the task
   // server-side (log-document-action.ts), so it's removed from view here
   // right away instead of waiting for the next full reload.
   function downloadSelected() {
-    const ids = new Set(selectedTasks.map(t => t.id))
-    for (const t of selectedTasks) {
+    const proceeding = selectedTasks.filter(t => confirmReasonDelete(t.document_uploads?.reason))
+    const ids = new Set(proceeding.map(t => t.id))
+    for (const t of proceeding) {
       if (!t.document_uploads?.drive_url) continue
       logAction(t.document_uploads.id, 'download')
+      if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
       window.open(t.document_uploads.drive_url, '_blank')
     }
     setTasks(prev => prev.filter(t => !ids.has(t.id)))
@@ -410,10 +465,15 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   }
 
   function mailSelected() {
-    const ids = new Set(selectedTasks.map(t => t.id))
-    const attachments = selectedTasks
+    const proceeding = selectedTasks.filter(t => confirmReasonDelete(t.document_uploads?.reason))
+    const ids = new Set(proceeding.map(t => t.id))
+    const attachments = proceeding
       .filter(t => t.document_uploads?.drive_url)
-      .map(t => { logAction(t.document_uploads.id, 'mail'); return { filename: t.document_uploads.file_name, url: t.document_uploads.drive_url } })
+      .map(t => {
+        logAction(t.document_uploads.id, 'mail')
+        if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
+        return { filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }
+      })
     if (attachments.length) setEmailAttachments(attachments)
     setTasks(prev => prev.filter(t => !ids.has(t.id)))
     setSelected({})
@@ -473,20 +533,32 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                   {selected[t.id] ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>}
                 </button>
                 <div className="min-w-0">
-                  <p className="font-medium text-gray-800 truncate">{t.document_uploads?.file_name}</p>
+                  <p className="font-medium text-gray-800 truncate flex items-center gap-1.5">
+                    {t.document_uploads?.file_name}
+                    <ReasonBadge reason={t.document_uploads?.reason} note={t.document_uploads?.reason_note}/>
+                  </p>
                   <p className="text-gray-400">Picked {new Date(t.picked_at).toLocaleString('en-GB')}</p>
                 </div>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 {t.document_uploads?.drive_url && (
                   <>
-                    <a href={t.document_uploads.drive_url} target="_blank" rel="noreferrer"
-                      onClick={() => { logAction(t.document_uploads.id, 'download'); setTasks(prev => prev.filter(x => x.id !== t.id)) }}
-                      className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                    <button onClick={() => {
+                      if (!confirmReasonDelete(t.document_uploads.reason)) return
+                      logAction(t.document_uploads.id, 'download')
+                      if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
+                      window.open(t.document_uploads.drive_url, '_blank')
+                      setTasks(prev => prev.filter(x => x.id !== t.id))
+                    }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                       <Download size={12}/>
-                    </a>
-                    <button onClick={() => { logAction(t.document_uploads.id, 'mail'); setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }]); setTasks(prev => prev.filter(x => x.id !== t.id)) }}
-                      className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                    </button>
+                    <button onClick={() => {
+                      if (!confirmReasonDelete(t.document_uploads.reason)) return
+                      logAction(t.document_uploads.id, 'mail')
+                      if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
+                      setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }])
+                      setTasks(prev => prev.filter(x => x.id !== t.id))
+                    }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                       <Mail size={12}/>
                     </button>
                   </>
@@ -520,6 +592,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
 interface HistoryEvent { action: string; user_name: string; action_timestamp: string }
 interface DocHistoryRow {
   document_id: string; file_name: string; doc_type: string; uploaded_by_name: string; uploaded_at: string
+  reason?: string | null; reason_note?: string | null
   notify: HistoryEvent | null; pick: HistoryEvent | null; return: HistoryEvent | null
   mail: HistoryEvent | null; download: HistoryEvent | null; look: HistoryEvent | null
   history: HistoryEvent[]
@@ -544,6 +617,7 @@ function PickHistoryPanel() {
   const [user, setUser] = useState('')
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
+  const [reason, setReason] = useState('')
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [clearing, setClearing] = useState(false)
   const [viewing, setViewing] = useState<DocHistoryRow | null>(null)
@@ -554,6 +628,7 @@ function PickHistoryPanel() {
       const params = new URLSearchParams()
       if (fileName) params.set('fileName', fileName)
       if (user) params.set('user', user)
+      if (reason) params.set('reason', reason)
       params.set('page', String(targetPage))
       const res = await fetch(`/api/pick-history?${params.toString()}`, { headers: await authHeader() })
       const d = await res.json()
@@ -615,6 +690,13 @@ function PickHistoryPanel() {
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input value={fileName} onChange={e => setFileName(e.target.value)} placeholder="File name..." className="input max-w-[160px]"/>
         <input value={user} onChange={e => setUser(e.target.value)} placeholder="User..." className="input max-w-[140px]"/>
+        <select value={reason} onChange={e => setReason(e.target.value)} className="input max-w-[150px]">
+          <option value="">All reasons</option>
+          <option value="CUSDEC Passed">CUSDEC Passed</option>
+          <option value="Container Moved">Container Moved</option>
+          <option value="Boat Note Passed">Boat Note Passed</option>
+          <option value="Other">Other</option>
+        </select>
         <button onClick={() => { setPage(1); load(false, 1) }} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
           <Search size={12}/> Search
         </button>
@@ -648,7 +730,10 @@ function PickHistoryPanel() {
                       </button>
                     </td>
                   )}
-                  <td className="px-2 py-1.5 text-gray-800 max-w-[160px] truncate">{row.file_name || '—'}</td>
+                  <td className="px-2 py-1.5 text-gray-800 max-w-[160px]">
+                    <span className="truncate block">{row.file_name || '—'}</span>
+                    <ReasonBadge reason={row.reason} note={row.reason_note}/>
+                  </td>
                   <td className="px-2 py-1.5"><EventCell e={{ action: 'upload', user_name: row.uploaded_by_name, action_timestamp: row.uploaded_at }}/></td>
                   <td className="px-2 py-1.5"><EventCell e={row.notify}/></td>
                   <td className="px-2 py-1.5">

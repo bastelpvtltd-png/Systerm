@@ -18,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'GET') {
       const { data, error } = await supabaseAdmin
         .from('dashboard_notifications')
-        .select('*, document_uploads(id, file_name, drive_url, doc_type)')
+        .select('*, document_uploads(id, file_name, drive_url, doc_type, reason, reason_note)')
         .eq('is_active', true)
         .order('created_at', { ascending: false })
       if (error) throw error

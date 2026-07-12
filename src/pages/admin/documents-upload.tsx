@@ -31,7 +31,7 @@ type PdfField = {
   specNote?: string
   locked?: boolean
 }
-type Panel = 'upload' | 'preview' | 'admin-edit'
+type Panel = 'upload' | 'preview' | 'admin-edit' | 'quick'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error' | 'skipped'
 
 interface PctBox { x: number; y: number; w: number; h: number; page?: number }
@@ -101,6 +101,86 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+const REASON_OPTIONS = ['CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Other']
+
+// A separate, deliberately lightweight upload path: pick a PDF, tag it with
+// a reason, done. No detection/extraction/box-mapping — the file goes
+// straight to Drive and Notify, same as a normal Save/Notify, but tagged so
+// it shows in Activity Log / My Picked Tasks / Processed History with that
+// reason attached. "CUSDEC Passed" specifically feeds the Dashboard's
+// Pending CUSDEC Passed count; the other reasons don't affect any counter.
+// Whoever picks one and does Mail/Download deletes it (see
+// delete-reason-document.ts + My Picked Tasks) - that delete is what takes
+// it back out of the pending count.
+function QuickReasonUpload({ getUploader }: { getUploader: () => Promise<{ id: string; name: string }> }) {
+  const [file, setFile] = useState<File | null>(null)
+  const [reason, setReason] = useState(REASON_OPTIONS[0])
+  const [reasonNote, setReasonNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('')
+
+  async function send() {
+    if (!file) { setStatus('✗ Choose a file first'); return }
+    if (reason === 'Other' && !reasonNote.trim()) { setStatus('✗ Type a reason for "Other"'); return }
+    setBusy(true); setStatus('')
+    try {
+      const uploader = await getUploader()
+      const base64 = await fileToBase64(file)
+      const dr = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ base64, fileName: file.name, mimeType: file.type, docType: 'cusdec' }),
+      })
+      const dd = await dr.json()
+      if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
+
+      const res = await fetch('/api/document-uploads', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({
+          file_name: file.name, drive_url: dd.driveLink, doc_type: 'cusdec', notify: true,
+          uploaded_by_name: uploader.name, reason, reason_note: reason === 'Other' ? reasonNote.trim() : undefined,
+        }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setStatus(`✓ Uploaded and notified — reason: ${reason}${reason === 'Other' ? ` (${reasonNote.trim()})` : ''}`)
+      setFile(null); setReasonNote('')
+    } catch (e: any) {
+      setStatus(`✗ ${e.message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card max-w-lg">
+      <h2 className="font-semibold text-gray-900 text-sm mb-2">Quick Upload — tag a reason, no extraction</h2>
+      <p className="text-xs text-gray-500 mb-4">Uploads straight to Drive and notifies everyone (Activity Log) with the reason attached — nothing gets extracted into a database table. Whoever picks it up and does Mail or Download removes it.</p>
+      {status && <p className={`text-xs mb-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">File</label>
+          <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm"/>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Reason</label>
+          <select value={reason} onChange={e => setReason(e.target.value)} className="input">
+            {REASON_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+        {reason === 'Other' && (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Type the reason</label>
+            <input value={reasonNote} onChange={e => setReasonNote(e.target.value)} className="input" placeholder="Reason..."/>
+          </div>
+        )}
+        <button onClick={send} disabled={busy} className="btn-primary flex items-center gap-2">
+          {busy ? <Loader size={14} className="animate-spin"/> : <Upload size={14}/>}Upload & Notify
+        </button>
+      </div>
+    </div>
+  )
 }
 
 // getLayout (see _app.tsx) keeps AdminLayout mounted across navigations
@@ -911,8 +991,8 @@ function DocumentsUploadContent() {
     setSelectedId(null)
   }
 
-  const panelOptions: Panel[] = (['upload', 'preview', 'admin-edit'] as Panel[]).filter(p =>
-    p === 'upload' ? (canUpload || canSeeUploaded) : p === 'preview' ? canPreview : canAdminEdit
+  const panelOptions: Panel[] = (['upload', 'quick', 'preview', 'admin-edit'] as Panel[]).filter(p =>
+    p === 'upload' ? (canUpload || canSeeUploaded) : p === 'quick' ? canUpload : p === 'preview' ? canPreview : canAdminEdit
   )
 
   return (
@@ -929,7 +1009,7 @@ function DocumentsUploadContent() {
                 <button key={p} onClick={() => setPanel(p)}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors capitalize ${
                     panel === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                  }`}>{p === 'admin-edit' ? 'Admin Edit' : p}</button>
+                  }`}>{p === 'admin-edit' ? 'Admin Edit' : p === 'quick' ? 'Quick Upload' : p}</button>
               ))}
             </div>
           )}
@@ -1074,6 +1154,9 @@ function DocumentsUploadContent() {
           )}
         </div>
         )}
+
+        {/* === QUICK UPLOAD panel: reason-tagged, Drive-only, no extraction === */}
+        {panel === 'quick' && canUpload && <QuickReasonUpload getUploader={getUploader}/>}
 
         {/* === PREVIEW panel: saved documents from anyone, read-only === */}
         {panel === 'preview' && canPreview && (

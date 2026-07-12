@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const authed = await requireAuth(req)
       if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
 
-      const { user, fileName } = req.query
+      const { user, fileName, reason } = req.query
       const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1)
       const from = (page - 1) * PAGE_SIZE
       const to = from + PAGE_SIZE - 1
@@ -38,11 +38,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let query = supabaseAdmin
         .from('document_uploads')
-        .select('id, file_name, doc_type, uploaded_by_name, created_at', { count: 'exact' })
+        .select('id, file_name, doc_type, uploaded_by_name, created_at, reason, reason_note', { count: 'exact' })
         .order('created_at', { ascending: false })
         .range(from, to)
 
       if (fileName) query = query.ilike('file_name', `%${fileName}%`)
+      if (reason) query = query.eq('reason', reason as string)
       if (user && matchingIds) {
         if (matchingIds.length) query = query.or(`uploaded_by_name.ilike.%${user}%,id.in.(${matchingIds.join(',')})`)
         else query = query.ilike('uploaded_by_name', `%${user}%`)
@@ -76,6 +77,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           doc_type: d.doc_type,
           uploaded_by_name: d.uploaded_by_name,
           uploaded_at: d.created_at,
+          reason: d.reason,
+          reason_note: d.reason_note,
           notify: latest(history, 'notify'),
           pick: latest(history, 'pick'),
           return: latest(history, 'return'),
