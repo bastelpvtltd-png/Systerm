@@ -8,11 +8,15 @@ import {
 } from 'lucide-react'
 
 interface PendingGroup<T> { count: number; items: T[] }
+// Vessel Trigger detail attached to a CDN Pending/Boat Note Pending
+// container — only present when that vessel+voyage was actually found in
+// the Vessel Trigger schedule (see dashboard-summary.ts's triggerByKey).
+interface VesselContainer { containerNo: string; vessel: string; voyage: string; trigger: { openingTime: string; closingTime: string; etb: string } | null }
 interface Summary {
   pendingCusdecPassed: PendingGroup<{ id: string; file_name: string; reason: string; reason_note: string | null; created_at: string }>
   shipmentsPending: PendingGroup<{ id: string; reference: string; shipper: string; invoice_number: string; packing_number: string; created_at: string }>
-  cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number }>
-  boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number }>
+  cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number; containers: VesselContainer[] }>
+  boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number; containers: VesselContainer[] }>
   releasePending: PendingGroup<{ cusdecId: string; number: string; exporter: string }>
   closingPassed: PendingGroup<{ cdnId: string; containerNo: string; cusdecNumber: string; vessel: string; voyage: string; closingTime: string }>
 }
@@ -29,6 +33,25 @@ function ReasonBadge({ reason, note }: { reason?: string | null; note?: string |
     <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-medium ${isCusdec ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
       {reason === 'Other' && note ? note : reason}
     </span>
+  )
+}
+
+// Shown under a CDN/Boat Note Pending row — one line per container, but
+// only the ones whose vessel+voyage was actually matched in the Vessel
+// Trigger schedule get their opening/closing/ETB shown. Containers with no
+// match (or no vessel/voyage yet) are skipped entirely rather than shown
+// with blank fields.
+function VesselContainerList({ containers }: { containers: VesselContainer[] }) {
+  const matched = containers.filter(c => c.trigger)
+  if (!matched.length) return null
+  return (
+    <div className="mt-2 pt-2 border-t border-gray-50 space-y-1">
+      {matched.map(c => (
+        <p key={c.containerNo} className="text-gray-500">
+          <span className="font-medium text-gray-700">{c.containerNo || '—'}</span> · {c.vessel}/{c.voyage} · Opening: {c.trigger!.openingTime || '—'} · Closing: {c.trigger!.closingTime || '—'} · ETB: {c.trigger!.etb || '—'}
+        </p>
+      ))}
+    </div>
   )
 }
 
@@ -152,13 +175,16 @@ function DashboardContent() {
             ) : (
               <div className="space-y-1.5 max-h-96 overflow-y-auto">
                 {summary.cdnPending.items.map(c => (
-                  <div key={c.cusdecId} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
-                    <div>
-                      <p className="font-medium text-gray-800">E {c.number}</p>
-                      <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
+                  <div key={c.cusdecId} className="text-xs border border-gray-100 rounded-lg p-2.5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-gray-800">E {c.number}</p>
+                        <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
+                      </div>
+                      <span className="font-medium text-purple-700">{c.cdnCount}/{c.cap} CDN</span>
+                      <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                     </div>
-                    <span className="font-medium text-purple-700">{c.cdnCount}/{c.cap} CDN</span>
-                    <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                    <VesselContainerList containers={c.containers}/>
                   </div>
                 ))}
               </div>
@@ -174,13 +200,16 @@ function DashboardContent() {
             ) : (
               <div className="space-y-1.5 max-h-96 overflow-y-auto">
                 {summary.boatNotePending.items.map(c => (
-                  <div key={c.cusdecId} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
-                    <div>
-                      <p className="font-medium text-gray-800">E {c.number}</p>
-                      <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
+                  <div key={c.cusdecId} className="text-xs border border-gray-100 rounded-lg p-2.5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-gray-800">E {c.number}</p>
+                        <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
+                      </div>
+                      <span className="font-medium text-blue-700">{c.passedCount}/{c.cdnCount} passed</span>
+                      <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                     </div>
-                    <span className="font-medium text-blue-700">{c.passedCount}/{c.cdnCount} passed</span>
-                    <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                    <VesselContainerList containers={c.containers}/>
                   </div>
                 ))}
               </div>
@@ -463,15 +492,21 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   // that delete is what takes it out of the Dashboard's Pending CUSDEC
   // Passed count. Declining the confirm blocks the mail/download entirely.
   // One confirm for the whole batch, not one popup per reason-tagged item —
-  // if none of the given tasks have a reason, no prompt at all.
+  // if none of the given tasks have a reason, no prompt at all. A reasoned
+  // upload that was ALSO Saved (is_saved_to_db) isn't temporary anymore — it
+  // has a real structured-table row + Drive file like any normal document,
+  // so it's treated exactly like one here (no delete-on-pick, no confirm).
+  function isEphemeralReason(doc: any): boolean {
+    return !!doc?.reason && !doc?.is_saved_to_db
+  }
   function confirmReasonDeleteBatch(tasksToCheck: any[]): boolean {
-    const reasoned = tasksToCheck.filter(t => t.document_uploads?.reason)
+    const reasoned = tasksToCheck.filter(t => isEphemeralReason(t.document_uploads))
     if (!reasoned.length) return true
     return confirm(`${reasoned.length} of the selected document${reasoned.length === 1 ? '' : 's'} will be permanently removed after this. Continue with Mail/Download?`)
   }
-  function confirmReasonDelete(reason?: string | null): boolean {
-    if (!reason) return true
-    return confirm(`This document (reason: ${reason}) will be permanently removed after this. Continue with Mail/Download?`)
+  function confirmReasonDelete(doc?: { reason?: string | null; is_saved_to_db?: boolean } | null): boolean {
+    if (!isEphemeralReason(doc)) return true
+    return confirm(`This document (reason: ${doc?.reason}) will be permanently removed after this. Continue with Mail/Download?`)
   }
   function deleteReasonDoc(documentId: string) {
     authHeader().then(h => fetch('/api/delete-reason-document', {
@@ -489,7 +524,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     for (const t of selectedTasks) {
       if (!t.document_uploads?.drive_url) continue
       logAction(t.document_uploads.id, 'download')
-      if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
+      if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
       window.open(t.document_uploads.drive_url, '_blank')
     }
     setTasks(prev => prev.filter(t => !ids.has(t.id)))
@@ -503,7 +538,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
       .filter(t => t.document_uploads?.drive_url)
       .map(t => {
         logAction(t.document_uploads.id, 'mail')
-        if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
+        if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
         return { filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }
       })
     if (attachments.length) setEmailAttachments(attachments)
@@ -576,18 +611,18 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                 {t.document_uploads?.drive_url && (
                   <>
                     <button onClick={() => {
-                      if (!confirmReasonDelete(t.document_uploads.reason)) return
+                      if (!confirmReasonDelete(t.document_uploads)) return
                       logAction(t.document_uploads.id, 'download')
-                      if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
+                      if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
                       window.open(t.document_uploads.drive_url, '_blank')
                       setTasks(prev => prev.filter(x => x.id !== t.id))
                     }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                       <Download size={12}/>
                     </button>
                     <button onClick={() => {
-                      if (!confirmReasonDelete(t.document_uploads.reason)) return
+                      if (!confirmReasonDelete(t.document_uploads)) return
                       logAction(t.document_uploads.id, 'mail')
-                      if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
+                      if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
                       setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }])
                       setTasks(prev => prev.filter(x => x.id !== t.id))
                     }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">

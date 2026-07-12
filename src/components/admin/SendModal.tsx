@@ -27,12 +27,15 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
   const [mail, setMail] = useState(false)
   const [notify, setNotify] = useState(false)
   const [busy, setBusy] = useState(false)
-  // An additional tag on top of Save/Mail/Notify — "CUSDEC Passed"
-  // specifically means this send is temporary (Drive + Notify only, no
-  // structured-table save, even if Save is ticked) and gets deleted the
-  // moment whoever picks it does Mail/Download (see delete-reason-document.ts
-  // + My Picked Tasks). Every other reason is just a label on an otherwise
-  // completely normal send.
+  // An additional tag on top of Save/Mail/Notify — "CUSDEC Passed" forces
+  // Notify on (everyone should see it). Save stays a real, independent
+  // choice: if left unticked this send is temporary (Drive + Notify only,
+  // no structured-table save) and gets deleted the moment whoever picks it
+  // does Mail/Download (see delete-reason-document.ts + My Picked Tasks) —
+  // but if Save is ticked, it goes through the normal Save pipeline (Drive +
+  // the structured table, with the usual duplicate-match/replace flow) and
+  // is no longer temporary. Every other reason is just a label on an
+  // otherwise completely normal send.
   const [reason, setReason] = useState('')
   const [reasonNote, setReasonNote] = useState('')
   const isTemporaryReason = reason === 'CUSDEC Passed'
@@ -40,7 +43,8 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
   // Notify requires Save (you can't let people Pick something that was never
   // actually persisted) — Mail has no such requirement. Ticking Notify forces
   // Save on and locks it; unticking Notify frees Save again. Doesn't apply
-  // when reason is CUSDEC Passed — that path is Drive+Notify-only by design.
+  // when reason is CUSDEC Passed — Notify there is already forced on by the
+  // reason itself, independent of whatever Save is set to.
   function setNotifyChecked(checked: boolean) {
     setNotify(checked)
     if (checked && !isTemporaryReason) setSave(true)
@@ -53,7 +57,7 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
     setBusy(true); setError('')
     try {
       let files: SendResultFile[] = []
-      const effectiveSave = save && !isTemporaryReason
+      const effectiveSave = save
       const effectiveNotify = notify || isTemporaryReason
       if (effectiveSave) {
         const r = await onSave()
@@ -106,8 +110,8 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
         </div>
         <div className="p-5 space-y-3">
           <p className="text-xs text-gray-500 truncate">{label}</p>
-          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${(notify && !isTemporaryReason) || isTemporaryReason ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
-            <input type="checkbox" checked={save && !isTemporaryReason} disabled={notify || isTemporaryReason} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
+          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
+            <input type="checkbox" checked={save} disabled={notify && !isTemporaryReason} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
             <Save size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Save (to Drive + Database)</span>
           </label>
@@ -122,6 +126,7 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
             <span className="text-sm text-gray-800">Notify (everyone's Dashboard)</span>
           </label>
           {notify && !isTemporaryReason && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
+          {isTemporaryReason && <p className="text-[11px] text-gray-400 -mt-1">Notify is always on for "CUSDEC Passed".</p>}
 
           <div className="pt-1">
             <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>
@@ -132,7 +137,11 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
               <input value={reasonNote} onChange={e => setReasonNote(e.target.value)} placeholder="Type the reason..." className="input text-sm mt-1.5"/>
             )}
             {isTemporaryReason && (
-              <p className="text-[11px] text-amber-600 mt-1.5">"CUSDEC Passed" sends this to Drive + Notify only (no database save, even if Save is ticked) — it gets deleted the moment whoever picks it does Mail/Download.</p>
+              save ? (
+                <p className="text-[11px] text-gray-500 mt-1.5">Save is ticked — this will be saved to Drive + the database like a normal document, and won't be deleted after Mail/Download.</p>
+              ) : (
+                <p className="text-[11px] text-amber-600 mt-1.5">"CUSDEC Passed" sends this to Drive + Notify only (tick Save above to also save it to the database) — if Save stays off, it gets deleted the moment whoever picks it does Mail/Download.</p>
+              )
             )}
           </div>
 

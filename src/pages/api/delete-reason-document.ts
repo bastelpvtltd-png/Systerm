@@ -27,9 +27,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { document_id } = req.body as { document_id?: string }
     if (!document_id) return res.status(400).json({ error: 'document_id required' })
 
-    const { data: doc } = await supabaseAdmin.from('document_uploads').select('drive_url, reason').eq('id', document_id).maybeSingle()
+    const { data: doc } = await supabaseAdmin.from('document_uploads').select('drive_url, reason, is_saved_to_db').eq('id', document_id).maybeSingle()
     if (!doc) return res.status(404).json({ error: 'Document not found' })
     if (!doc.reason) return res.status(400).json({ error: 'This document was not part of a reason-tagged Quick Upload' })
+    // Once Save was ticked, this has a real structured-table row + Drive file
+    // like any other saved document — it must not be cascade-deleted just
+    // because it also happens to carry a reason tag.
+    if (doc.is_saved_to_db) return res.status(400).json({ error: 'This document was saved to the database — it is not temporary and cannot be removed this way' })
 
     if (doc.drive_url) await deleteDriveFileByUrl(doc.drive_url).catch((e: any) => console.error('[delete-reason-document] Drive delete failed:', e.message))
 

@@ -36,31 +36,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // (which deletes it — see delete-reason-document.ts), so the count is
       // just "how many of these rows currently exist", not a status field.
       supabaseAdmin.from('document_uploads').select('id, file_name, reason, reason_note, created_at').eq('reason', 'CUSDEC Passed').order('created_at', { ascending: false }),
-      supabaseAdmin.from('vessel_triggers').select('vessel, voyage, closing_time'),
+      supabaseAdmin.from('vessel_triggers').select('vessel, voyage, opening_time, closing_time, etb'),
     ])
 
     const cdnPending: any[] = []
     const boatNotePending: any[] = []
     const releasePending: any[] = []
 
-    // Closing Time Passed — only checked for containers that aren't already
-    // "not green" (Boat Note passed) or "not blue" (Export Release passed);
-    // once either is true the closing deadline no longer matters. Matched
-    // by vessel AND voyage together (not voyage alone) since the same
-    // voyage number can show up against more than one vessel in the
-    // schedule, each with its own closing time.
-    const closingKey = (vessel: string, voyage: string) => `${(vessel || '').trim().toUpperCase()}|||${(voyage || '').trim().toUpperCase()}`
-    const closingByKey = new Map((vesselTriggers || []).map(v => [closingKey(v.vessel, v.voyage), v.closing_time]))
+    // Closing Time Passed / vessel-trigger lookup — matched by voyage exactly
+    // (trimmed/uppercased) plus a *fuzzy* vessel-name match (same leading
+    // characters), not a full exact vessel-name match. CDN uploads and the
+    // scraped Vessel Trigger schedule don't always spell the vessel name
+    // identically (extra suffix, punctuation, etc.), and requiring an exact
+    // match meant this silently matched nothing. Voyage is still the primary
+    // key (same voyage number can appear against more than one vessel in the
+    // schedule) — vessel is only there to disambiguate between candidates
+    // sharing that voyage.
+    const normVoyage = (v: string) => (v || '').trim().toUpperCase()
+    const normVessel = (v: string) => (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+    function vesselFuzzyMatch(a: string, b: string): boolean {
+      const na = normVessel(a), nb = normVessel(b)
+      if (!na || !nb) return false
+      const len = Math.min(5, na.length, nb.length)
+      return na.slice(0, len) === nb.slice(0, len)
+    }
+    const triggersByVoyage = new Map<string, typeof vesselTriggers>()
+    for (const t of vesselTriggers || []) {
+      const key = normVoyage(t.voyage)
+      if (!triggersByVoyage.has(key)) triggersByVoyage.set(key, [])
+      triggersByVoyage.get(key)!.push(t)
+    }
+    function findTrigger(vessel: string, voyage: string) {
+      if (!vessel || !voyage) return null
+      const candidates = triggersByVoyage.get(normVoyage(voyage)) || []
+      return candidates.find(t => vesselFuzzyMatch(vessel, t.vessel)) || null
+    }
+
     const now = new Date()
     const closingPassed: any[] = []
     for (const d of cdns || []) {
       if (d.boat_note_passed || d.export_release_passed) continue
-      if (!d.vessel || !d.voyage) continue
-      const closingTime = closingByKey.get(closingKey(d.vessel, d.voyage))
-      if (!closingTime) continue
-      const closingDate = new Date(String(closingTime).replace(' ', 'T'))
+      const match = findTrigger(d.vessel, d.voyage)
+      if (!match?.closing_time) continue
+      const closingDate = new Date(String(match.closing_time).replace(' ', 'T'))
       if (Number.isNaN(closingDate.getTime()) || now <= closingDate) continue
-      closingPassed.push({ cdnId: d.id, containerNo: d.container_no, cusdecNumber: d.cusdec_number, vessel: d.vessel, voyage: d.voyage, closingTime })
+      closingPassed.push({ cdnId: d.id, containerNo: d.container_no, cusdecNumber: d.cusdec_number, vessel: d.vessel, voyage: d.voyage, closingTime: match.closing_time })
     }
 
     for (const c of cusdecs || []) {
@@ -70,10 +90,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const capComplete = !capKnown || own.length >= cap
       const allBoatNotePassed = own.length > 0 && own.every(d => d.boat_note_passed)
 
+      const containers = own
+        .filter(d => d.vessel && d.voyage)
+        .map(d => {
+          const trigger = findTrigger(d.vessel, d.voyage)
+          return {
+            containerNo: d.container_no, vessel: d.vessel, voyage: d.voyage,
+            trigger: trigger ? { openingTime: trigger.opening_time, closingTime: trigger.closing_time, etb: trigger.etb } : null,
+          }
+        })
+
       if (capKnown && own.length < cap) {
-        cdnPending.push({ cusdecId: c.id, number: c.number, exporter: c.exporter, cap, cdnCount: own.length })
+        cdnPending.push({ cusdecId: c.id, number: c.number, exporter: c.exporter, cap, cdnCount: own.length, containers })
       } else if (capComplete && !allBoatNotePassed) {
-        boatNotePending.push({ cusdecId: c.id, number: c.number, exporter: c.exporter, cap: cap || null, cdnCount: own.length, passedCount: own.filter(d => d.boat_note_passed).length })
+        boatNotePending.push({ cusdecId: c.id, number: c.number, exporter: c.exporter, cap: cap || null, cdnCount: own.length, passedCount: own.filter(d => d.boat_note_passed).length, containers })
       }
 
       if (allBoatNotePassed && !c.export_release_passed) {

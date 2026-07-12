@@ -18,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'GET') {
       const { data, error } = await supabaseAdmin
         .from('user_tasks')
-        .select('*, document_uploads(id, file_name, drive_url, doc_type, reason, reason_note)')
+        .select('*, document_uploads(id, file_name, drive_url, doc_type, reason, reason_note, is_saved_to_db)')
         .eq('user_id', authed.userId).eq('status', 'active')
         .order('picked_at', { ascending: false })
       if (error) throw error
