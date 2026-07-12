@@ -683,7 +683,7 @@ function PickHistoryPanel() {
         {canDelete && selectedIds.length > 0 && (
           <button onClick={clearSelected} disabled={clearing}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
-            {clearing ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>} Clear ({selectedIds.length})
+            {clearing ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>} Delete Selected ({selectedIds.length})
           </button>
         )}
       </div>
