@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { google } from 'googleapis'
+import { getDriveClient } from '@/lib/driveFolders'
 import { requireSection } from '@/lib/serverAuth'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -10,15 +10,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { fileId } = req.body
     if (!fileId) return res.status(400).json({ error: 'fileId required' })
 
-    const clientId = process.env.GOOGLE_CLIENT_ID || ''
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
-    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || ''
-    if (!clientId || !clientSecret || !refreshToken) throw new Error('Google OAuth credentials not configured')
-
-    const auth = new google.auth.OAuth2(clientId, clientSecret)
-    auth.setCredentials({ refresh_token: refreshToken })
-    const drive = google.drive({ version: 'v3', auth })
-
+    const drive = getDriveClient()
     await drive.files.delete({ fileId })
     res.json({ ok: true })
   } catch (err: any) {

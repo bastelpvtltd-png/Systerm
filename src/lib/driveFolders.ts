@@ -1,13 +1,33 @@
 import { google, drive_v3 } from 'googleapis'
 
-// Same OAuth2 setup used across upload/delete/list Drive endpoints, centralized
-// so server-side callers (like the duplicate-row cleanup in docTables.ts)
-// don't each re-implement the credential wiring.
+// Same credential setup used across upload/delete/list Drive endpoints,
+// centralized so server-side callers (like the duplicate-row cleanup in
+// docTables.ts) don't each re-implement the wiring.
+//
+// Prefers a service account (GOOGLE_SERVICE_ACCOUNT_JSON) when one is
+// configured — its key doesn't expire the way a user OAuth refresh token
+// does (Google's OAuth consent screens in "Testing" mode revoke refresh
+// tokens after ~7 days of inactivity, which was the actual cause behind
+// "Upload Failed" errors: invalid_grant/"Token has been expired or
+// revoked"). Falls back to the OAuth2 refresh-token flow
+// (scripts/get-drive-token.js) if no service account key is set.
+// Note: a service account has no personal Drive storage quota of its own —
+// the target folder must be a Shared Drive, or shared with the service
+// account's email as an Editor on someone else's Drive, or uploads will
+// fail with a distinct "storage quota" error (see describeDriveError in
+// upload-to-drive.ts).
 export function getDriveClient(): drive_v3.Drive {
+  const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || ''
+  if (serviceAccountJson) {
+    const credentials = JSON.parse(serviceAccountJson)
+    const auth = new google.auth.GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/drive'] })
+    return google.drive({ version: 'v3', auth })
+  }
+
   const clientId = process.env.GOOGLE_CLIENT_ID || ''
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || ''
-  if (!clientId || !clientSecret || !refreshToken) throw new Error('Google OAuth credentials not configured')
+  if (!clientId || !clientSecret || !refreshToken) throw new Error('Google Drive credentials not configured (neither GOOGLE_SERVICE_ACCOUNT_JSON nor GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN are set)')
   const auth = new google.auth.OAuth2(clientId, clientSecret)
   auth.setCredentials({ refresh_token: refreshToken })
   return google.drive({ version: 'v3', auth })

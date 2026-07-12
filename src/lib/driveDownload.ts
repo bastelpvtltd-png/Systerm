@@ -1,4 +1,4 @@
-import { google } from 'googleapis'
+import { getDriveClient } from '@/lib/driveFolders'
 
 // Downloads a Drive-hosted file's raw bytes given its share URL — same OAuth
 // pattern already used by render-drive-page.ts, pulled out since the
@@ -8,15 +8,7 @@ export async function downloadDriveFile(driveUrl: string): Promise<Buffer> {
   if (!match) throw new Error('Could not parse a Drive file id from driveUrl')
   const fileId = match[1]
 
-  const clientId = process.env.GOOGLE_CLIENT_ID || ''
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || ''
-  if (!clientId || !clientSecret || !refreshToken) throw new Error('Google OAuth credentials not configured')
-
-  const auth = new google.auth.OAuth2(clientId, clientSecret)
-  auth.setCredentials({ refresh_token: refreshToken })
-  const drive = google.drive({ version: 'v3', auth })
-
+  const drive = getDriveClient()
   const file = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'arraybuffer' })
   return Buffer.from(file.data as ArrayBuffer)
 }

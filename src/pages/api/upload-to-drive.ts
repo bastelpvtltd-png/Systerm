@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { google } from 'googleapis'
 import { Readable } from 'stream'
-import { resolveUploadFolderId } from '@/lib/driveFolders'
+import { resolveUploadFolderId, getDriveClient } from '@/lib/driveFolders'
 import { requireAuth } from '@/lib/serverAuth'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
@@ -20,19 +19,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // the safer default.
     const finalMimeType = mimeType || inferMimeType(fileName)
 
-    const clientId     = process.env.GOOGLE_CLIENT_ID || ''
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
-    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || ''
-    const folderId     = process.env.GOOGLE_DRIVE_FOLDER_ID || ''
-
-    if (!clientId || !clientSecret || !refreshToken) {
-      return res.status(500).json({ error: 'Google OAuth credentials not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN env vars.' })
-    }
-
-    const auth = new google.auth.OAuth2(clientId, clientSecret)
-    auth.setCredentials({ refresh_token: refreshToken })
-
-    const drive = google.drive({ version: 'v3', auth })
+    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || ''
+    const drive = getDriveClient()
     const buffer = Buffer.from(base64, 'base64')
 
     const targetFolderId = folderId
@@ -91,8 +79,11 @@ export function describeDriveError(err: any): string {
   if (code === 'invalid_client' || /invalid_client/i.test(desc)) {
     return 'Google Drive client credentials are wrong (invalid_client) — check GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET match the OAuth client scripts/get-drive-token.js was run with.'
   }
+  if (/storage quota/i.test(desc)) {
+    return 'Google Drive rejected this upload: the service account has no storage quota of its own. Share the target Drive folder with the service account email as an Editor, or move it into a Shared Drive.'
+  }
   if (err?.response?.status === 403 || /insufficient|permission/i.test(desc)) {
-    return 'Google Drive rejected this upload for a permissions reason (403) — the OAuth token may be missing the drive.file scope, or the target folder is no longer shared with it.'
+    return 'Google Drive rejected this upload for a permissions reason (403) — the account may be missing the drive scope, or the target folder is no longer shared with it.'
   }
   return desc || 'Drive upload failed for an unknown reason — check server logs for the raw googleapis error.'
 }
