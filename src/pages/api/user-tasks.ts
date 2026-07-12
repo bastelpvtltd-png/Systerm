@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { requireAuth } from '@/lib/serverAuth'
+import { requireAuth, requireAdmin } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -49,6 +49,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
 
       return res.json({ ok: true })
+    }
+
+    if (req.method === 'DELETE') {
+      // Admin-only, and deletes only the pick/task record itself — the
+      // document, its Drive file, and any extracted data are never touched,
+      // same guarantee as Pick History's delete/Clear.
+      const admin = await requireAdmin(req)
+      if (!admin.ok) return res.status(admin.status).json({ error: admin.error })
+      const idsParam = String(req.query.ids || req.query.id || '')
+      const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean)
+      if (!ids.length) return res.status(400).json({ error: 'id or ids required' })
+      const { error } = await supabaseAdmin.from('user_tasks').delete().in('id', ids)
+      if (error) throw error
+      return res.json({ ok: true, deleted: ids.length })
     }
 
     res.status(405).end()

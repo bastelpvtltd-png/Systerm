@@ -333,10 +333,12 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
 // picked; Resolve/Return hands it back to Incoming for everyone else. Ticks
 // let several be downloaded/mailed/returned together in one action.
 function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
+  const { isAdmin } = usePermission()
   const [tasks, setTasks] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
 
@@ -393,19 +395,41 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     })).catch(() => {})
   }
 
+  // Mail or Download — whichever happens first — auto-resolves the task
+  // server-side (log-document-action.ts), so it's removed from view here
+  // right away instead of waiting for the next full reload.
   function downloadSelected() {
+    const ids = new Set(selectedTasks.map(t => t.id))
     for (const t of selectedTasks) {
       if (!t.document_uploads?.drive_url) continue
       logAction(t.document_uploads.id, 'download')
       window.open(t.document_uploads.drive_url, '_blank')
     }
+    setTasks(prev => prev.filter(t => !ids.has(t.id)))
+    setSelected({})
   }
 
   function mailSelected() {
+    const ids = new Set(selectedTasks.map(t => t.id))
     const attachments = selectedTasks
       .filter(t => t.document_uploads?.drive_url)
       .map(t => { logAction(t.document_uploads.id, 'mail'); return { filename: t.document_uploads.file_name, url: t.document_uploads.drive_url } })
     if (attachments.length) setEmailAttachments(attachments)
+    setTasks(prev => prev.filter(t => !ids.has(t.id)))
+    setSelected({})
+  }
+
+  async function deleteTasks(ids: string[]) {
+    if (!ids.length) return
+    if (!confirm(`Delete ${ids.length} picked task record${ids.length === 1 ? '' : 's'}? This only removes the pick record — the document itself is not affected.`)) return
+    setDeleting(true)
+    try {
+      await fetch(`/api/user-tasks?ids=${ids.join(',')}`, { method: 'DELETE', headers: await authHeader() })
+      setTasks(prev => prev.filter(t => !ids.includes(t.id)))
+      setSelected({})
+    } finally {
+      setDeleting(false)
+    }
   }
 
   return (
@@ -424,6 +448,12 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
               {bulkBusy ? <Loader size={12} className="animate-spin"/> : <Undo2 size={12}/>} Resolve Selected
             </button>
+            {isAdmin && (
+              <button onClick={() => deleteTasks(selectedTasks.map(t => t.id))} disabled={deleting}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#7f1d1d' }}>
+                {deleting ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>} Delete Selected
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -450,11 +480,12 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 {t.document_uploads?.drive_url && (
                   <>
-                    <a href={t.document_uploads.drive_url} target="_blank" rel="noreferrer" onClick={() => logAction(t.document_uploads.id, 'download')}
+                    <a href={t.document_uploads.drive_url} target="_blank" rel="noreferrer"
+                      onClick={() => { logAction(t.document_uploads.id, 'download'); setTasks(prev => prev.filter(x => x.id !== t.id)) }}
                       className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                       <Download size={12}/>
                     </a>
-                    <button onClick={() => { logAction(t.document_uploads.id, 'mail'); setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }]) }}
+                    <button onClick={() => { logAction(t.document_uploads.id, 'mail'); setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }]); setTasks(prev => prev.filter(x => x.id !== t.id)) }}
                       className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                       <Mail size={12}/>
                     </button>
@@ -464,6 +495,11 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                   className="flex items-center gap-1 px-2 py-1.5 rounded-md text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
                   {busyId === t.id ? <Loader size={12} className="animate-spin"/> : <Undo2 size={12}/>} Resolve/Return
                 </button>
+                {isAdmin && (
+                  <button onClick={() => deleteTasks([t.id])} disabled={deleting} className="text-gray-300 hover:text-red-500 disabled:opacity-50" title="Delete (admin)">
+                    <Trash2 size={14}/>
+                  </button>
+                )}
               </div>
             </div>
           ))}
