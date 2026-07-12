@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { getTableColumns } from '@/lib/docTables'
 import { requireAuth, requireSection } from '@/lib/serverAuth'
+import { deleteDriveFileByUrl } from '@/lib/driveFolders'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -51,35 +52,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
       const { id, all } = req.query
       const urlColumn = DRIVE_URL_COLUMN[table]
-      const { data: prof } = await supabaseAdmin.from('profiles').select('username, full_name').eq('id', auth.userId).maybeSingle()
-      const deletedByName = prof?.full_name || prof?.username || ''
 
-      // Soft-delete: the full row is archived to deleted_records (Recycle Bin)
-      // before it's actually removed, and its Drive PDF is left alone (still
-      // linked by the same pdf_url/drive_url) so Undo can bring the row back
-      // exactly as it was — nothing about "what got deleted, by whom, when"
-      // is lost, and nothing is truly gone until purged from the bin itself.
+      // Delete is final — no Recycle Bin staging, no Undo. The row and its
+      // Drive PDF (if any) are removed together, right now.
       if (all === 'true') {
-        const { data: rows } = await supabaseAdmin.from(table).select('*')
-        if (rows?.length) {
-          await supabaseAdmin.from('deleted_records').insert(rows.map(row => ({
-            table_name: table, record_id: (row as any).id, record_data: row,
-            file_name: (row as any).file_name || null, drive_url: urlColumn ? (row as any)[urlColumn] : null,
-            deleted_by: auth.userId, deleted_by_name: deletedByName,
-          })))
+        if (urlColumn) {
+          const { data: rows } = await supabaseAdmin.from(table).select('*')
+          if (rows?.length) {
+            await Promise.all(rows.map(row => {
+              const url = (row as any)[urlColumn]
+              return url ? deleteDriveFileByUrl(url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message)) : Promise.resolve()
+            }))
+          }
         }
         const { error } = await supabaseAdmin.from(table).delete().gte('created_at', '1970-01-01')
         if (error) return res.status(400).json({ error: error.message })
         return res.json({ ok: true })
       }
       if (!id) return res.status(400).json({ error: 'id required' })
-      const { data: row } = await supabaseAdmin.from(table).select('*').eq('id', id).maybeSingle()
-      if (row) {
-        await supabaseAdmin.from('deleted_records').insert({
-          table_name: table, record_id: id, record_data: row,
-          file_name: (row as any).file_name || null, drive_url: urlColumn ? (row as any)[urlColumn] : null,
-          deleted_by: auth.userId, deleted_by_name: deletedByName,
-        })
+      if (urlColumn) {
+        const { data: row } = await supabaseAdmin.from(table).select('*').eq('id', id).maybeSingle()
+        const url = row ? (row as any)[urlColumn] : null
+        if (url) await deleteDriveFileByUrl(url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message))
       }
       const { error } = await supabaseAdmin.from(table).delete().eq('id', id)
       if (error) return res.status(400).json({ error: error.message })

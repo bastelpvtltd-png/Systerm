@@ -27,7 +27,7 @@ export function parseVesselRows(html: string): VesselRow[] {
   const rows: VesselRow[] = []
   const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || []
   for (const tr of trMatches) {
-    const cells = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(m => m[1].replace(/<[^>]+>/g, '').trim())
+    const cells = Array.from(tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)).map(m => m[1].replace(/<[^>]+>/g, '').trim())
     if (cells.length < 6) continue
     const [terminal, vesselVoyage, opening_time, closing_time, etb, last_update] = cells
     if (!vesselVoyage) continue

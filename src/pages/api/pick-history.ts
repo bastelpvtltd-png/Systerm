@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         eventsByDoc.get(e.document_id)!.push({ action: e.action, user_name: e.user_name, action_timestamp: e.action_timestamp })
       }
 
-      let candidateIds = [...eventsByDoc.keys()]
+      let candidateIds = Array.from(eventsByDoc.keys())
       if (userMatchedIds) candidateIds = candidateIds.filter(id => userMatchedIds.has(id))
 
       let docsQuery = supabaseAdmin.from('document_uploads').select('id, file_name, doc_type, uploaded_by_name, created_at, reason, reason_note')
@@ -56,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { data: docs, error } = await docsQuery
       if (error) throw error
 
-      function latest(history: HistoryEvent[], action: string): HistoryEvent | null {
+      const latest = (history: HistoryEvent[], action: string): HistoryEvent | null => {
         const matches = history.filter(h => h.action === action)
         return matches.length ? matches[matches.length - 1] : null
       }

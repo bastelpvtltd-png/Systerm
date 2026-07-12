@@ -45,6 +45,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Drive PDF, since a normal delete from Database no longer does.
       const gated = await requireSection(req, 'section:database.delete')
       if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
+
+      if (req.query.all === 'true') {
+        const { data: entries } = await supabaseAdmin.from('deleted_records').select('id, drive_url')
+        let failedCount = 0
+        if (entries?.length) {
+          await Promise.all(entries.map(async e => {
+            if (!e.drive_url) return
+            try { await deleteDriveFileByUrl(e.drive_url) }
+            catch (err: any) { failedCount++; console.error('[recycle-bin] Drive file delete failed during bulk purge:', err.message) }
+          }))
+        }
+        await supabaseAdmin.from('deleted_records').delete().gte('deleted_at', '1970-01-01')
+        return res.json({ ok: true, purged: entries?.length || 0, driveDeleteFailedCount: failedCount })
+      }
+
       const id = String(req.query.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })
       const { data: entry } = await supabaseAdmin.from('deleted_records').select('drive_url').eq('id', id).maybeSingle()
