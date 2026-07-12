@@ -265,7 +265,7 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Bell size={16} className="text-amber-500"/>Incoming</h2>
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Bell size={16} className="text-amber-500"/>Activity Log</h2>
         {selectedIds.length > 0 && (
           <button onClick={pickSelected} disabled={pickingAll}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
@@ -507,7 +507,7 @@ function PickHistoryPanel() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function remove(id: string) {
-    if (!confirm('Delete this Pick History entry?')) return
+    if (!confirm('Delete this Processed History entry?')) return
     const res = await fetch(`/api/pick-history?id=${id}`, { method: 'DELETE', headers: await authHeader() })
     if (res.ok) setItems(prev => prev.filter(i => i.id !== id))
     else { const d = await res.json().catch(() => ({})); alert(d.error || 'Delete failed') }
@@ -524,7 +524,7 @@ function PickHistoryPanel() {
   // table are never touched by this — it's strictly clearing the audit trail,
   // not the underlying documents.
   async function clearSelected() {
-    if (!confirm(`Delete ${selectedIds.length} Pick History entr${selectedIds.length === 1 ? 'y' : 'ies'}? This only clears the history log — uploaded files and extracted data are not affected.`)) return
+    if (!confirm(`Delete ${selectedIds.length} Processed History entr${selectedIds.length === 1 ? 'y' : 'ies'}? This only clears the history log — uploaded files and extracted data are not affected.`)) return
     setClearing(true)
     for (const id of selectedIds) {
       try { await fetch(`/api/pick-history?id=${id}`, { method: 'DELETE', headers: await authHeader() }) } catch {}
@@ -537,7 +537,7 @@ function PickHistoryPanel() {
   return (
     <div className="card mt-4">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><History size={16} className="text-gray-500"/>Pick History</h2>
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><History size={16} className="text-gray-500"/>Processed History</h2>
         {canDelete && selectedIds.length > 0 && (
           <button onClick={clearSelected} disabled={clearing}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
@@ -550,6 +550,7 @@ function PickHistoryPanel() {
         <input value={user} onChange={e => setUser(e.target.value)} placeholder="User..." className="input max-w-[140px]"/>
         <select value={action} onChange={e => setAction(e.target.value)} className="input max-w-[120px]">
           <option value="">All actions</option>
+          <option value="notify">Notify</option>
           <option value="pick">Pick</option>
           <option value="return">Return</option>
           <option value="mail">Mail</option>

@@ -11,8 +11,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const authed = await requireAuth(req)
   if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
-    const { base64, fileName, mimeType = 'application/pdf', docType } = req.body
+    const { base64, fileName, mimeType, docType } = req.body
     if (!base64 || !fileName) return res.status(400).json({ error: 'Missing base64 or fileName' })
+    // mimeType used to default to 'application/pdf' whenever a caller didn't
+    // pass one — silently wrong for any non-PDF (an .xlsx would upload as a
+    // "PDF" Drive treats as an opaque/invalid stream). Inferring from the
+    // file extension whenever the caller doesn't supply an explicit type is
+    // the safer default.
+    const finalMimeType = mimeType || inferMimeType(fileName)
 
     const clientId     = process.env.GOOGLE_CLIENT_ID || ''
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
@@ -38,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         name: fileName,
         parents: targetFolderId ? [targetFolderId] : undefined,
       },
-      media: { mimeType, body: Readable.from(buffer) },
+      media: { mimeType: finalMimeType, body: Readable.from(buffer) },
       fields: 'id, webViewLink',
     })
 
@@ -52,6 +58,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error('Drive upload error:', err.response?.data || err.message)
     res.status(500).json({ error: describeDriveError(err) })
   }
+}
+
+const EXT_MIME: Record<string, string> = {
+  pdf: 'application/pdf',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  csv: 'text/csv',
+  xml: 'application/xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+}
+function inferMimeType(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() || ''
+  return EXT_MIME[ext] || 'application/octet-stream'
 }
 
 // googleapis surfaces auth failures as an opaque "invalid_grant"/401 with no

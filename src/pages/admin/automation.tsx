@@ -9,12 +9,12 @@ import { yearOf } from '@/lib/flexibleDate'
 import {
   Zap, FileCode, ScanText, Barcode as BarcodeIcon, Truck, RefreshCw, Anchor,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Download, Plus, Trash2,
-  StickyNote, Save, Mail, CheckSquare, Square, FileDown, AlertTriangle, Clock,
+  StickyNote, Save, Mail, CheckSquare, Square, FileDown, AlertTriangle, Clock, Ship,
 } from 'lucide-react'
 
 type AutomationTab =
   | 'xml' | 'cdn-text' | 'barcode' | 'trico' | 'data-updates'
-  | 'boat-note' | 'boat-note-check' | 'export-release'
+  | 'boat-note' | 'boat-note-check' | 'export-release' | 'vessel-trigger'
   | 'notes'
 
 interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean; tin_vat?: string }
@@ -33,6 +33,7 @@ const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: stri
   { key: 'boat-note', label: 'Boat Note Create', icon: Anchor, permission: 'section:automation.boat-note-create' },
   { key: 'boat-note-check', label: 'Boat Note Check', icon: ClipboardCheck, permission: 'section:automation.boat-note-check' },
   { key: 'export-release', label: 'Export Release Check', icon: ShieldCheck, permission: 'section:automation.export-release-check' },
+  { key: 'vessel-trigger', label: 'Vessel Triggers', icon: Ship, permission: 'section:automation.vessel-trigger' },
   { key: 'notes', label: 'System Logic & Integration Notes', icon: StickyNote, permission: 'section:automation.notes' },
 ]
 
@@ -98,6 +99,7 @@ function AutomationContent() {
       {tab === 'boat-note' && <BoatNoteCreate/>}
       {tab === 'boat-note-check' && <BoatNoteCheckPanel/>}
       {tab === 'export-release' && <ExportReleaseCheckPanel/>}
+      {tab === 'vessel-trigger' && <VesselTriggerPanel/>}
       {tab === 'notes' && <SystemNotes/>}
     </div>
   )
@@ -604,7 +606,7 @@ function BoatNoteCreate() {
 // Shared by both check panels — plain-minutes interval editor + "last ran"
 // readout for the scheduled cron (cron-check-pending.ts), which is what
 // actually applies this interval; this control only reads/writes the number.
-function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_release'; label: string }) {
+function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger'; label: string }) {
   const [minutes, setMinutes] = useState<string>('')
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
   const [enabled, setEnabled] = useState(true)
@@ -997,6 +999,92 @@ function ExportReleaseCheckPanel() {
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Vessel Triggers ────────────────────────────────────────────────────────
+interface VesselRow { id: string; terminal: string; vessel: string; voyage: string; opening_time: string; closing_time: string; etb: string; last_update: string }
+
+function VesselTriggerPanel() {
+  const [items, setItems] = useState<VesselRow[]>([])
+  const [loading, setLoading] = useState(false)
+  const [search, setSearch] = useState('')
+  const [syncing, setSyncing] = useState(false)
+  const [status, setStatus] = useState('')
+
+  async function load() {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (search) params.set('search', search)
+      const res = await fetch(`/api/vessel-triggers?${params.toString()}`, { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setItems(d.items || [])
+    } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function triggerNow() {
+    setSyncing(true); setStatus('')
+    try {
+      const res = await fetch('/api/vessel-trigger-sync', { method: 'POST', headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setStatus(`✓ Synced — ${d.fetched} fetched, ${d.inserted} new, ${d.updated} updated, ${d.unchanged} unchanged`)
+      load()
+    } catch (e: any) {
+      setStatus(`✗ ${e.message}`)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h2 className="font-semibold text-gray-900 text-sm">Vessel Schedule (Terminal / Vessel / Voyage / Opening / Closing / ETB)</h2>
+        <button onClick={triggerNow} disabled={syncing} className="btn-secondary flex items-center gap-2 text-xs">
+          {syncing ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Trigger Now
+        </button>
+      </div>
+      <div className="mb-3"><SchedulerControl panel="vessel_trigger" label="Sync"/></div>
+      {status && <p className={`text-xs mb-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
+      <div className="flex items-center gap-2 mb-3">
+        <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && load()}
+          placeholder="Search vessel, voyage, or terminal..." className="input"/>
+        <button onClick={load} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white flex-shrink-0" style={{ background: '#1B3A5C' }}>
+          <Search size={12}/> Search
+        </button>
+      </div>
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-6">No vessel schedule data yet — click Trigger Now to sync</p>
+      ) : (
+        <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 sticky top-0"><tr>
+              {['Terminal', 'Vessel', 'Voyage', 'Opening', 'Closing', 'ETB', 'Last Updated'].map(h => (
+                <th key={h} className="text-left px-2 py-1.5 text-gray-500 font-medium">{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {items.map(r => (
+                <tr key={r.id} className="border-t border-gray-50">
+                  <td className="px-2 py-1.5 text-gray-800">{r.terminal}</td>
+                  <td className="px-2 py-1.5 text-gray-800 font-medium">{r.vessel}</td>
+                  <td className="px-2 py-1.5 text-gray-600">{r.voyage}</td>
+                  <td className="px-2 py-1.5 text-gray-600">{r.opening_time}</td>
+                  <td className="px-2 py-1.5 text-gray-600">{r.closing_time}</td>
+                  <td className="px-2 py-1.5 text-gray-600">{r.etb}</td>
+                  <td className="px-2 py-1.5 text-gray-400">{r.last_update}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

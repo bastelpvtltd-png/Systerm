@@ -114,6 +114,7 @@ export const SECTION_ITEMS = [
   { key: 'section:automation.boat-note-create',    tabHref: '/admin/automation', label: 'Boat Note Create' },
   { key: 'section:automation.boat-note-check',     tabHref: '/admin/automation', label: 'Boat Note Check' },
   { key: 'section:automation.export-release-check',tabHref: '/admin/automation', label: 'Export Release Check' },
+  { key: 'section:automation.vessel-trigger',      tabHref: '/admin/automation', label: 'Vessel Triggers' },
   { key: 'section:automation.notes',               tabHref: '/admin/automation', label: 'System Logic & Integration Notes' },
 ]
 

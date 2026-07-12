@@ -42,8 +42,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (error) throw error
 
       if (notify) {
+        const nowIso = new Date().toISOString()
         await supabaseAdmin.from('dashboard_notifications').insert({
           document_id: data.id, uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
+        })
+        // Processed History (pick_history_log) gets its own 'notify' entry too,
+        // so who-notified-when is part of the same audit trail as
+        // pick/return/mail/download/look, not just implied by dashboard_notifications.
+        await supabaseAdmin.from('pick_history_log').insert({
+          document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'notify',
+          pdf_notify_user: uploadedByName, notify_update_time: nowIso,
         })
       }
 

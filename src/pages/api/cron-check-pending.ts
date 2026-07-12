@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { checkBoatNote, checkExportRelease, cleanCusdecNumber, isBoatNotePassed, resolveTin } from '@/lib/automationChecks'
 import { yearOf } from '@/lib/flexibleDate'
+import { syncVesselTriggers } from '@/lib/vesselTrigger'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -90,6 +91,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     results.export_release = { checked: pending.length, passed: passedCount }
   } else {
     results.export_release = { skipped: true, reason: 'not due yet' }
+  }
+
+  const vesselRun = runByPanel['vessel_trigger']
+  const dueVessel = vesselRun?.enabled !== false && (!vesselRun?.last_run_at ||
+    (now.getTime() - new Date(vesselRun.last_run_at).getTime()) >= (vesselRun.interval_minutes || 60) * 60_000)
+
+  if (vesselRun?.enabled === false) {
+    results.vessel_trigger = { skipped: true, reason: 'paused' }
+  } else if (dueVessel) {
+    try {
+      const r = await syncVesselTriggers()
+      results.vessel_trigger = r
+    } catch (e: any) {
+      results.vessel_trigger = { error: e.message }
+    }
+    await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'vessel_trigger')
+  } else {
+    results.vessel_trigger = { skipped: true, reason: 'not due yet' }
   }
 
   res.json({ ok: true, ranAt: now.toISOString(), results })
