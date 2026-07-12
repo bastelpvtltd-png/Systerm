@@ -709,6 +709,7 @@ function OrphanedDataMonitor({ label, count, items }: { label: string; count: nu
 
 function BoatNoteCheckPanel() {
   const [cdns, setCdns] = useState<CdnRec[]>([])
+  const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [busy, setBusy] = useState(false)
@@ -716,13 +717,37 @@ function BoatNoteCheckPanel() {
   const [autoProgress, setAutoProgress] = useState('')
   const [error, setError] = useState('')
   const [result, setResult] = useState<{ containerNo: string; vessel: string; level: string; status: string; passed: boolean } | null>(null)
+  // Ad-hoc check — a container number typed by hand, not picked from the
+  // list on the left. Useful to test-check something that isn't (or isn't
+  // yet) a CDN row in the database — no cdnId is sent, so nothing here ever
+  // gets written to the database.
+  const [adhocContainer, setAdhocContainer] = useState('')
+  const [adhocBusy, setAdhocBusy] = useState(false)
+  const [adhocError, setAdhocError] = useState('')
+  const [adhocResult, setAdhocResult] = useState<{ containerNo: string; vessel: string; level: string; status: string; passed: boolean } | null>(null)
 
   async function load() {
-    const r = await fetch('/api/list-records?table=cdn&limit=500')
-    const d = await r.json()
-    setCdns(d.records || [])
+    const [cr, dr] = await Promise.all([
+      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()),
+      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()),
+    ])
+    setCusdecs(cr.records || [])
+    setCdns(dr.records || [])
   }
   useEffect(() => { load() }, [])
+
+  // A CDN only counts as ready for auto-checking once its parent CUSDEC's
+  // CAP is complete (every expected CDN has actually been uploaded) — same
+  // rule ExportReleaseCheckPanel/isBoatNotePassed use. CAP not known at all
+  // (blank/non-numeric) doesn't block it — there's nothing to wait for.
+  // Manual Trigger (single-CDN, below) ignores this entirely by design.
+  function isCapComplete(cdn: CdnRec): boolean {
+    const cusdec = cusdecs.find(c => c.code === cdn.code && c.number === cdn.cusdec_number)
+    const cap = parseInt(cusdec?.cap || '', 10)
+    if (!cap || Number.isNaN(cap)) return true
+    const own = cdns.filter(d => d.code === cdn.code && d.cusdec_number === cdn.cusdec_number)
+    return own.length >= cap
+  }
 
   const filtered = cdns.filter(c => !search || c.container_no?.toLowerCase().includes(search.toLowerCase()) || c.shipper?.toLowerCase().includes(search.toLowerCase()))
   const selected = cdns.find(c => c.id === selectedId) || null
@@ -748,9 +773,24 @@ function BoatNoteCheckPanel() {
     finally { setBusy(false) }
   }
 
+  async function runAdhoc() {
+    if (!adhocContainer.trim()) return
+    setAdhocBusy(true); setAdhocError(''); setAdhocResult(null)
+    try {
+      const res = await fetch('/api/boat-note-check', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ containerNo: adhocContainer.trim() }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setAdhocResult(d)
+    } catch (e: any) { setAdhocError(e.message) }
+    finally { setAdhocBusy(false) }
+  }
+
   async function autoTrigger() {
-    const pending = cdns.filter(c => !c.boat_note_passed && c.container_no)
-    if (!pending.length) { setAutoProgress('Nothing pending — every CDN already checked.'); return }
+    const pending = cdns.filter(c => !c.boat_note_passed && c.container_no && isCapComplete(c))
+    if (!pending.length) { setAutoProgress('Nothing pending — every CAP-complete CDN already checked.'); return }
     setAutoBusy(true); setError('')
     let passedCount = 0
     for (let i = 0; i < pending.length; i++) {
@@ -766,9 +806,12 @@ function BoatNoteCheckPanel() {
     setAutoBusy(false)
   }
 
-  const levelColor = result?.level === 'success' ? 'bg-green-50 border-green-200 text-green-700'
-    : result?.level === 'danger' ? 'bg-red-50 border-red-200 text-red-700'
-    : 'bg-amber-50 border-amber-200 text-amber-700'
+  function levelColorFor(level?: string) {
+    return level === 'success' ? 'bg-green-50 border-green-200 text-green-700'
+      : level === 'danger' ? 'bg-red-50 border-red-200 text-red-700'
+      : 'bg-amber-50 border-amber-200 text-amber-700'
+  }
+  const levelColor = levelColorFor(result?.level)
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -821,6 +864,25 @@ function BoatNoteCheckPanel() {
             )}
           </>
         )}
+
+        <div className="mt-6 pt-5 border-t border-gray-100">
+          <h3 className="font-semibold text-gray-900 text-sm mb-1">Check any container number</h3>
+          <p className="text-xs text-gray-400 mb-3">Not tied to a CDN in the database — nothing here gets saved, just checked.</p>
+          <div className="flex gap-2">
+            <input value={adhocContainer} onChange={e => setAdhocContainer(e.target.value)} placeholder="Container number..." className="input flex-1"/>
+            <button onClick={runAdhoc} disabled={adhocBusy || !adhocContainer.trim()} className="btn-secondary flex items-center gap-2 flex-shrink-0">
+              {adhocBusy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check
+            </button>
+          </div>
+          {adhocError && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{adhocError}</p>}
+          {adhocResult && (
+            <div className={`mt-3 border rounded-lg p-3 text-sm ${levelColorFor(adhocResult.level)}`}>
+              <p><span className="font-semibold">Container:</span> {adhocResult.containerNo}</p>
+              {adhocResult.vessel && <p><span className="font-semibold">Vessel / Voyage:</span> {adhocResult.vessel}</p>}
+              <p className="mt-1">{adhocResult.status}</p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -894,13 +956,17 @@ function ExportReleaseCheckPanel() {
     return d
   }
 
+  // Works with or without a CUSDEC selected from the list on the left — if
+  // nothing's selected this is a pure ad-hoc check against whatever was
+  // typed into the form (cusdecId omitted, so export-release-check.ts never
+  // touches the database for it).
   async function manualTrigger() {
-    if (!selected) return
     setBusy(true); setError(''); setResult(null)
     try {
       // Manual trigger uses whatever TIN is currently in the form (so a
-      // just-typed correction is respected), and remembers it for next time.
-      if (form.consigneeTIN) {
+      // just-typed correction is respected), and remembers it for next time
+      // — only when it's tied to a real CUSDEC record.
+      if (form.consigneeTIN && selected) {
         const shipperName = (selected.exporter || '').split('\n')[0].trim()
         authHeader().then(h => fetch('/api/shipper-profile', {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
@@ -909,12 +975,12 @@ function ExportReleaseCheckPanel() {
       }
       const res = await fetch('/api/export-release-check', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ ...form, cusdecId: selected.id }),
+        body: JSON.stringify({ ...form, cusdecId: selected?.id }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setResult(d)
-      if (d.passed) await load()
+      if (d.passed && selected) await load()
     } catch (e: any) { setError(e.message) }
     finally { setBusy(false) }
   }
@@ -969,33 +1035,31 @@ function ExportReleaseCheckPanel() {
 
       <div className="card">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Manual Trigger</h2>
-        {!selected ? (
-          <p className="text-xs text-gray-400 text-center py-12">Select a CUSDEC to check</p>
-        ) : (
+        <p className="text-xs text-gray-400 mb-3">
+          {selected ? <>Checking E {selected.number} — <button onClick={() => { setSelectedId(''); setForm({ officeCode: '', serial: 'E', cusdecNumber: '', cusdecYear: '', consigneeTIN: '' }) }} className="text-blue-600 hover:underline">clear selection</button></>
+            : 'No CUSDEC selected — type any values below to check ad-hoc (nothing gets saved to the database).'}
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+          <Field label="Office Code"><input value={form.officeCode} onChange={e => setForm(f => ({ ...f, officeCode: e.target.value }))} className="input"/></Field>
+          <Field label="Serial"><input value={form.serial} onChange={e => setForm(f => ({ ...f, serial: e.target.value }))} className="input"/></Field>
+          <Field label="Cusdec Number"><input value={form.cusdecNumber} onChange={e => setForm(f => ({ ...f, cusdecNumber: e.target.value }))} className="input"/></Field>
+          <Field label="Cusdec Year"><input value={form.cusdecYear} onChange={e => setForm(f => ({ ...f, cusdecYear: e.target.value }))} className="input"/></Field>
+          <Field label="Company TIN"><input value={form.consigneeTIN} onChange={e => setForm(f => ({ ...f, consigneeTIN: e.target.value }))} className="input"/></Field>
+        </div>
+        <button onClick={manualTrigger} disabled={busy || !form.officeCode || !form.cusdecNumber || !form.cusdecYear || !form.consigneeTIN}
+          className="btn-primary flex items-center gap-2">
+          {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check Status
+        </button>
+        {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
+        {result && !result.found && (
+          <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{result.message}</p>
+        )}
+        {result?.found && (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
-              <Field label="Office Code"><input value={form.officeCode} onChange={e => setForm(f => ({ ...f, officeCode: e.target.value }))} className="input"/></Field>
-              <Field label="Serial"><input value={form.serial} onChange={e => setForm(f => ({ ...f, serial: e.target.value }))} className="input"/></Field>
-              <Field label="Cusdec Number"><input value={form.cusdecNumber} onChange={e => setForm(f => ({ ...f, cusdecNumber: e.target.value }))} className="input"/></Field>
-              <Field label="Cusdec Year (from CUSDEC date)"><input value={form.cusdecYear} onChange={e => setForm(f => ({ ...f, cusdecYear: e.target.value }))} className="input"/></Field>
-              <Field label="Company TIN (from database)"><input value={form.consigneeTIN} onChange={e => setForm(f => ({ ...f, consigneeTIN: e.target.value }))} className="input"/></Field>
-            </div>
-            <button onClick={manualTrigger} disabled={busy || !form.officeCode || !form.cusdecNumber || !form.cusdecYear || !form.consigneeTIN}
-              className="btn-primary flex items-center gap-2">
-              {busy ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>}Check Status
-            </button>
-            {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
-            {result && !result.found && (
-              <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{result.message}</p>
-            )}
-            {result?.found && (
-              <>
-                <p className={`text-xs font-semibold mt-3 ${result.passed ? 'text-green-600' : 'text-amber-600'}`}>
-                  {result.passed ? '✓ Export Release passed' : result.passed === false ? '✗ Not passed yet' : '⚠ Could not determine pass/fail — check the raw text below'}
-                </p>
-                <pre className="mt-2 border border-gray-200 rounded-lg p-3 text-xs bg-gray-50 whitespace-pre-wrap max-h-72 overflow-y-auto">{result.text}</pre>
-              </>
-            )}
+            <p className={`text-xs font-semibold mt-3 ${result.passed ? 'text-green-600' : 'text-amber-600'}`}>
+              {result.passed ? '✓ Export Release passed' : result.passed === false ? '✗ Not passed yet' : '⚠ Could not determine pass/fail — check the raw text below'}
+            </p>
+            <pre className="mt-2 border border-gray-200 rounded-lg p-3 text-xs bg-gray-50 whitespace-pre-wrap max-h-72 overflow-y-auto">{result.text}</pre>
           </>
         )}
       </div>

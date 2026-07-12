@@ -47,8 +47,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (boatNoteRun?.enabled === false) {
     results.boat_note = { skipped: true, reason: 'paused' }
   } else if (dueBoatNote) {
-    const { data: cdns } = await supabaseAdmin.from('cdn').select('id, container_no, boat_note_passed')
-    const pending = (cdns || []).filter(c => !c.boat_note_passed && c.container_no)
+    // Only auto-check CDNs whose parent CUSDEC's CAP is already complete —
+    // a CUSDEC still waiting on more CDN uploads isn't ready for Boat Note
+    // checking yet, same rule isCapComplete/isBoatNotePassed use elsewhere.
+    // Manual Trigger (the per-CDN button in automation.tsx) is unaffected —
+    // it can still check any CDN regardless of CAP completeness.
+    const [{ data: cdns }, { data: cusdecs }] = await Promise.all([
+      supabaseAdmin.from('cdn').select('id, code, cusdec_number, container_no, boat_note_passed'),
+      supabaseAdmin.from('cusdec').select('code, number, cap'),
+    ])
+    const capByCusdec = new Map((cusdecs || []).map(c => [`${c.code}|||${c.number}`, parseInt(c.cap || '', 10)]))
+    const cdnCountByCusdec = new Map<string, number>()
+    for (const d of cdns || []) {
+      const key = `${d.code}|||${d.cusdec_number}`
+      cdnCountByCusdec.set(key, (cdnCountByCusdec.get(key) || 0) + 1)
+    }
+    const isCapComplete = (d: { code: string; cusdec_number: string }) => {
+      const key = `${d.code}|||${d.cusdec_number}`
+      const cap = capByCusdec.get(key)
+      if (!cap || Number.isNaN(cap)) return true // CAP not known — don't block on it
+      return (cdnCountByCusdec.get(key) || 0) >= cap
+    }
+    const pending = (cdns || []).filter(c => !c.boat_note_passed && c.container_no && isCapComplete(c))
     let passedCount = 0
     for (const cdn of pending) {
       try {
