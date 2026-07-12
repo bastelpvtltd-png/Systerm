@@ -27,20 +27,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const authed = await requireAuth(req)
     if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
 
-    const [{ data: shipments }, { data: cusdecs }, { data: cdns }, { data: reasonDocs }] = await Promise.all([
+    const [{ data: shipments }, { data: cusdecs }, { data: cdns }, { data: reasonDocs }, { data: vesselTriggers }] = await Promise.all([
       supabaseAdmin.from('temporary_shipments').select('id, reference, shipper, invoice_number, packing_number, created_at').order('created_at', { ascending: false }),
       supabaseAdmin.from('cusdec').select('id, code, number, exporter, cap, export_release_passed'),
-      supabaseAdmin.from('cdn').select('id, code, cusdec_number, container_no, boat_note_passed'),
+      supabaseAdmin.from('cdn').select('id, code, cusdec_number, container_no, vessel, voyage, boat_note_passed, export_release_passed'),
       // Reason-tagged Quick Upload queue — a document tagged reason:'CUSDEC
       // Passed' counts as pending until whoever picks it does Mail/Download
       // (which deletes it — see delete-reason-document.ts), so the count is
       // just "how many of these rows currently exist", not a status field.
       supabaseAdmin.from('document_uploads').select('id, file_name, reason, reason_note, created_at').eq('reason', 'CUSDEC Passed').order('created_at', { ascending: false }),
+      supabaseAdmin.from('vessel_triggers').select('vessel, voyage, closing_time'),
     ])
 
     const cdnPending: any[] = []
     const boatNotePending: any[] = []
     const releasePending: any[] = []
+
+    // Closing Time Passed — only checked for containers that aren't already
+    // "not green" (Boat Note passed) or "not blue" (Export Release passed);
+    // once either is true the closing deadline no longer matters. Matched
+    // by vessel AND voyage together (not voyage alone) since the same
+    // voyage number can show up against more than one vessel in the
+    // schedule, each with its own closing time.
+    const closingKey = (vessel: string, voyage: string) => `${(vessel || '').trim().toUpperCase()}|||${(voyage || '').trim().toUpperCase()}`
+    const closingByKey = new Map((vesselTriggers || []).map(v => [closingKey(v.vessel, v.voyage), v.closing_time]))
+    const now = new Date()
+    const closingPassed: any[] = []
+    for (const d of cdns || []) {
+      if (d.boat_note_passed || d.export_release_passed) continue
+      if (!d.vessel || !d.voyage) continue
+      const closingTime = closingByKey.get(closingKey(d.vessel, d.voyage))
+      if (!closingTime) continue
+      const closingDate = new Date(String(closingTime).replace(' ', 'T'))
+      if (Number.isNaN(closingDate.getTime()) || now <= closingDate) continue
+      closingPassed.push({ cdnId: d.id, containerNo: d.container_no, cusdecNumber: d.cusdec_number, vessel: d.vessel, voyage: d.voyage, closingTime })
+    }
 
     for (const c of cusdecs || []) {
       const own = (cdns || []).filter(d => d.code === c.code && d.cusdec_number === c.number)
@@ -66,6 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       boatNotePending: { count: boatNotePending.length, items: boatNotePending },
       releasePending: { count: releasePending.length, items: releasePending },
       pendingCusdecPassed: { count: (reasonDocs || []).length, items: reasonDocs || [] },
+      closingPassed: { count: closingPassed.length, items: closingPassed },
     })
   } catch (err: any) {
     console.error('[dashboard-summary] error:', err)

@@ -66,6 +66,7 @@ export const SECTION_ITEMS = [
   { key: 'section:dashboard.boatnote-pending',tabHref: '/admin', label: 'Boat Note Pending card' },
   { key: 'section:dashboard.cdn-pending',     tabHref: '/admin', label: 'CDN Pending card' },
   { key: 'section:dashboard.release-pending', tabHref: '/admin', label: 'Export Release Pending card' },
+  { key: 'section:dashboard.closing-passed',  tabHref: '/admin', label: 'Closing Time Passed warning card' },
   { key: 'section:dashboard.pending-summary', tabHref: '/admin', label: 'Pending Work Summary panel' },
   { key: 'section:dashboard.incoming',        tabHref: '/admin', label: 'Incoming (Notify) panel' },
   { key: 'section:dashboard.my-picked-tasks', tabHref: '/admin', label: 'My Picked Tasks panel' },

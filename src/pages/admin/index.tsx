@@ -14,6 +14,7 @@ interface Summary {
   cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number }>
   boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number }>
   releasePending: PendingGroup<{ cusdecId: string; number: string; exporter: string }>
+  closingPassed: PendingGroup<{ cdnId: string; containerNo: string; cusdecNumber: string; vessel: string; voyage: string; closingTime: string }>
 }
 const emptyGroup = { count: 0, items: [] }
 
@@ -40,7 +41,7 @@ AdminDashboard.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</Ad
 
 function DashboardContent() {
   const [summary, setSummary] = useState<Summary>({
-    pendingCusdecPassed: emptyGroup, shipmentsPending: emptyGroup, cdnPending: emptyGroup, boatNotePending: emptyGroup, releasePending: emptyGroup,
+    pendingCusdecPassed: emptyGroup, shipmentsPending: emptyGroup, cdnPending: emptyGroup, boatNotePending: emptyGroup, releasePending: emptyGroup, closingPassed: emptyGroup,
   })
   const [expanded, setExpanded] = useState<string | null>(null)
   // Bumped whenever Incoming's Pick succeeds, so My Picked Tasks re-fetches
@@ -58,6 +59,7 @@ function DashboardContent() {
           cdnPending: d.cdnPending || emptyGroup,
           boatNotePending: d.boatNotePending || emptyGroup,
           releasePending: d.releasePending || emptyGroup,
+          closingPassed: d.closingPassed || emptyGroup,
         })
       }
     }
@@ -67,11 +69,12 @@ function DashboardContent() {
   const { has } = usePermission()
 
   const stats = [
-    { key: 'section:dashboard.total-shipments',  id: 'pendingCusdec', label: 'Pending CUSDEC Passed',  value: summary.pendingCusdecPassed.count, icon: Ship,        color: '#1B3A5C' },
     { key: 'section:dashboard.cusdec-pending',   id: 'shipments',label: 'Shipments Pending (no CUSDEC yet)', value: summary.shipmentsPending.count, icon: FileText,    color: '#f59e0b' },
+    { key: 'section:dashboard.total-shipments',  id: 'pendingCusdec', label: 'Pending CUSDEC Passed',  value: summary.pendingCusdecPassed.count, icon: Ship,        color: '#1B3A5C' },
     { key: 'section:dashboard.cdn-pending',      id: 'cdn',      label: 'CDN Pending (CAP not complete)',    value: summary.cdnPending.count,       icon: Clock,       color: '#8b5cf6' },
     { key: 'section:dashboard.boatnote-pending', id: 'boatnote', label: 'Boat Note Pending',       value: summary.boatNotePending.count,    icon: Package,     color: '#3b82f6' },
     { key: 'section:dashboard.release-pending',  id: 'release',  label: 'Export Release Pending',  value: summary.releasePending.count,     icon: AlertCircle, color: '#ef4444' },
+    { key: 'section:dashboard.closing-passed',   id: 'closingPassed', label: 'Closing Time Passed', value: summary.closingPassed.count,  icon: AlertCircle, color: '#dc2626' },
   ].filter(s => has(s.key))
 
   return (
@@ -199,6 +202,28 @@ function DashboardContent() {
                       <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                     </div>
                     <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {expanded === 'closingPassed' && (
+          <div className="card mb-4">
+            <h2 className="font-semibold text-gray-900 mb-3 text-sm flex items-center gap-2"><AlertCircle size={15} className="text-red-600"/>Vessel closing time has passed — not yet Boat Note/Export Release passed</h2>
+            <p className="text-xs text-gray-400 mb-3">Checked against the Vessel Triggers schedule (Automation tab) each time it syncs — matched by Vessel + Voyage together, since the same voyage number can appear against more than one vessel.</p>
+            {summary.closingPassed.items.length === 0 ? (
+              <p className="text-xs text-gray-400 py-4 text-center">None — no pending container's closing time has passed</p>
+            ) : (
+              <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                {summary.closingPassed.items.map(c => (
+                  <div key={c.cdnId} className="flex items-center justify-between text-xs border border-red-100 bg-red-50 rounded-lg p-2.5">
+                    <div>
+                      <p className="font-medium text-gray-800">{c.containerNo || '—'} <span className="text-gray-400 font-normal">· E {c.cusdecNumber}</span></p>
+                      <p className="text-gray-500">{c.vessel} / {c.voyage} · Closing: {c.closingTime}</p>
+                    </div>
+                    <a href={`/admin/drive-files?containerNo=${encodeURIComponent(c.containerNo || '')}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                   </div>
                 ))}
               </div>
