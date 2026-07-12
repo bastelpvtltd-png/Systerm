@@ -90,6 +90,7 @@ function DatabaseContent() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setBinItems(prev => prev.filter(i => i.id !== id))
+      if (d.driveDeleteFailed) alert('Database record eka purge una, habai Drive file eka delete karanna baruwa (Drive ekata connect wenna baru unath, file eka mulinma delete wela thibbath) — Drive eken manual widiyata check karanna one.')
     } catch (e: any) {
       alert('Purge failed: ' + e.message)
     }

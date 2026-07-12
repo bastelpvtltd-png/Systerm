@@ -48,9 +48,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const id = String(req.query.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })
       const { data: entry } = await supabaseAdmin.from('deleted_records').select('drive_url').eq('id', id).maybeSingle()
-      if (entry?.drive_url) await deleteDriveFileByUrl(entry.drive_url).catch(() => {})
+      let driveDeleteFailed = false
+      if (entry?.drive_url) {
+        try {
+          await deleteDriveFileByUrl(entry.drive_url)
+        } catch (e: any) {
+          // The database purge still completes either way — an orphaned
+          // Drive file is recoverable (delete it by hand later), a record
+          // stuck in the bin forever because Drive is unreachable isn't.
+          // This used to fail completely silently (before the Drive auth
+          // fix, every purge's Drive delete was failing and nobody could
+          // tell), so it's at least logged now instead of swallowed.
+          driveDeleteFailed = true
+          console.error('[recycle-bin] Drive file delete failed during purge:', e.message)
+        }
+      }
       await supabaseAdmin.from('deleted_records').delete().eq('id', id)
-      return res.json({ ok: true })
+      return res.json({ ok: true, driveDeleteFailed })
     }
 
     res.status(405).end()
