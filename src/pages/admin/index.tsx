@@ -511,30 +511,56 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
 }
 
 // ── Admin/Overview "Pick History" audit log ───────────────────────────────
+// One document = one row: who uploaded/notified/picked/returned/mailed/
+// downloaded it, each cell showing the LATEST who+when (a return-then-
+// re-pick cycle updates "Picked" in place rather than adding a new row).
+// The full raw event list still exists per document — "View" opens it in a
+// popup for the rare case someone needs the entire timeline, not just the
+// latest state of each action.
+interface HistoryEvent { action: string; user_name: string; action_timestamp: string }
+interface DocHistoryRow {
+  document_id: string; file_name: string; doc_type: string; uploaded_by_name: string; uploaded_at: string
+  notify: HistoryEvent | null; pick: HistoryEvent | null; return: HistoryEvent | null
+  mail: HistoryEvent | null; download: HistoryEvent | null; look: HistoryEvent | null
+  history: HistoryEvent[]
+}
+
+function EventCell({ e }: { e: HistoryEvent | null }) {
+  if (!e) return <span className="text-gray-300">—</span>
+  return (
+    <div>
+      <p className="text-gray-700">{e.user_name || '—'}</p>
+      <p className="text-gray-400 text-[10px]">{new Date(e.action_timestamp).toLocaleString('en-GB')}</p>
+    </div>
+  )
+}
+
 function PickHistoryPanel() {
   const { has } = usePermission()
   const canDelete = has('section:pick-history.delete')
-  const [items, setItems] = useState<any[]>([])
+  const [items, setItems] = useState<DocHistoryRow[]>([])
   const [loading, setLoading] = useState(false)
   const [fileName, setFileName] = useState('')
   const [user, setUser] = useState('')
-  const [action, setAction] = useState('')
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [clearing, setClearing] = useState(false)
+  const [viewing, setViewing] = useState<DocHistoryRow | null>(null)
 
-  async function load(silent = false) {
+  async function load(silent = false, targetPage = page) {
     if (!silent) setLoading(true)
     try {
       const params = new URLSearchParams()
       if (fileName) params.set('fileName', fileName)
       if (user) params.set('user', user)
-      if (action) params.set('action', action)
+      params.set('page', String(targetPage))
       const res = await fetch(`/api/pick-history?${params.toString()}`, { headers: await authHeader() })
       const d = await res.json()
-      if (res.ok) setItems(d.items || [])
+      if (res.ok) { setItems(d.items || []); setTotalPages(d.totalPages || 1) }
     } finally { if (!silent) setLoading(false) }
   }
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(false, 1); setPage(1) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // Live updates — same polling approach as Incoming, so a new pick/return/
   // mail/download shows up here without a manual Search click.
   useEffect(() => {
@@ -542,28 +568,33 @@ function PickHistoryPanel() {
     return () => clearInterval(t)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function remove(id: string) {
-    if (!confirm('Delete this Processed History entry?')) return
-    const res = await fetch(`/api/pick-history?id=${id}`, { method: 'DELETE', headers: await authHeader() })
-    if (res.ok) setItems(prev => prev.filter(i => i.id !== id))
+  function goToPage(p: number) {
+    const clamped = Math.max(1, Math.min(totalPages, p))
+    setPage(clamped)
+    load(false, clamped)
+  }
+
+  async function remove(documentId: string) {
+    if (!confirm('Delete this Processed History entry? This only clears the history log — the uploaded file and its data are not affected.')) return
+    const res = await fetch(`/api/pick-history?document_id=${documentId}`, { method: 'DELETE', headers: await authHeader() })
+    if (res.ok) setItems(prev => prev.filter(i => i.document_id !== documentId))
     else { const d = await res.json().catch(() => ({})); alert(d.error || 'Delete failed') }
   }
 
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
   const selectedIds = Object.keys(selected).filter(id => selected[id])
   const allSelected = items.length > 0 && selectedIds.length === items.length
-  function toggleAll() { setSelected(allSelected ? {} : Object.fromEntries(items.map(i => [i.id, true]))) }
+  function toggleAll() { setSelected(allSelected ? {} : Object.fromEntries(items.map(i => [i.document_id, true]))) }
 
-  // Admin-only bulk purge — only ever removes the pick_history_log row (and
-  // its audit copy in deleted_records, same as the single-delete path). The
-  // uploaded file, its Drive copy, and the extracted data in the doc-type
-  // table are never touched by this — it's strictly clearing the audit trail,
-  // not the underlying documents.
+  // Admin-only bulk purge — only ever removes pick_history_log rows (and
+  // their audit copy in deleted_records, same as the single-delete path).
+  // The uploaded file, its Drive copy, and the extracted data in the
+  // doc-type table are never touched — strictly the audit trail.
   async function clearSelected() {
     if (!confirm(`Delete ${selectedIds.length} Processed History entr${selectedIds.length === 1 ? 'y' : 'ies'}? This only clears the history log — uploaded files and extracted data are not affected.`)) return
     setClearing(true)
     for (const id of selectedIds) {
-      try { await fetch(`/api/pick-history?id=${id}`, { method: 'DELETE', headers: await authHeader() }) } catch {}
+      try { await fetch(`/api/pick-history?document_id=${id}`, { method: 'DELETE', headers: await authHeader() }) } catch {}
     }
     setSelected({})
     setClearing(false)
@@ -584,16 +615,7 @@ function PickHistoryPanel() {
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input value={fileName} onChange={e => setFileName(e.target.value)} placeholder="File name..." className="input max-w-[160px]"/>
         <input value={user} onChange={e => setUser(e.target.value)} placeholder="User..." className="input max-w-[140px]"/>
-        <select value={action} onChange={e => setAction(e.target.value)} className="input max-w-[120px]">
-          <option value="">All actions</option>
-          <option value="notify">Notify</option>
-          <option value="pick">Pick</option>
-          <option value="return">Return</option>
-          <option value="mail">Mail</option>
-          <option value="download">Download</option>
-          <option value="look">Look</option>
-        </select>
-        <button onClick={() => load()} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
+        <button onClick={() => { setPage(1); load(false, 1) }} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
           <Search size={12}/> Search
         </button>
       </div>
@@ -602,11 +624,12 @@ function PickHistoryPanel() {
       ) : items.length === 0 ? (
         <p className="text-xs text-gray-400 text-center py-6">No history yet</p>
       ) : (
-        <div className="overflow-x-auto max-h-96 overflow-y-auto">
+        <>
+        <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table className="w-full text-xs">
             <thead className="bg-gray-50 sticky top-0"><tr>
-              {(canDelete ? [''] : []).concat(['File', 'User', 'Action', 'When']).concat(canDelete ? [''] : []).map((h, i) => (
-                <th key={h || `h${i}`} className="text-left px-2 py-1.5 text-gray-500 font-medium">
+              {(canDelete ? [''] : []).concat(['File', 'Uploaded', 'Notified', 'Picked', 'Mailed', 'Downloaded']).concat(['']).map((h, i) => (
+                <th key={h || `h${i}`} className="text-left px-2 py-1.5 text-gray-500 font-medium whitespace-nowrap">
                   {canDelete && i === 0 ? (
                     <button onClick={toggleAll} className="text-gray-400 hover:text-gray-600">
                       {allSelected ? <CheckSquare size={13} className="text-green-600"/> : <Square size={13}/>}
@@ -616,30 +639,74 @@ function PickHistoryPanel() {
               ))}
             </tr></thead>
             <tbody>
-              {items.map(h => (
-                <tr key={h.id} className="border-t border-gray-50">
+              {items.map(row => (
+                <tr key={row.document_id} className="border-t border-gray-50 align-top">
                   {canDelete && (
                     <td className="px-2 py-1.5">
-                      <button onClick={() => toggle(h.id)} className="text-gray-300 hover:text-green-600">
-                        {selected[h.id] ? <CheckSquare size={13} className="text-green-600"/> : <Square size={13}/>}
+                      <button onClick={() => toggle(row.document_id)} className="text-gray-300 hover:text-green-600">
+                        {selected[row.document_id] ? <CheckSquare size={13} className="text-green-600"/> : <Square size={13}/>}
                       </button>
                     </td>
                   )}
-                  <td className="px-2 py-1.5 text-gray-800">{h.document_uploads?.file_name || '—'}</td>
-                  <td className="px-2 py-1.5 text-gray-600">{h.user_name || '—'}</td>
-                  <td className="px-2 py-1.5 text-gray-600 capitalize">{h.action}</td>
-                  <td className="px-2 py-1.5 text-gray-400">{new Date(h.action_timestamp).toLocaleString('en-GB')}</td>
-                  {canDelete && (
-                    <td className="px-2 py-1.5">
-                      <button onClick={() => remove(h.id)} className="text-red-400 hover:text-red-600" title="Delete">
-                        <Trash2 size={12}/>
-                      </button>
-                    </td>
-                  )}
+                  <td className="px-2 py-1.5 text-gray-800 max-w-[160px] truncate">{row.file_name || '—'}</td>
+                  <td className="px-2 py-1.5"><EventCell e={{ action: 'upload', user_name: row.uploaded_by_name, action_timestamp: row.uploaded_at }}/></td>
+                  <td className="px-2 py-1.5"><EventCell e={row.notify}/></td>
+                  <td className="px-2 py-1.5">
+                    <EventCell e={row.pick}/>
+                    {row.return && row.return.action_timestamp > (row.pick?.action_timestamp || '') && (
+                      <p className="text-amber-500 text-[10px] mt-0.5">Returned — back in pool</p>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5"><EventCell e={row.mail}/></td>
+                  <td className="px-2 py-1.5"><EventCell e={row.download}/></td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => setViewing(row)} className="text-gray-400 hover:text-gray-600" title="View full history"><Eye size={13}/></button>
+                      {canDelete && (
+                        <button onClick={() => remove(row.document_id)} className="text-red-400 hover:text-red-600" title="Delete">
+                          <Trash2 size={12}/>
+                        </button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-3 mt-3 text-xs text-gray-500">
+            <button onClick={() => goToPage(page - 1)} disabled={page <= 1} className="disabled:opacity-30 hover:text-gray-800">Prev</button>
+            <span>Page {page} / {totalPages}</span>
+            <button onClick={() => goToPage(page + 1)} disabled={page >= totalPages} className="disabled:opacity-30 hover:text-gray-800">Next</button>
+          </div>
+        )}
+        </>
+      )}
+
+      {viewing && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setViewing(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b">
+              <p className="font-semibold text-sm truncate">{viewing.file_name}</p>
+              <button onClick={() => setViewing(null)} className="text-gray-400 hover:text-gray-700">✕</button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 space-y-2">
+              <div className="text-xs border border-gray-100 rounded-lg p-2.5">
+                <p className="font-medium text-gray-700 capitalize">upload</p>
+                <p className="text-gray-500">{viewing.uploaded_by_name || '—'}</p>
+                <p className="text-gray-400">{new Date(viewing.uploaded_at).toLocaleString('en-GB')}</p>
+              </div>
+              {viewing.history.map((e, i) => (
+                <div key={i} className="text-xs border border-gray-100 rounded-lg p-2.5">
+                  <p className="font-medium text-gray-700 capitalize">{e.action}</p>
+                  <p className="text-gray-500">{e.user_name || '—'}</p>
+                  <p className="text-gray-400">{new Date(e.action_timestamp).toLocaleString('en-GB')}</p>
+                </div>
+              ))}
+              {viewing.history.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No further activity yet</p>}
+            </div>
+          </div>
         </div>
       )}
     </div>
