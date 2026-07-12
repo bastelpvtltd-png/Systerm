@@ -26,51 +26,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const { user, fileName, reason } = req.query
       const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1)
-      const from = (page - 1) * PAGE_SIZE
-      const to = from + PAGE_SIZE - 1
 
-      let matchingIds: string[] | null = null
-      if (user) {
-        const { data: matches } = await supabaseAdmin
-          .from('pick_history_log').select('document_id').ilike('user_name', `%${user}%`)
-        matchingIds = [...new Set((matches || []).map(m => m.document_id).filter(Boolean))]
-      }
+      // Base this on pick_history_log, not document_uploads — a document
+      // only belongs in Processed History once something's actually
+      // happened to it (notify/pick/etc), and deleting all of its log rows
+      // must make the row disappear for good rather than resurface on the
+      // next refresh with blank action columns (document_uploads itself is
+      // never touched by delete, on purpose — it just can't be the source
+      // of which rows exist here anymore).
+      let logQuery = supabaseAdmin.from('pick_history_log').select('document_id, action, user_name, action_timestamp')
+      if (user) logQuery = logQuery.ilike('user_name', `%${user}%`)
+      const { data: userFilteredEvents } = await logQuery
+      const userMatchedIds = user ? new Set((userFilteredEvents || []).map(e => e.document_id)) : null
 
-      let query = supabaseAdmin
-        .from('document_uploads')
-        .select('id, file_name, doc_type, uploaded_by_name, created_at, reason, reason_note', { count: 'exact' })
-        .order('created_at', { ascending: false })
-        .range(from, to)
-
-      if (fileName) query = query.ilike('file_name', `%${fileName}%`)
-      if (reason) query = query.eq('reason', reason as string)
-      if (user && matchingIds) {
-        if (matchingIds.length) query = query.or(`uploaded_by_name.ilike.%${user}%,id.in.(${matchingIds.join(',')})`)
-        else query = query.ilike('uploaded_by_name', `%${user}%`)
-      }
-
-      const { data: docs, error, count } = await query
-      if (error) throw error
-
-      const docIds = (docs || []).map(d => d.id)
-      const { data: events } = docIds.length
-        ? await supabaseAdmin.from('pick_history_log').select('document_id, action, user_name, action_timestamp')
-            .in('document_id', docIds).order('action_timestamp', { ascending: true })
-        : { data: [] as any[] }
-
+      const { data: allEvents } = await supabaseAdmin.from('pick_history_log').select('document_id, action, user_name, action_timestamp')
       const eventsByDoc = new Map<string, HistoryEvent[]>()
-      for (const e of events || []) {
+      for (const e of allEvents || []) {
         if (!eventsByDoc.has(e.document_id)) eventsByDoc.set(e.document_id, [])
         eventsByDoc.get(e.document_id)!.push({ action: e.action, user_name: e.user_name, action_timestamp: e.action_timestamp })
       }
+
+      let candidateIds = [...eventsByDoc.keys()]
+      if (userMatchedIds) candidateIds = candidateIds.filter(id => userMatchedIds.has(id))
+
+      let docsQuery = supabaseAdmin.from('document_uploads').select('id, file_name, doc_type, uploaded_by_name, created_at, reason, reason_note')
+        .in('id', candidateIds.length ? candidateIds : ['00000000-0000-0000-0000-000000000000'])
+      if (fileName) docsQuery = docsQuery.ilike('file_name', `%${fileName}%`)
+      if (reason) docsQuery = docsQuery.eq('reason', reason as string)
+      const { data: docs, error } = await docsQuery
+      if (error) throw error
 
       function latest(history: HistoryEvent[], action: string): HistoryEvent | null {
         const matches = history.filter(h => h.action === action)
         return matches.length ? matches[matches.length - 1] : null
       }
 
-      const items = (docs || []).map(d => {
-        const history = eventsByDoc.get(d.id) || []
+      const allItems = (docs || []).map(d => {
+        const history = (eventsByDoc.get(d.id) || []).sort((a, b) => a.action_timestamp.localeCompare(b.action_timestamp))
         return {
           document_id: d.id,
           file_name: d.file_name,
@@ -86,10 +78,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           download: latest(history, 'download'),
           look: latest(history, 'look'),
           history,
+          _sortKey: history.length ? history[history.length - 1].action_timestamp : d.created_at,
         }
-      })
+      }).sort((a, b) => b._sortKey.localeCompare(a._sortKey))
 
-      return res.json({ items, page, pageSize: PAGE_SIZE, total: count || 0, totalPages: Math.max(1, Math.ceil((count || 0) / PAGE_SIZE)) })
+      const total = allItems.length
+      const from = (page - 1) * PAGE_SIZE
+      const items = allItems.slice(from, from + PAGE_SIZE).map(({ _sortKey, ...rest }) => rest)
+
+      return res.json({ items, page, pageSize: PAGE_SIZE, total, totalPages: Math.max(1, Math.ceil(total / PAGE_SIZE)) })
     } catch (err: any) {
       console.error('[pick-history] error:', err)
       return res.status(500).json({ error: err.message })
