@@ -437,6 +437,13 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   // the action AND deletes the document (Drive file + every trace of it) —
   // that delete is what takes it out of the Dashboard's Pending CUSDEC
   // Passed count. Declining the confirm blocks the mail/download entirely.
+  // One confirm for the whole batch, not one popup per reason-tagged item —
+  // if none of the given tasks have a reason, no prompt at all.
+  function confirmReasonDeleteBatch(tasksToCheck: any[]): boolean {
+    const reasoned = tasksToCheck.filter(t => t.document_uploads?.reason)
+    if (!reasoned.length) return true
+    return confirm(`${reasoned.length} of the selected document${reasoned.length === 1 ? '' : 's'} will be permanently removed after this. Continue with Mail/Download?`)
+  }
   function confirmReasonDelete(reason?: string | null): boolean {
     if (!reason) return true
     return confirm(`This document (reason: ${reason}) will be permanently removed after this. Continue with Mail/Download?`)
@@ -452,9 +459,9 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   // server-side (log-document-action.ts), so it's removed from view here
   // right away instead of waiting for the next full reload.
   function downloadSelected() {
-    const proceeding = selectedTasks.filter(t => confirmReasonDelete(t.document_uploads?.reason))
-    const ids = new Set(proceeding.map(t => t.id))
-    for (const t of proceeding) {
+    if (!confirmReasonDeleteBatch(selectedTasks)) return
+    const ids = new Set(selectedTasks.map(t => t.id))
+    for (const t of selectedTasks) {
       if (!t.document_uploads?.drive_url) continue
       logAction(t.document_uploads.id, 'download')
       if (t.document_uploads.reason) deleteReasonDoc(t.document_uploads.id)
@@ -465,9 +472,9 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   }
 
   function mailSelected() {
-    const proceeding = selectedTasks.filter(t => confirmReasonDelete(t.document_uploads?.reason))
-    const ids = new Set(proceeding.map(t => t.id))
-    const attachments = proceeding
+    if (!confirmReasonDeleteBatch(selectedTasks)) return
+    const ids = new Set(selectedTasks.map(t => t.id))
+    const attachments = selectedTasks
       .filter(t => t.document_uploads?.drive_url)
       .map(t => {
         logAction(t.document_uploads.id, 'mail')
