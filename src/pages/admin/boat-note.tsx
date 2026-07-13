@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search } from 'lucide-react'
+import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search, FileCode, ScanText, Copy, Save, Download, AlertTriangle } from 'lucide-react'
+import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
 
-type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note' | 'done-boat-note'
+type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note' | 'done-boat-note' | 'cusdec-xml' | 'cdn-text' | 'parties-copy'
 
 interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean }
-interface CdnRec    { id: string; code?: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; boat_note_passed?: boolean }
+interface CdnRec    { id: string; code?: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; boat_note_passed?: boolean; shipper?: string; consignee?: string }
 
 interface DocTemplate { id: string; name: string; file_name: string; drive_url: string | null; raw_text: string; placeholders: string[]; created_at: string }
 
@@ -94,11 +95,17 @@ function BoatNoteContent() {
   const canPackingList = has('section:boat-note.packing-list')
   const canBoatNote = canSelectCusdec || canSelectCdn || canOutput
   const canDoneBoatNote = has('section:boat-note.done')
+  const canCusdecXml  = has('section:boat-note.cusdec-xml')
+  const canCdnText    = has('section:boat-note.cdn-text')
+  const canPartiesCopy = has('section:boat-note.parties-copy')
   const subTabs = ([
-    ['invoice', Receipt, 'Invoice', canInvoice],
-    ['packing-list', Package, 'Packing List', canPackingList],
-    ['boat-note', Anchor, 'Boat Note', canBoatNote],
-    ['done-boat-note', ClipboardCheck, 'Done Boat Note', canDoneBoatNote],
+    ['invoice',       Receipt,       'Invoice',       canInvoice],
+    ['packing-list',  Package,       'Packing List',  canPackingList],
+    ['boat-note',     Anchor,        'Boat Note',     canBoatNote],
+    ['done-boat-note',ClipboardCheck,'Done Boat Note',canDoneBoatNote],
+    ['cusdec-xml',    FileCode,      'Cusdec XML',    canCusdecXml],
+    ['cdn-text',      ScanText,      'CDN Text',      canCdnText],
+    ['parties-copy',  Copy,          "Party's Copy",  canPartiesCopy],
   ] as const).filter(([, , , can]) => can)
   const [subTab, setSubTab] = useState<DocsCreateTab>(subTabs[0]?.[0] || 'boat-note')
   const [cusdecs, setCusdecs]   = useState<CusdecRec[]>([])
@@ -1138,6 +1145,9 @@ function BoatNoteContent() {
         )}
 
         {subTab === 'done-boat-note' && canDoneBoatNote && <DoneBoatNotePanel/>}
+        {subTab === 'cusdec-xml' && canCusdecXml && <CusdecXmlPanel/>}
+        {subTab === 'cdn-text' && canCdnText && <CdnTextPanel/>}
+        {subTab === 'parties-copy' && canPartiesCopy && <PartiesCopyPanel/>}
       </div>
   )
 }
@@ -1315,6 +1325,484 @@ function DoneBoatNotePanel() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Cusdec XML Tab ────────────────────────────────────────────────────────
+interface CusdecXmlRec extends CusdecRec {
+  date?: string; delivery_terms?: string; hs_code?: string
+  preference?: string; procedure_code?: string; pkges?: string
+}
+
+function CusdecXmlPanel() {
+  const [cusdecs, setCusdecs] = useState<CusdecXmlRec[]>([])
+  const [search, setSearch] = useState('')
+  const [selectedId, setSelectedId] = useState('')
+  const [values, setValues] = useState<XmlValues>(emptyXmlValues())
+  const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState('')
+
+  useEffect(() => {
+    function load() {
+      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    }
+    load()
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
+  }, [])
+
+  const filtered = cusdecs.filter(c =>
+    !search || c.number?.toLowerCase().includes(search.toLowerCase()) || c.exporter?.toLowerCase().includes(search.toLowerCase())
+  )
+  const selected = cusdecs.find(c => c.id === selectedId) || null
+
+  async function selectCusdec(id: string) {
+    setSelectedId(id); setStatus('')
+    const cusdec = cusdecs.find(c => c.id === id)
+    if (!cusdec) return
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/cusdec-xml?id=${id}`)
+      const d = await res.json()
+      const saved: Partial<XmlValues> = d.xml_data || {}
+      setValues({
+        ...emptyXmlValues(), ...saved,
+        regNumber: cusdec.number || '', regDate: cusdec.date || '',
+        exporterName: cusdec.exporter || '', consigneeName: cusdec.consignee || '',
+        vesselIdentity: cusdec.vessel || '',
+        deliveryTermsCode: cusdec.delivery_terms || saved.deliveryTermsCode || 'CIF',
+        locationOfGoods: cusdec.location_of_goods || '',
+        cap: cusdec.cap || saved.cap || '01',
+        hsCode: cusdec.hs_code || '', preferenceCode: cusdec.preference || saved.preferenceCode || 'APTA',
+        extendedProcedure: cusdec.procedure_code || saved.extendedProcedure || '1000',
+        totalWeight: cusdec.gross_mass || '', grossWeightItm: cusdec.gross_mass || '', netWeightItm: cusdec.net_mass || '',
+        numberOfPackages: cusdec.pkges || '', totalPackages: cusdec.pkges || '',
+      })
+    } finally { setLoading(false) }
+  }
+
+  function setField<K extends keyof XmlValues>(key: K, v: XmlValues[K]) {
+    setValues(prev => ({ ...prev, [key]: v }))
+  }
+
+  async function saveXml() {
+    if (!selected) return
+    setStatus('')
+    try {
+      const res = await fetch('/api/cusdec-xml', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: selected.id, xml_data: values }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setStatus('✓ Saved to CUSDEC record')
+    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+  }
+
+  function generateXml() {
+    const xml = buildAsycudaXml(values)
+    const blob = new Blob([xml], { type: 'application/xml' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `CUSDEC_${values.regNumber || 'export'}.xml`
+    a.click(); URL.revokeObjectURL(url)
+    setStatus('✓ XML downloaded')
+  }
+
+  const FIELD_GROUPS: { title: string; fields: [keyof XmlValues, string][] }[] = [
+    { title: 'Registration / Assessment / Receipt', fields: [
+      ['regSerial', 'Registration Serial'], ['regNumber', 'Registration Number'], ['regDate', 'Registration Date'],
+      ['assessSerial', 'Assessment Serial'], ['assessNumber', 'Assessment Number'], ['assessDate', 'Assessment Date'],
+      ['receiptSerial', 'Receipt Serial'], ['receiptNumber', 'Receipt Number'], ['receiptDate', 'Receipt Date'],
+    ]},
+    { title: 'Traders / Declarant', fields: [
+      ['exporterCode', 'Exporter Code'], ['exporterName', 'Exporter Name'], ['consigneeName', 'Consignee Name'],
+      ['declarantCode', 'Declarant Code'], ['declarantName', 'Declarant Name'], ['declarantReference', 'Declarant Reference'],
+    ]},
+    { title: 'Country / General', fields: [
+      ['countryFirstDestination', 'Country of First Destination'], ['tradingCountry', 'Trading Country'],
+      ['destinationCountryCode', 'Destination Country Code'], ['destinationCountryName', 'Destination Country Name'],
+      ['cap', 'CAP'],
+    ]},
+    { title: 'Transport', fields: [
+      ['vesselIdentity', 'Vessel'], ['borderInfoIdentity', 'Border Info (Voyage/Date)'],
+      ['deliveryTermsCode', 'Delivery Terms'], ['placeOfLoadingCode', 'Place of Loading Code'],
+      ['placeOfLoadingName', 'Place of Loading Name'], ['locationOfGoods', 'Location of Goods'],
+    ]},
+    { title: 'Financial', fields: [
+      ['bankCode', 'Bank Code'], ['bankName', 'Bank Name'], ['bankBranch', 'Bank Branch'], ['bankReference', 'Bank Reference'],
+      ['modeOfPayment', 'Mode of Payment'], ['globalTaxes', 'Global Taxes'], ['totalTaxes', 'Total Taxes'],
+    ]},
+    { title: 'Valuation', fields: [
+      ['totalCif', 'Total CIF'], ['invoiceAmountNational', 'Invoice Amount (LKR)'], ['invoiceAmountForeign', 'Invoice Amount (Foreign)'],
+      ['currencyCode', 'Currency Code'], ['totalInvoice', 'Total Invoice'], ['totalWeight', 'Total Weight'],
+    ]},
+    { title: 'Item / Packages', fields: [
+      ['numberOfPackages', 'Number of Packages'], ['marks1', 'Marks 1'], ['marks2', 'Marks 2'],
+      ['attachedDocReference', 'Attached Document Reference'], ['attachedDocDate', 'Attached Document Date'],
+    ]},
+    { title: 'Tarification / Goods', fields: [
+      ['hsCode', 'HS Code'], ['itemPrice', 'Item Price'], ['descriptionOfGoods', 'Description of Goods'],
+      ['previousDocSummaryDeclaration', 'Previous Doc (Summary Declaration)'],
+      ['licenceNumber', 'Licence Number'], ['quantityDeductedFromLicence', 'Quantity Deducted from Licence'],
+    ]},
+    { title: 'Taxation', fields: [
+      ['itemTaxesAmount', 'Item Taxes Amount'],
+      ['dutyTaxBase1', 'Duty Tax Base (CC1)'], ['dutyTaxAmount1', 'Duty Tax Amount (CC1)'],
+      ['dutyTaxBase2', 'Duty Tax Base (CED)'], ['dutyTaxAmount2', 'Duty Tax Amount (CED)'],
+    ]},
+    { title: 'Item Weight/Value', fields: [
+      ['grossWeightItm', 'Gross Weight (Item)'], ['netWeightItm', 'Net Weight (Item)'], ['statisticalValue', 'Statistical Value'],
+    ]},
+  ]
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+      <div className="card xl:col-span-1">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CUSDEC</h2>
+        <div className="relative mb-3">
+          <Search size={14} className="absolute left-2.5 top-2.5 text-gray-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search number or exporter..."
+            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+        </div>
+        <div className="space-y-1 max-h-96 overflow-y-auto">
+          {filtered.map(c => (
+            <button key={c.id} onClick={() => selectCusdec(c.id)}
+              className={`w-full text-left p-2.5 rounded-lg border text-xs ${selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
+              <p className="font-bold text-gray-800">E {c.number}</p>
+              <p className="text-gray-600 truncate">{c.exporter?.slice(0, 40)}</p>
+            </button>
+          ))}
+          {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDECs found</p>}
+        </div>
+      </div>
+      <div className="xl:col-span-2 space-y-4">
+        {!selected ? (
+          <div className="card text-center py-16 text-gray-400 text-sm">Select a CUSDEC to build its XML</div>
+        ) : loading ? (
+          <div className="card flex justify-center py-16"><Loader size={20} className="animate-spin text-gray-400"/></div>
+        ) : (
+          <>
+            {status && <p className={`text-xs font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
+            {FIELD_GROUPS.map(group => (
+              <div key={group.title} className="card">
+                <h3 className="font-semibold text-gray-900 text-sm mb-3">{group.title}</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {group.fields.map(([key, label]) => (
+                    <Field key={key} label={label}>
+                      <input value={(values[key] as string) || ''} onChange={e => setField(key, e.target.value as any)} className="input"/>
+                    </Field>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="card flex gap-3">
+              <button onClick={saveXml} className="btn-secondary flex items-center gap-2"><Save size={14}/>Save to CUSDEC record</button>
+              <button onClick={generateXml} className="btn-primary flex items-center gap-2"><Download size={14}/>Generate XML</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── CDN Text Tab ──────────────────────────────────────────────────────────
+function CdnTextPanel() {
+  const [cdns, setCdns] = useState<CdnRec[]>([])
+  const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
+  const [search, setSearch] = useState('')
+  const [selectedId, setSelectedId] = useState('')
+  const [fields, setFields] = useState<Record<string, string>>({})
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    function load() {
+      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    }
+    load()
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
+  }, [])
+
+  const filtered = cdns.filter(c => !search || c.container_no?.toLowerCase().includes(search.toLowerCase()) || c.shipper?.toLowerCase().includes(search.toLowerCase()))
+
+  function selectCdn(id: string) {
+    setSelectedId(id)
+    const cdn = cdns.find(c => c.id === id)
+    if (!cdn) return
+    const cusdec = cusdecs.find(c => c.code === cdn.code && c.number === cdn.cusdec_number)
+    setFields({
+      officeCode: cusdec?.code || cdn.code || '', year: new Date().getFullYear().toString(), serial: 'C', number: cdn.cdn_no || '',
+      shipper: cdn.shipper || '', consignee: cdn.consignee || '',
+      linkedCusdecRef: cusdec?.number || '', voyageDate: cdn.voyage_date || '', bl: cdn.bl_no || '',
+      driver: cdn.driver_name || '', terminal: '', lorry: cdn.lorry_no || '', trailer: cdn.trailer_no || '',
+      loadPort: cdn.loading_port || '', dischPort: cdn.discharge_port || '', vessel: cdn.vessel || '',
+      voc: cdn.voc || '', coc: cdn.coc || '', slpa: cdn.slpa_no || '',
+      pkgNo: cdn.pkg_no || '', pkgType: cdn.pkg_type || '', volume: cdn.volume || '',
+      goods: cdn.goods_description || '', container: cdn.container_no || '', conType: cdn.con_type || '',
+      seal: cdn.seal_no || '', marks: cdn.marks || '', gross: cdn.gross_mass || '',
+      preparedBy: '', declarantCode: '',
+    })
+  }
+
+  function setF(key: string, v: string) { setFields(prev => ({ ...prev, [key]: v })) }
+
+  const textOutput = [
+    `COD: ${fields.officeCode || ''}`, `YEA: ${fields.year || ''}`, `SER: ${fields.serial || ''}`, `NBR: ${fields.number || ''}`,
+    `COD: <unknown>`, `YEA: <unknown>`, `SER: <unknown>`, `NBR: <unknown>`,
+    `ADD: ${fields.shipper || ''}`, `ADD: ${fields.consignee || ''}`,
+    `NBR: ${fields.linkedCusdecRef || ''}`, `DAT: ${fields.voyageDate || ''}`, `BOL: ${fields.bl || ''}`,
+    `DRV: ${fields.driver || ''}`, `CLN: ${fields.terminal || ''}`, `NBR: ${fields.lorry || ''}`, `TRL: ${fields.trailer || ''}`,
+    `LOD: ${fields.loadPort || ''}`, `ULD: ${fields.dischPort || ''}`, `EXV: ${fields.vessel || ''}`,
+    `VSL: ${fields.voc || ''}`, `OPC: ${fields.coc || ''}`, `SLP: ${fields.slpa || ''}`,
+    `NBR: ${fields.pkgNo || ''}`, `TYP: ${fields.pkgType || ''}`, `VOL: ${fields.volume || ''}`,
+    `DSC: ${fields.goods || ''}`, `NBR: ${fields.container || ''}`, `TYP: ${fields.conType || ''}`,
+    `SEA: ${fields.seal || ''}`, `MRK: ${fields.marks || ''}`, `GWT: ${fields.gross || ''}`, `TMP: ...`,
+    `NAM: ${fields.preparedBy || ''}`, `DAT: ${new Date().toISOString().slice(0, 19).replace('T', ' ')}.0`,
+    `COD: ${fields.declarantCode || ''}`, `CNT: 1`,
+  ].join('\n')
+
+  function copyText() {
+    navigator.clipboard.writeText(textOutput).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+  }
+
+  const editableFieldLabels: [string, string][] = [
+    ['officeCode', 'Office Code'], ['year', 'Year'], ['serial', 'Serial'], ['number', 'CDN Number'],
+    ['shipper', 'Shipper (Address)'], ['consignee', 'Consignee (Address)'], ['linkedCusdecRef', 'Linked CUSDEC Ref'],
+    ['voyageDate', 'Voyage Date'], ['bl', 'B/L No.'], ['driver', 'Driver'], ['terminal', 'Terminal'],
+    ['lorry', 'Lorry No.'], ['trailer', 'Trailer No.'], ['loadPort', 'Loading Port'], ['dischPort', 'Discharge Port'],
+    ['vessel', 'Vessel'], ['voc', 'VOC'], ['coc', 'COC'], ['slpa', 'SLPA No.'],
+    ['pkgNo', 'Package No.'], ['pkgType', 'Package Type'], ['volume', 'Volume'], ['goods', 'Goods Description'],
+    ['container', 'Container No.'], ['conType', 'Container Type'], ['seal', 'Seal No.'], ['marks', 'Marks'], ['gross', 'Gross Mass'],
+    ['preparedBy', 'Prepared By (Name)'], ['declarantCode', 'Declarant Code'],
+  ]
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+      <div className="card xl:col-span-1">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CDN</h2>
+        <div className="relative mb-3">
+          <Search size={14} className="absolute left-2.5 top-2.5 text-gray-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container or shipper..."
+            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+        </div>
+        <div className="space-y-1 max-h-96 overflow-y-auto">
+          {filtered.map(c => (
+            <button key={c.id} onClick={() => selectCdn(c.id)}
+              className={`w-full text-left p-2.5 rounded-lg border text-xs ${selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
+              <p className="font-bold text-gray-800">{c.container_no || '—'}</p>
+              <p className="text-gray-600 truncate">{c.shipper?.slice(0, 40)}</p>
+            </button>
+          ))}
+          {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CDNs found</p>}
+        </div>
+      </div>
+      <div className="xl:col-span-2 space-y-4">
+        {!selectedId ? (
+          <div className="card text-center py-16 text-gray-400 text-sm">Select a CDN to pull its data</div>
+        ) : (
+          <>
+            <div className="card">
+              <h3 className="font-semibold text-gray-900 text-sm mb-3">Fields (auto-pulled from database — edit here only, nothing writes back)</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {editableFieldLabels.map(([key, label]) => (
+                  <Field key={key} label={label}>
+                    <input value={fields[key] || ''} onChange={e => setF(key, e.target.value)} className="input"/>
+                  </Field>
+                ))}
+              </div>
+            </div>
+            <div className="card">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-semibold text-gray-900 text-sm">Copy/Paste Text Output</h3>
+                <button onClick={copyText} className="btn-secondary flex items-center gap-2 text-xs">
+                  <Copy size={13}/>{copied ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              <textarea readOnly value={textOutput} rows={20} className="w-full font-mono text-xs border border-gray-200 rounded-lg p-3 bg-gray-50"/>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Party's Copy Tab ──────────────────────────────────────────────────────
+interface PartiesCopyCusdec extends CusdecRec { cap?: string }
+
+function PartiesCopyPanel() {
+  const [cusdecs, setCusdecs] = useState<PartiesCopyCusdec[]>([])
+  const [cdns, setCdns] = useState<CdnRec[]>([])
+  const [selectedId, setSelectedId] = useState('')
+  const [search, setSearch] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [status, setStatus] = useState('')
+
+  useEffect(() => {
+    function load() {
+      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+    }
+    load()
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
+  }, [])
+
+  const filtered = cusdecs.filter(c =>
+    !search || c.number?.toLowerCase().includes(search.toLowerCase()) || c.exporter?.toLowerCase().includes(search.toLowerCase())
+  )
+  const selected = cusdecs.find(c => c.id === selectedId) || null
+  const selectedCdns = selected ? cdns.filter(c => c.cusdec_number === selected.number) : []
+  const capNum = Number(selected?.cap || 0)
+  const cdnCount = selectedCdns.length
+  const eligible = selected && capNum > 0 && capNum === cdnCount && !selected.export_release_passed
+
+  async function generate() {
+    if (!selected || !eligible) return
+    setGenerating(true); setStatus('')
+    try {
+      const { jsPDF } = await import('jspdf')
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const PW = 210, M = 15
+      let y = M
+
+      doc.setFontSize(13).setFont('helvetica', 'bold')
+      doc.text("PARTY'S COPY", PW / 2, y, { align: 'center' }); y += 7
+      doc.setFontSize(9).setFont('helvetica', 'normal')
+      doc.text('PRIYANTHI AGENCY', PW / 2, y, { align: 'center' }); y += 10
+
+      const row = (label: string, value: string) => {
+        doc.setFont('helvetica', 'bold').setFontSize(8)
+        doc.text(label, M, y)
+        doc.setFont('helvetica', 'normal')
+        doc.text(value || '—', M + 45, y)
+        y += 6
+      }
+
+      row('CUSDEC No.:', `E ${selected.number}`)
+      row('Exporter:', selected.exporter)
+      row('Consignee:', selected.consignee)
+      row('Vessel:', selected.vessel)
+      row('Voyage:', selected.voyage_no)
+      row('B/L No.:', selected.bl_no)
+      row('Gross Mass:', selected.gross_mass ? `${selected.gross_mass} Kg` : '')
+      row('Net Mass:', selected.net_mass ? `${selected.net_mass} Kg` : '')
+      row('Discharge Port:', selected.discharge_port)
+      row('Location of Goods:', selected.location_of_goods)
+      row('CAP:', selected.cap || '')
+      y += 4
+
+      doc.setFont('helvetica', 'bold').setFontSize(8)
+      doc.text('Containers (CDN):', M, y); y += 6
+      doc.setFont('helvetica', 'normal').setFontSize(7)
+      selectedCdns.forEach((cdn, i) => {
+        doc.text(`${i + 1}. ${cdn.container_no || '—'}  CDN: ${cdn.cdn_no || '—'}  Seal: ${cdn.seal_no || '—'}  ${cdn.gross_mass || ''} Kg`, M + 3, y)
+        y += 5
+      })
+
+      y += 6
+      doc.setFontSize(7).setTextColor(150)
+      doc.text(`Generated: ${new Date().toLocaleString('en-GB')}`, M, y)
+      doc.setTextColor(0)
+
+      doc.save(`P${selected.number}.pdf`)
+      setStatus(`✓ P${selected.number}.pdf downloaded`)
+    } catch (e: any) {
+      setStatus(`✗ ${e.message}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+      <div className="card xl:col-span-1">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CUSDEC</h2>
+        <div className="relative mb-3">
+          <Search size={14} className="absolute left-2.5 top-2.5 text-gray-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search number or exporter..."
+            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-purple-400"/>
+        </div>
+        <div className="space-y-1 max-h-96 overflow-y-auto">
+          {filtered.map(c => {
+            const cCount = cdns.filter(d => d.cusdec_number === c.number).length
+            const cap = Number(c.cap || 0)
+            const ok = cap > 0 && cap === cCount && !c.export_release_passed
+            return (
+              <button key={c.id} onClick={() => { setSelectedId(c.id); setStatus('') }}
+                className={`w-full text-left p-2.5 rounded-lg border text-xs ${selectedId === c.id ? 'bg-purple-50 border-purple-300' : 'border-gray-100 hover:bg-gray-50'}`}>
+                <p className="font-bold text-gray-800">E {c.number}</p>
+                <p className="text-gray-600 truncate">{c.exporter?.slice(0, 36)}</p>
+                <p className={`text-[10px] mt-0.5 ${ok ? 'text-green-600' : 'text-gray-400'}`}>
+                  CAP {c.cap || '?'} / CDN {cCount} {ok ? '✓ eligible' : ''}
+                </p>
+              </button>
+            )
+          })}
+          {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDECs found</p>}
+        </div>
+      </div>
+
+      <div className="xl:col-span-2">
+        {!selected ? (
+          <div className="card text-center py-16 text-gray-400 text-sm">Select a CUSDEC to generate its Party's Copy</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="card">
+              <h3 className="font-semibold text-gray-900 text-sm mb-3">E {selected.number} — {selected.exporter?.slice(0, 50)}</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs mb-4">
+                <div><p className="text-gray-400">Vessel</p><p className="font-medium">{selected.vessel || '—'}</p></div>
+                <div><p className="text-gray-400">Voyage</p><p className="font-medium">{selected.voyage_no || '—'}</p></div>
+                <div><p className="text-gray-400">CAP</p><p className="font-medium">{selected.cap || '—'}</p></div>
+                <div><p className="text-gray-400">CDN Count</p><p className={`font-medium ${capNum === cdnCount && capNum > 0 ? 'text-green-600' : 'text-amber-600'}`}>{cdnCount}</p></div>
+                <div><p className="text-gray-400">Gross Mass</p><p className="font-medium">{selected.gross_mass || '—'}</p></div>
+                <div><p className="text-gray-400">Discharge Port</p><p className="font-medium">{selected.discharge_port || '—'}</p></div>
+              </div>
+
+              {!eligible && (
+                <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 mb-4">
+                  <AlertTriangle size={13} className="mt-0.5 flex-shrink-0"/>
+                  <div>
+                    {capNum === 0 && <p>CAP not set on this CUSDEC.</p>}
+                    {capNum > 0 && capNum !== cdnCount && <p>CAP ({capNum}) ≠ CDN count ({cdnCount}). All containers must be entered before generating.</p>}
+                    {selected.export_release_passed && <p>Export release already passed — Party's Copy locked.</p>}
+                  </div>
+                </div>
+              )}
+
+              {selectedCdns.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-xs font-medium text-gray-600 mb-2">Containers ({cdnCount})</p>
+                  <div className="space-y-1 max-h-40 overflow-y-auto">
+                    {selectedCdns.map((cdn, i) => (
+                      <div key={cdn.id} className="flex items-center gap-3 text-xs py-1 border-t border-gray-50">
+                        <span className="text-gray-400 w-4">{i + 1}.</span>
+                        <span className="font-medium text-gray-800">{cdn.container_no || '—'}</span>
+                        <span className="text-gray-500">CDN {cdn.cdn_no}</span>
+                        <span className="text-gray-400">{cdn.gross_mass} Kg</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {status && <p className={`text-xs mb-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
+
+              <button onClick={generate} disabled={!eligible || generating}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+                style={{ background: '#8b5cf6' }}>
+                {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                Generate P{selected.number}.pdf
+              </button>
+              <p className="text-[11px] text-gray-400 mt-2">In-memory only — PDF is downloaded directly, not saved anywhere.</p>
+            </div>
           </div>
         )}
       </div>

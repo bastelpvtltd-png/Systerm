@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase, authHeader } from '@/lib/supabase'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon } from 'lucide-react'
+import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight } from 'lucide-react'
 
 interface Task {
   id: string
@@ -230,6 +230,144 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   )
 }
 
+interface WorkCountRow {
+  id: string; user_id: string; user_name: string; document_id: string; file_name: string
+  reason: string; action: string; cdn_inc: number; cusdec_inc: number; cap_inc: number; created_at: string
+}
+interface WorkTotals { cdn_count: number; cusdec_count: number; cap_count: number }
+
+function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
+  const [totals, setTotals] = useState<WorkTotals>({ cdn_count: 0, cusdec_count: 0, cap_count: 0 })
+  const [rows, setRows] = useState<WorkCountRow[]>([])
+  const [allUsers, setAllUsers] = useState<{ name: string; cdn: number; cusdec: number; cap: number }[]>([])
+  const [expanded, setExpanded] = useState(false)
+  const [adminView, setAdminView] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  async function load() {
+    try {
+      const res = await fetch('/api/work-counts', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) { setTotals(d.totals || { cdn_count: 0, cusdec_count: 0, cap_count: 0 }); setRows(d.rows || []) }
+    } catch {}
+  }
+
+  async function loadAll() {
+    try {
+      const res = await fetch('/api/work-counts?all=1', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) {
+        const byUser: Record<string, { name: string; cdn: number; cusdec: number; cap: number }> = {}
+        for (const r of (d.rows || [])) {
+          if (!byUser[r.user_name]) byUser[r.user_name] = { name: r.user_name, cdn: 0, cusdec: 0, cap: 0 }
+          byUser[r.user_name].cdn += r.cdn_inc || 0
+          byUser[r.user_name].cusdec += r.cusdec_inc || 0
+          byUser[r.user_name].cap += r.cap_inc || 0
+        }
+        setAllUsers(Object.values(byUser))
+      }
+    } catch {}
+  }
+
+  async function deleteRow(id: string) {
+    setDeletingId(id); setError('')
+    try {
+      const res = await fetch(`/api/work-counts?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setRows(prev => prev.filter(r => r.id !== id))
+      await load()
+    } catch (e: any) { setError(e.message) }
+    finally { setDeletingId(null) }
+  }
+
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30000)
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const noData = totals.cdn_count === 0 && totals.cusdec_count === 0 && totals.cap_count === 0
+
+  return (
+    <div className="card mb-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><BarChart2 size={15}/>Count Work</h2>
+        <button onClick={() => setExpanded(x => !x)} className="text-gray-400 hover:text-gray-600">
+          {expanded ? <ChevronDown size={15}/> : <ChevronRight size={15}/>}
+        </button>
+      </div>
+
+      {noData ? (
+        <p className="text-xs text-gray-400">No processed documents yet — counts increment when you Mail or Download a document from My Picked Tasks.</p>
+      ) : (
+        <div className="grid grid-cols-3 gap-3 mb-3">
+          <div className="bg-green-50 rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-green-700">{totals.cdn_count}</p>
+            <p className="text-xs text-gray-500 mt-1">CDN Count</p>
+          </div>
+          <div className="bg-blue-50 rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-blue-700">{totals.cusdec_count}</p>
+            <p className="text-xs text-gray-500 mt-1">Cusdec Count</p>
+          </div>
+          <div className="bg-purple-50 rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-purple-700">{totals.cap_count}</p>
+            <p className="text-xs text-gray-500 mt-1">CAP Count</p>
+          </div>
+        </div>
+      )}
+
+      {expanded && !noData && (
+        <div className="mt-2">
+          {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+          <div className="max-h-48 overflow-y-auto space-y-0.5">
+            {rows.map(r => (
+              <div key={r.id} className="flex items-center justify-between text-xs py-1 border-t border-gray-50">
+                <div className="flex-1 min-w-0">
+                  <span className="text-gray-700 truncate block">{r.file_name || r.document_id}</span>
+                  <span className="text-gray-400">{r.reason} · {r.action} · {new Date(r.created_at).toLocaleDateString('en-GB')}</span>
+                </div>
+                <div className="flex items-center gap-2 ml-2 flex-shrink-0">
+                  {r.cdn_inc > 0 && <span className="text-green-600 font-medium">CDN+{r.cdn_inc}</span>}
+                  {r.cusdec_inc > 0 && <span className="text-blue-600 font-medium">Cusdec+{r.cusdec_inc}</span>}
+                  {r.cap_inc > 0 && <span className="text-purple-600 font-medium">CAP+{r.cap_inc}</span>}
+                  {isAdmin && (
+                    <button onClick={() => deleteRow(r.id)} disabled={deletingId === r.id}
+                      className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="mt-3 pt-3 border-t border-gray-100">
+          <button onClick={() => { setAdminView(x => !x); if (!adminView) loadAll() }}
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700">
+            <UsersIcon size={13}/>{adminView ? 'Hide' : 'Show'} all users (Admin)
+          </button>
+          {adminView && (
+            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {allUsers.map(u => (
+                <div key={u.name} className="border border-gray-100 rounded-lg px-3 py-2 text-xs">
+                  <p className="font-semibold text-gray-800 mb-1">{u.name}</p>
+                  <p className="text-gray-500">
+                    CDN: <b className="text-green-700">{u.cdn}</b> · Cusdec: <b className="text-blue-700">{u.cusdec}</b> · CAP: <b className="text-purple-700">{u.cap}</b>
+                  </p>
+                </div>
+              ))}
+              {allUsers.length === 0 && <p className="text-xs text-gray-400">No data yet</p>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function MyTasksPage() {
   return <MyTasksContent/>
 }
@@ -370,6 +508,8 @@ function MyTasksContent() {
           )}
         </div>
       )}
+
+      <CountWork userId={userId} isAdmin={isAdmin}/>
 
       <SalaryPayments userId={userId} isAdmin={isAdmin}/>
 

@@ -2,19 +2,16 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/router'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { useBoatNoteCreator } from '@/lib/useBoatNoteCreator'
-import { downloadBoatNotePdf } from '@/lib/boatNotePdf'
-import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
 import { yearOf } from '@/lib/flexibleDate'
 import {
-  Zap, FileCode, ScanText, Barcode as BarcodeIcon, Truck, RefreshCw, Anchor,
-  ClipboardCheck, ShieldCheck, Loader, Search, Copy, Download, Plus, Trash2,
-  StickyNote, Save, Mail, CheckSquare, Square, FileDown, AlertTriangle, Clock, Ship,
+  Zap, Barcode as BarcodeIcon, Truck, RefreshCw,
+  ClipboardCheck, ShieldCheck, Loader, Search, Copy, Plus, Trash2,
+  StickyNote, Save, Mail, CheckSquare, Square, AlertTriangle, Clock, Ship,
 } from 'lucide-react'
 
 type AutomationTab =
-  | 'xml' | 'cdn-text' | 'barcode' | 'trico' | 'data-updates'
-  | 'boat-note' | 'boat-note-check' | 'export-release' | 'vessel-trigger'
+  | 'barcode' | 'trico' | 'data-updates'
+  | 'boat-note-check' | 'export-release' | 'vessel-trigger'
   | 'notes'
 
 interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean; tin_vat?: string }
@@ -25,12 +22,9 @@ function cleanCusdecNumber(raw: string): string { return (raw || '').replace(/\D
 interface CdnRec { id: string; code: string; cusdec_number: string; shipper: string; consignee: string; container_no: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; driver_name: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; cdn_no: string; boat_note_passed?: boolean; export_release_passed?: boolean }
 
 const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: string }[] = [
-  { key: 'xml', label: 'Cusdec XML Generator', icon: FileCode, permission: 'section:automation.xml-generator' },
-  { key: 'cdn-text', label: 'CDN Text Extractor & Database', icon: ScanText, permission: 'section:automation.cdn-text' },
   { key: 'barcode', label: 'Barcode Enter', icon: BarcodeIcon, permission: 'section:automation.barcode-enter' },
   { key: 'trico', label: 'Trico Gate Passes', icon: Truck, permission: 'section:automation.trico-gate-pass' },
   { key: 'data-updates', label: 'Data Updates', icon: RefreshCw, permission: 'section:automation.data-updates' },
-  { key: 'boat-note', label: 'Boat Note Create', icon: Anchor, permission: 'section:automation.boat-note-create' },
   { key: 'boat-note-check', label: 'Boat Note Check', icon: ClipboardCheck, permission: 'section:automation.boat-note-check' },
   { key: 'export-release', label: 'Export Release Check', icon: ShieldCheck, permission: 'section:automation.export-release-check' },
   { key: 'vessel-trigger', label: 'Vessel Triggers', icon: Ship, permission: 'section:automation.vessel-trigger' },
@@ -64,7 +58,7 @@ function AutomationContent() {
   const { has } = usePermission()
   const visibleTabs = SUB_TABS.filter(t => has(t.permission))
   const router = useRouter()
-  const [tab, setTab] = useState<AutomationTab>(visibleTabs[0]?.key || 'xml')
+  const [tab, setTab] = useState<AutomationTab>(visibleTabs[0]?.key || 'barcode')
   // Lets the Dashboard's pending-work cards deep-link straight into the
   // relevant sub-tab, e.g. /admin/automation?tab=export-release.
   useEffect(() => {
@@ -91,332 +85,13 @@ function AutomationContent() {
         ))}
       </div>
 
-      {tab === 'xml' && <CusdecXmlGenerator/>}
-      {tab === 'cdn-text' && <CdnTextExtractor/>}
       {tab === 'barcode' && <RpaStub title="Barcode Enter" action="barcode-enter" description="Auto-fills the Barcode entry on the port system from a CDN's data, or lets you enter it manually."/>}
       {tab === 'trico' && <TricoGatePasses/>}
       {tab === 'data-updates' && <DataUpdates/>}
-      {tab === 'boat-note' && <BoatNoteCreate/>}
       {tab === 'boat-note-check' && <BoatNoteCheckPanel/>}
       {tab === 'export-release' && <ExportReleaseCheckPanel/>}
       {tab === 'vessel-trigger' && <VesselTriggerPanel/>}
       {tab === 'notes' && <SystemNotes/>}
-    </div>
-  )
-}
-
-// ── 2.1 Cusdec XML Generator ─────────────────────────────────────────────
-function CusdecXmlGenerator() {
-  const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
-  const [search, setSearch] = useState('')
-  const [selectedId, setSelectedId] = useState('')
-  const [values, setValues] = useState<XmlValues>(emptyXmlValues())
-  const [loading, setLoading] = useState(false)
-  const [status, setStatus] = useState('')
-
-  useEffect(() => {
-    function load() {
-      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
-    }
-    load()
-    // Live — the CUSDEC list stays current without a refresh; an open XML
-    // form (`values` below) is untouched since it's separate state.
-    const t = setInterval(load, 20000)
-    return () => clearInterval(t)
-  }, [])
-
-  const filtered = cusdecs.filter(c =>
-    !search || c.number?.toLowerCase().includes(search.toLowerCase()) || c.exporter?.toLowerCase().includes(search.toLowerCase())
-  )
-  const selected = cusdecs.find(c => c.id === selectedId) || null
-
-  async function selectCusdec(id: string) {
-    setSelectedId(id)
-    setStatus('')
-    const cusdec = cusdecs.find(c => c.id === id)
-    if (!cusdec) return
-    setLoading(true)
-    try {
-      const res = await fetch(`/api/cusdec-xml?id=${id}`)
-      const d = await res.json()
-      const saved: Partial<XmlValues> = d.xml_data || {}
-      // Database Integration: the form is seeded straight from the matching
-      // CUSDEC row so it's always in sync with what was actually declared —
-      // only the XML-only fields (not tracked as their own cusdec column)
-      // come from a previous save, if any.
-      setValues({
-        ...emptyXmlValues(),
-        ...saved,
-        regNumber: cusdec.number || '', regDate: cusdec.date || '',
-        exporterName: cusdec.exporter || '', consigneeName: cusdec.consignee || '',
-        vesselIdentity: cusdec.vessel || '',
-        deliveryTermsCode: cusdec.delivery_terms || saved.deliveryTermsCode || 'CIF',
-        locationOfGoods: cusdec.location_of_goods || '',
-        cap: cusdec.cap || saved.cap || '01',
-        hsCode: cusdec.hs_code || '', preferenceCode: cusdec.preference || saved.preferenceCode || 'APTA',
-        extendedProcedure: cusdec.procedure_code || saved.extendedProcedure || '1000',
-        totalWeight: cusdec.gross_mass || '', grossWeightItm: cusdec.gross_mass || '', netWeightItm: cusdec.net_mass || '',
-        numberOfPackages: cusdec.pkges || '', totalPackages: cusdec.pkges || '',
-      })
-    } finally { setLoading(false) }
-  }
-
-  function setField<K extends keyof XmlValues>(key: K, v: XmlValues[K]) {
-    setValues(prev => ({ ...prev, [key]: v }))
-  }
-
-  // Form fill Filter to Database Integration: only ever UPDATEs the CUSDEC
-  // row that's already selected — never inserts a new cusdec (new CUSDECs
-  // only come from the PDF/Excel upload flow).
-  async function saveXml() {
-    if (!selected) return
-    setStatus('')
-    try {
-      const res = await fetch('/api/cusdec-xml', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: selected.id, xml_data: values }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error)
-      setStatus('✓ Saved to this CUSDEC\'s record')
-    } catch (e: any) { setStatus(`✗ ${e.message}`) }
-  }
-
-  function generateXml() {
-    const xml = buildAsycudaXml(values)
-    const blob = new Blob([xml], { type: 'application/xml' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `CUSDEC_${values.regNumber || 'export'}.xml`
-    a.click()
-    URL.revokeObjectURL(url)
-    setStatus('✓ XML downloaded')
-  }
-
-  const FIELD_GROUPS: { title: string; fields: [keyof XmlValues, string][] }[] = [
-    { title: 'Registration / Assessment / Receipt', fields: [
-      ['regSerial', 'Registration Serial'], ['regNumber', 'Registration Number'], ['regDate', 'Registration Date'],
-      ['assessSerial', 'Assessment Serial'], ['assessNumber', 'Assessment Number'], ['assessDate', 'Assessment Date'],
-      ['receiptSerial', 'Receipt Serial'], ['receiptNumber', 'Receipt Number'], ['receiptDate', 'Receipt Date'],
-    ]},
-    { title: 'Traders / Declarant', fields: [
-      ['exporterCode', 'Exporter Code'], ['exporterName', 'Exporter Name'], ['consigneeName', 'Consignee Name'],
-      ['declarantCode', 'Declarant Code'], ['declarantName', 'Declarant Name'], ['declarantReference', 'Declarant Reference'],
-    ]},
-    { title: 'Country / General', fields: [
-      ['countryFirstDestination', 'Country of First Destination'], ['tradingCountry', 'Trading Country'],
-      ['destinationCountryCode', 'Destination Country Code'], ['destinationCountryName', 'Destination Country Name'],
-      ['cap', 'CAP'],
-    ]},
-    { title: 'Transport', fields: [
-      ['vesselIdentity', 'Vessel'], ['borderInfoIdentity', 'Border Info (Voyage/Date)'],
-      ['deliveryTermsCode', 'Delivery Terms'], ['placeOfLoadingCode', 'Place of Loading Code'],
-      ['placeOfLoadingName', 'Place of Loading Name'], ['locationOfGoods', 'Location of Goods'],
-    ]},
-    { title: 'Financial', fields: [
-      ['bankCode', 'Bank Code'], ['bankName', 'Bank Name'], ['bankBranch', 'Bank Branch'], ['bankReference', 'Bank Reference'],
-      ['modeOfPayment', 'Mode of Payment'], ['globalTaxes', 'Global Taxes'], ['totalTaxes', 'Total Taxes'],
-    ]},
-    { title: 'Valuation', fields: [
-      ['totalCif', 'Total CIF'], ['invoiceAmountNational', 'Invoice Amount (LKR)'], ['invoiceAmountForeign', 'Invoice Amount (Foreign)'],
-      ['currencyCode', 'Currency Code'], ['totalInvoice', 'Total Invoice'], ['totalWeight', 'Total Weight'],
-    ]},
-    { title: 'Item / Packages', fields: [
-      ['numberOfPackages', 'Number of Packages'], ['marks1', 'Marks 1'], ['marks2', 'Marks 2'],
-      ['attachedDocReference', 'Attached Document Reference'], ['attachedDocDate', 'Attached Document Date'],
-    ]},
-    { title: 'Tarification / Goods', fields: [
-      ['hsCode', 'HS Code'], ['itemPrice', 'Item Price'], ['descriptionOfGoods', 'Description of Goods'],
-      ['previousDocSummaryDeclaration', 'Previous Doc (Summary Declaration)'],
-      ['licenceNumber', 'Licence Number'], ['quantityDeductedFromLicence', 'Quantity Deducted from Licence'],
-    ]},
-    { title: 'Taxation', fields: [
-      ['itemTaxesAmount', 'Item Taxes Amount'],
-      ['dutyTaxBase1', 'Duty Tax Base (CC1)'], ['dutyTaxAmount1', 'Duty Tax Amount (CC1)'],
-      ['dutyTaxBase2', 'Duty Tax Base (CED)'], ['dutyTaxAmount2', 'Duty Tax Amount (CED)'],
-    ]},
-    { title: 'Item Weight/Value', fields: [
-      ['grossWeightItm', 'Gross Weight (Item)'], ['netWeightItm', 'Net Weight (Item)'], ['statisticalValue', 'Statistical Value'],
-    ]},
-  ]
-
-  return (
-    <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-      <div className="card xl:col-span-1">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CUSDEC</h2>
-        <div className="relative mb-3">
-          <Search size={14} className="absolute left-2.5 top-2.5 text-gray-400"/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search number or exporter..."
-            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-green-400"/>
-        </div>
-        <div className="space-y-1 max-h-96 overflow-y-auto">
-          {filtered.map(c => (
-            <button key={c.id} onClick={() => selectCusdec(c.id)}
-              className={`w-full text-left p-2.5 rounded-lg border text-xs ${selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
-              <p className="font-bold text-gray-800">E {c.number}</p>
-              <p className="text-gray-600 truncate">{c.exporter?.slice(0, 40)}</p>
-            </button>
-          ))}
-          {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDECs found</p>}
-        </div>
-      </div>
-
-      <div className="xl:col-span-2 space-y-4">
-        {!selected ? (
-          <div className="card text-center py-16 text-gray-400 text-sm">Select a CUSDEC to build its XML</div>
-        ) : loading ? (
-          <div className="card flex justify-center py-16"><Loader size={20} className="animate-spin text-gray-400"/></div>
-        ) : (
-          <>
-            {status && <p className={`text-xs font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
-            {FIELD_GROUPS.map(group => (
-              <div key={group.title} className="card">
-                <h3 className="font-semibold text-gray-900 text-sm mb-3">{group.title}</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {group.fields.map(([key, label]) => (
-                    <Field key={key} label={label}>
-                      <input value={values[key] as string} onChange={e => setField(key, e.target.value as any)} className="input"/>
-                    </Field>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <div className="card flex gap-3">
-              <button onClick={saveXml} className="btn-secondary flex items-center gap-2"><Save size={14}/>Save to CUSDEC record</button>
-              <button onClick={generateXml} className="btn-primary flex items-center gap-2"><Download size={14}/>Generate XML</button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── 2.2 CDN Text Extractor & Database ────────────────────────────────────
-// Read-only formatter: pulls an existing CDN + its CUSDEC row and lays them
-// out as the exact copy/paste "KEY: value" block the port system expects.
-// Nothing here writes back to cusdec/cdn — only the local text/edits below.
-function CdnTextExtractor() {
-  const [cdns, setCdns] = useState<CdnRec[]>([])
-  const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
-  const [search, setSearch] = useState('')
-  const [selectedId, setSelectedId] = useState('')
-  const [fields, setFields] = useState<Record<string, string>>({})
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    function load() {
-      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
-      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
-    }
-    load()
-    // Live — the picker lists stay current; an already-selected/edited
-    // `fields` block (below) is separate state and untouched by this.
-    const t = setInterval(load, 20000)
-    return () => clearInterval(t)
-  }, [])
-
-  const filtered = cdns.filter(c => !search || c.container_no?.toLowerCase().includes(search.toLowerCase()) || c.shipper?.toLowerCase().includes(search.toLowerCase()))
-
-  function selectCdn(id: string) {
-    setSelectedId(id)
-    const cdn = cdns.find(c => c.id === id)
-    if (!cdn) return
-    const cusdec = cusdecs.find(c => c.code === cdn.code && c.number === cdn.cusdec_number)
-    setFields({
-      officeCode: cusdec?.code || cdn.code || '', year: new Date().getFullYear().toString(), serial: 'C', number: cdn.cdn_no || '',
-      shipper: cdn.shipper || '', consignee: cdn.consignee || '',
-      linkedCusdecRef: cusdec?.number || '', voyageDate: cdn.voyage_date || '', bl: cdn.bl_no || '',
-      driver: cdn.driver_name || '', terminal: '', lorry: cdn.lorry_no || '', trailer: cdn.trailer_no || '',
-      loadPort: cdn.loading_port || '', dischPort: cdn.discharge_port || '', vessel: cdn.vessel || '',
-      voc: cdn.voc || '', coc: cdn.coc || '', slpa: cdn.slpa_no || '',
-      pkgNo: cdn.pkg_no || '', pkgType: cdn.pkg_type || '', volume: cdn.volume || '',
-      goods: cdn.goods_description || '', container: cdn.container_no || '', conType: cdn.con_type || '',
-      seal: cdn.seal_no || '', marks: cdn.marks || '', gross: cdn.gross_mass || '',
-      preparedBy: '', declarantCode: '',
-    })
-  }
-
-  function setF(key: string, v: string) { setFields(prev => ({ ...prev, [key]: v })) }
-
-  const textOutput = [
-    `COD: ${fields.officeCode || ''}`, `YEA: ${fields.year || ''}`, `SER: ${fields.serial || ''}`, `NBR: ${fields.number || ''}`,
-    `COD: <unknown>`, `YEA: <unknown>`, `SER: <unknown>`, `NBR: <unknown>`,
-    `ADD: ${fields.shipper || ''}`, `ADD: ${fields.consignee || ''}`,
-    `NBR: ${fields.linkedCusdecRef || ''}`, `DAT: ${fields.voyageDate || ''}`, `BOL: ${fields.bl || ''}`,
-    `DRV: ${fields.driver || ''}`, `CLN: ${fields.terminal || ''}`, `NBR: ${fields.lorry || ''}`, `TRL: ${fields.trailer || ''}`,
-    `LOD: ${fields.loadPort || ''}`, `ULD: ${fields.dischPort || ''}`, `EXV: ${fields.vessel || ''}`,
-    `VSL: ${fields.voc || ''}`, `OPC: ${fields.coc || ''}`, `SLP: ${fields.slpa || ''}`,
-    `NBR: ${fields.pkgNo || ''}`, `TYP: ${fields.pkgType || ''}`, `VOL: ${fields.volume || ''}`,
-    `DSC: ${fields.goods || ''}`, `NBR: ${fields.container || ''}`, `TYP: ${fields.conType || ''}`,
-    `SEA: ${fields.seal || ''}`, `MRK: ${fields.marks || ''}`, `GWT: ${fields.gross || ''}`, `TMP: ...`,
-    `NAM: ${fields.preparedBy || ''}`, `DAT: ${new Date().toISOString().slice(0, 19).replace('T', ' ')}.0`,
-    `COD: ${fields.declarantCode || ''}`, `CNT: 1`,
-  ].join('\n')
-
-  function copyText() {
-    navigator.clipboard.writeText(textOutput).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
-  }
-
-  const editableFieldLabels: [string, string][] = [
-    ['officeCode', 'Office Code'], ['year', 'Year'], ['serial', 'Serial'], ['number', 'CDN Number'],
-    ['shipper', 'Shipper (Address)'], ['consignee', 'Consignee (Address)'], ['linkedCusdecRef', 'Linked CUSDEC Ref (unclear mapping — confirm)'],
-    ['voyageDate', 'Voyage Date'], ['bl', 'B/L No.'], ['driver', 'Driver'], ['terminal', 'Terminal'],
-    ['lorry', 'Lorry No.'], ['trailer', 'Trailer No.'], ['loadPort', 'Loading Port'], ['dischPort', 'Discharge Port'],
-    ['vessel', 'Vessel'], ['voc', 'VOC'], ['coc', 'COC'], ['slpa', 'SLPA No.'],
-    ['pkgNo', 'Package No.'], ['pkgType', 'Package Type'], ['volume', 'Volume'], ['goods', 'Goods Description'],
-    ['container', 'Container No.'], ['conType', 'Container Type'], ['seal', 'Seal No.'], ['marks', 'Marks'], ['gross', 'Gross Mass'],
-    ['preparedBy', 'Prepared By (Name)'], ['declarantCode', 'Declarant Code'],
-  ]
-
-  return (
-    <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-      <div className="card xl:col-span-1">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CDN</h2>
-        <div className="relative mb-3">
-          <Search size={14} className="absolute left-2.5 top-2.5 text-gray-400"/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container or shipper..."
-            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-green-400"/>
-        </div>
-        <div className="space-y-1 max-h-96 overflow-y-auto">
-          {filtered.map(c => (
-            <button key={c.id} onClick={() => selectCdn(c.id)}
-              className={`w-full text-left p-2.5 rounded-lg border text-xs ${selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
-              <p className="font-bold text-gray-800">{c.container_no || '—'}</p>
-              <p className="text-gray-600 truncate">{c.shipper?.slice(0, 40)}</p>
-            </button>
-          ))}
-          {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CDNs found</p>}
-        </div>
-      </div>
-
-      <div className="xl:col-span-2 space-y-4">
-        {!selectedId ? (
-          <div className="card text-center py-16 text-gray-400 text-sm">Select a CDN to pull its data</div>
-        ) : (
-          <>
-            <div className="card">
-              <h3 className="font-semibold text-gray-900 text-sm mb-3">Fields (auto-pulled from database — edit here only, nothing writes back)</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {editableFieldLabels.map(([key, label]) => (
-                  <Field key={key} label={label}>
-                    <input value={fields[key] || ''} onChange={e => setF(key, e.target.value)} className="input"/>
-                  </Field>
-                ))}
-              </div>
-            </div>
-            <div className="card">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-gray-900 text-sm">Copy/Paste Text Output</h3>
-                <button onClick={copyText} className="btn-secondary flex items-center gap-2 text-xs">
-                  <Copy size={13}/>{copied ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
-              <textarea readOnly value={textOutput} rows={20} className="w-full font-mono text-xs border border-gray-200 rounded-lg p-3 bg-gray-50"/>
-            </div>
-          </>
-        )}
-      </div>
     </div>
   )
 }
@@ -500,115 +175,7 @@ function DataUpdates() {
   )
 }
 
-// ── Boat Note Create (shared with Docs Create) ────────────────────────────
-function BoatNoteCreate() {
-  const bn = useBoatNoteCreator()
-  const cur = bn.cusdecs.find(c => c.id === bn.selCusdec)
-  const statusColor = bn.status.startsWith('✓') ? 'text-green-600' : bn.status.startsWith('⚠') ? 'text-amber-600' : 'text-red-600'
-
-  return (
-    <div>
-      <p className="text-gray-500 text-sm mb-4">Same Boat Note creation as Docs Create → Boat Note. Select CUSDEC → CDNs → Generate → Download / Email.</p>
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="card">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-gray-900 text-sm">1 · Select CUSDEC</h2>
-            <button onClick={() => bn.loadCusdecs()} className="text-gray-400 hover:text-gray-600"><RefreshCw size={13}/></button>
-          </div>
-          {bn.loading ? (
-            <div className="flex justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
-          ) : bn.cusdecs.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-6">No CUSDECs — import Excel file first</p>
-          ) : (
-            <div className="space-y-1 max-h-72 overflow-y-auto">
-              {bn.cusdecs.map(c => (
-                <button key={c.id} onClick={() => { bn.setSelCusdec(c.id); bn.setSelCdns([]) }}
-                  className={`w-full text-left p-2.5 rounded-lg border text-xs ${bn.selCusdec === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
-                  <p className="font-bold text-gray-800">E {c.number}</p>
-                  <p className="text-gray-600 truncate mt-0.5">{c.exporter?.slice(0, 40)}</p>
-                  <p className="text-gray-400 mt-0.5">{c.vessel} · {c.voyage_no}</p>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="card">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-gray-900 text-sm">2 · Select Containers (CDN)</h2>
-            {bn.cdns.length > 0 && (
-              <div className="flex gap-2 text-xs">
-                <button onClick={() => bn.setSelCdns(bn.cdns.map(c => c.id))} className="text-blue-600 hover:text-blue-800">All</button>
-                <button onClick={() => bn.setSelCdns([])} className="text-gray-400">None</button>
-              </div>
-            )}
-          </div>
-          {!bn.selCusdec ? (
-            <p className="text-xs text-gray-400 text-center py-6">Select a CUSDEC first</p>
-          ) : bn.cdns.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-6">No CDNs found for CUSDEC {cur?.number}</p>
-          ) : (
-            <div className="space-y-1 max-h-64 overflow-y-auto mb-3">
-              {bn.cdns.map(cdn => {
-                const on = bn.selCdns.includes(cdn.id)
-                return (
-                  <button key={cdn.id} onClick={() => bn.toggleCdn(cdn.id)}
-                    className={`w-full flex items-start gap-2 text-left p-2.5 rounded-lg border text-xs ${on ? 'bg-green-50 border-green-300' : 'border-gray-100 hover:bg-gray-50'}`}>
-                    {on ? <CheckSquare size={13} className="text-green-500 flex-shrink-0 mt-0.5"/> : <Square size={13} className="text-gray-300 flex-shrink-0 mt-0.5"/>}
-                    <div>
-                      <p className="font-bold text-gray-800">{cdn.container_no || '—'}</p>
-                      <p className="text-gray-500">CDN: {cdn.cdn_no} · {cdn.goods_description || '—'}</p>
-                      <p className="text-gray-400">{cdn.gross_mass} Kg · Driver: {cdn.driver_name?.slice(0, 18)}</p>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          <button onClick={bn.generate} disabled={bn.generating || !bn.selCusdec || !bn.selCdns.length}
-            className="mt-2 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40" style={{ background: '#3b82f6' }}>
-            {bn.generating ? <Loader size={14} className="animate-spin"/> : <Anchor size={14}/>}
-            Generate {bn.selCdns.length > 0 ? `(${bn.selCdns.length})` : ''} Boat Note{bn.selCdns.length !== 1 ? 's' : ''}
-          </button>
-        </div>
-
-        <div className="card">
-          <h2 className="font-semibold text-gray-900 text-sm mb-3">3 · Download / Email</h2>
-          {bn.status && <p className={`text-xs mb-3 font-medium ${statusColor}`}>{bn.status}</p>}
-          {bn.boatNotes.length > 0 ? (
-            <>
-              <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4">
-                <p className="text-xs font-bold text-green-700 mb-1.5">CUSDEC E {bn.cusdecNo} · {bn.boatNotes.length} container{bn.boatNotes.length !== 1 ? 's' : ''}</p>
-                <div className="space-y-0.5">
-                  {bn.boatNotes.map((n, i) => <p key={i} className="text-xs text-green-700">{i + 1}. {n.container_no} · CDN {n.cdn_no} · {n.gross_mass} Kg</p>)}
-                </div>
-              </div>
-              <button onClick={() => downloadBoatNotePdf(bn.boatNotes, bn.cusdecNo)}
-                className="w-full flex items-center justify-center gap-2 py-2.5 mb-3 rounded-lg text-sm text-white font-medium" style={{ background: '#1B3A5C' }}>
-                <FileDown size={14}/> Download PDF (Exp 3a format)
-              </button>
-              <div className="border-t border-gray-100 pt-3 space-y-2">
-                <p className="text-xs font-medium text-gray-600">Send Email</p>
-                <input value={bn.emailTo} onChange={e => bn.setEmailTo(e.target.value)} className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2" placeholder="recipient@email.com"/>
-                <button onClick={bn.sendEmail} disabled={bn.sending || !bn.emailTo}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40" style={{ background: '#22A87A' }}>
-                  {bn.sending ? <Loader size={14} className="animate-spin"/> : <Mail size={14}/>}Send Email
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <Anchor size={32} className="text-gray-200 mb-3"/>
-              <p className="text-sm text-gray-400">Select CUSDEC + containers<br/>then click Generate</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── 2.5 Status Checks (Boat Note Check / Export Release Check) ──────────
+// ── Status Checks (Boat Note Check / Export Release Check) ──────────
 // Both hit the real public (no-login) lookup on each site directly — see
 // src/pages/api/boat-note-check.ts and export-release-check.ts for how the
 // request/response shape was confirmed against the live pages. Each offers
