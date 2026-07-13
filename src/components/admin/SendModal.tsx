@@ -38,12 +38,12 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
   // otherwise completely normal send.
   const [reason, setReason] = useState('')
   const [reasonNote, setReasonNote] = useState('')
-  // Only shown for "CUSDEC Passed" — if this matches an open Shipment Entry
-  // (temporary_shipments.reference), the send is treated as a real Save
-  // (extracted + saved to Drive + the cusdec table, then merged into that
-  // Shipment Entry — see matchAndMergeShipment) even if Save itself is left
-  // unticked. No match (or left blank) falls through to the normal
-  // Save-ticked-or-not behavior, unchanged.
+  // Only shown for "CUSDEC Passed" — the Save tick is the only thing that
+  // decides whether this is a real save, never overridden automatically.
+  // Reference only does anything when Save is also ticked: if it matches an
+  // open Shipment Entry (temporary_shipments.reference), the save gets
+  // merged into that entry too (see matchAndMergeShipment) instead of
+  // standing alone. Left blank, or Save left unticked, changes nothing.
   const [reference, setReference] = useState('')
   const isTemporaryReason = reason === 'CUSDEC Passed'
 
@@ -73,20 +73,19 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
     setBusy(true); setError('')
     try {
       let files: SendResultFile[] = []
-      // A matching Reference forces a real save regardless of the Save
-      // tick — that's the whole point of typing one in for a "CUSDEC
-      // Passed" send (attach it to the open Shipment Entry instead of
-      // treating it as temporary).
+      const effectiveSave = save
+      const effectiveNotify = notify || isTemporaryReason
+      // Reference only matters when a real save is actually happening — it
+      // never overrides the Save tick itself, only decides whether this
+      // save also attaches to a matching Shipment Entry.
       let matchedReference: string | undefined
-      if (isTemporaryReason && reference.trim()) {
+      if (effectiveSave && isTemporaryReason && reference.trim()) {
         try {
           const r = await fetch(`/api/temp-shipments?reference=${encodeURIComponent(reference.trim())}`, { headers: await authHeader() })
           const d = await r.json()
           if (r.ok && d.shipments?.length) matchedReference = reference.trim()
-        } catch { /* lookup failure just falls through to normal behavior */ }
+        } catch { /* lookup failure just falls through — saves without a shipment merge */ }
       }
-      const effectiveSave = save || !!matchedReference
-      const effectiveNotify = notify || isTemporaryReason
       if (effectiveSave) {
         const r = await onSave(matchedReference)
         if (!r.ok) throw new Error(r.error || 'Save failed')
@@ -173,11 +172,12 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
               <>
                 <input value={reference} onChange={e => setReference(e.target.value)} placeholder="Shipment Entry Reference (optional)..." className="input text-sm mt-1.5"/>
                 {save ? (
-                  <p className="text-[11px] text-gray-500 mt-1.5">Save is ticked — this will be saved to Drive + the database like a normal document, and won't be deleted after Mail/Download.</p>
-                ) : reference.trim() ? (
-                  <p className="text-[11px] text-gray-500 mt-1.5">If "{reference.trim()}" matches an open Shipment Entry, this will be saved and attached to it — otherwise it stays Drive + Notify only and gets deleted after Mail/Download.</p>
+                  <p className="text-[11px] text-gray-500 mt-1.5">
+                    Save is ticked — this will be saved to Drive + the database like a normal document, and won't be deleted after Mail/Download.
+                    {reference.trim() && ` If "${reference.trim()}" matches an open Shipment Entry, it'll be attached to it too.`}
+                  </p>
                 ) : (
-                  <p className="text-[11px] text-amber-600 mt-1.5">"CUSDEC Passed" sends this to Drive + Notify only (tick Save above, or enter a matching Shipment Entry Reference, to also save it to the database) — otherwise it gets deleted the moment whoever picks it does Mail/Download.</p>
+                  <p className="text-[11px] text-amber-600 mt-1.5">"CUSDEC Passed" sends this to Drive + Notify only (tick Save above to also save it to the database — a Reference above only takes effect together with Save) — it gets deleted the moment whoever picks it does Mail/Download.</p>
                 )}
               </>
             )}
