@@ -34,6 +34,18 @@ type PdfField = {
 type Panel = 'upload' | 'preview' | 'admin-edit'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error' | 'skipped'
 
+// CDN's container_no is expected to be the standard ISO 6346 shape (4
+// letters + 7 digits, no space — see textClean.ts's CONTAINERNO() formula).
+// Flagged here as a visible error rather than silently accepted/rejected —
+// the field stays a normal editable textarea either way, this only warns
+// when what's currently in it doesn't look right so it can be hand-corrected
+// before Save/Send.
+function isBadContainerNo(docType: string | undefined, field: PdfField): boolean {
+  if (docType !== 'cdn' || field.key !== 'container_no') return false
+  const v = field.value.trim()
+  return !!v && !/^[A-Z]{4}\d{7}$/.test(v.toUpperCase())
+}
+
 interface PctBox { x: number; y: number; w: number; h: number; page?: number }
 
 interface UploadItem {
@@ -1457,7 +1469,12 @@ function DocumentsUploadContent() {
                               <td className="px-2 py-1.5">
                                 <textarea value={f.value} disabled={f.locked} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
                                   placeholder="—" rows={f.value.includes('\n') ? Math.min(4, f.value.split('\n').length) : 1}
-                                  className="w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-current focus:outline-none py-0.5 text-gray-800 disabled:text-gray-400 resize-none leading-tight"/>
+                                  className={`w-full bg-transparent border-b focus:outline-none py-0.5 text-gray-800 disabled:text-gray-400 resize-none leading-tight ${
+                                    isBadContainerNo(selectedItem.detectedType, f) ? 'border-red-400 bg-red-50 focus:border-red-500' : 'border-transparent hover:border-gray-200 focus:border-current'
+                                  }`}/>
+                                {isBadContainerNo(selectedItem.detectedType, f) && (
+                                  <p className="text-[10px] text-red-600 mt-0.5">Container No. format eka waradi — 4 akuru (A-Z) + 7 ilakkam wenna one (space nathuwa), e.g. MSCU1234567. Hariyata edit karanna.</p>
+                                )}
                                 <input value={f.excludeWords || ''} disabled={f.locked}
                                   onChange={e => updateFieldRuleText(selectedItem.id, i, { excludeWords: e.target.value })}
                                   onBlur={() => commitFieldRules(selectedItem.id, i)}
