@@ -76,7 +76,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (r.passed) passedCount++
       } catch { /* keep going through the rest of the batch */ }
     }
-    await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'boat_note')
+    // Only spend this panel's interval when there was actually something to
+    // check — an empty run (nothing CAP-complete/pending right now) doesn't
+    // reset last_run_at, so the very next ping tries again immediately
+    // instead of waiting out the rest of the interval for no reason. Once
+    // real data shows up it gets picked up on the next ping and only then
+    // does the interval actually start counting down again.
+    if (pending.length) await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'boat_note')
     results.boat_note = { checked: pending.length, passed: passedCount }
   } else {
     results.boat_note = { skipped: true, reason: 'not due yet' }
@@ -107,7 +113,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (r.passed) passedCount++
       } catch { /* keep going through the rest of the batch */ }
     }
-    await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'export_release')
+    // Same as boat_note above — don't spend the interval on an empty run.
+    if (pending.length) await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'export_release')
     results.export_release = { checked: pending.length, passed: passedCount }
   } else {
     results.export_release = { skipped: true, reason: 'not due yet' }
