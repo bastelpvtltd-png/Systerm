@@ -49,6 +49,15 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
     setNotify(checked)
     if (checked && !isTemporaryReason) setSave(true)
   }
+  // Save has its own default (ticked) that carries over from whatever it was
+  // before — but "CUSDEC Passed" specifically means "temporary unless I say
+  // otherwise", so picking that reason resets Save to unticked instead of
+  // leaving it on from the default. The user still has full control to tick
+  // it back on right after; this only changes what it starts as.
+  function setReasonChecked(value: string) {
+    setReason(value)
+    if (value === 'CUSDEC Passed') setSave(false)
+  }
   const [error, setError] = useState('')
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
 
@@ -106,7 +115,12 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
       <div className="bg-white rounded-2xl w-full max-w-sm">
         <div className="flex items-center justify-between p-5 border-b">
           <h2 className="font-bold text-gray-900">Send</h2>
-          <button onClick={onClose}><X size={20}/></button>
+          {/* Closing this while busy used to silently swallow the Mail step —
+              handleDone's setEmailAttachments landed on an already-unmounted
+              modal, so the Mail window that should've popped up right after
+              Save finished just never appeared. Disabled instead of hidden,
+              so it's clear this is temporary, not gone. */}
+          <button onClick={onClose} disabled={busy}><X size={20} className={busy ? 'opacity-30' : ''}/></button>
         </div>
         <div className="p-5 space-y-3">
           <p className="text-xs text-gray-500 truncate">{label}</p>
@@ -130,7 +144,7 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
 
           <div className="pt-1">
             <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>
-            <select value={reason} onChange={e => setReason(e.target.value)} className="input text-sm">
+            <select value={reason} onChange={e => setReasonChecked(e.target.value)} className="input text-sm">
               {REASON_OPTIONS.map(r => <option key={r} value={r}>{r || '— None —'}</option>)}
             </select>
             {reason === 'Other' && (
@@ -148,7 +162,7 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
           {error && <p className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
         </div>
         <div className="flex gap-3 p-5 border-t">
-          <button onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+          <button onClick={onClose} disabled={busy} className="btn-secondary flex-1 disabled:opacity-50">Cancel</button>
           <button onClick={handleDone} disabled={busy || (!save && !mail && !notify && !isTemporaryReason)} className="btn-primary flex-1 flex items-center justify-center gap-2">
             {busy ? <Loader size={14} className="animate-spin"/> : null}Done
           </button>
