@@ -7,6 +7,17 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// Auto-generated, not typed in — {first 4 letters of shipper}-{year}-{random
+// 6 digits}, e.g. "ACME-2026-483920". The random suffix (not a running
+// count) avoids a collision check against already-merged/deleted rows this
+// table doesn't have visibility into.
+function generateReference(shipper: string): string {
+  const code = (shipper || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4) || 'GEN'
+  const year = new Date().getFullYear()
+  const rand = Math.floor(100000 + Math.random() * 900000)
+  return `${code}-${year}-${rand}`
+}
+
 // CRUD for the "Shipment" tab's temporary_shipments table — entries live
 // here (not in cusdec/cdn) until a matching CUSDEC upload merges and
 // deletes them (see save-to-table.ts's cusdec auto-match step).
@@ -30,14 +41,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
-      const { reference, shipper, invoice_number, packing_number, consignee } = req.body
+      const { shipper, invoice_number, packing_number, consignee } = req.body
       if (!shipper || !invoice_number) {
         return res.status(400).json({ error: 'Shipper and Shipment Invoice Number are required' })
       }
       const { data, error } = await supabaseAdmin
         .from('temporary_shipments')
         .insert({
-          reference: reference || null,
+          reference: generateReference(shipper),
           shipper,
           invoice_number,
           packing_number: packing_number || null,

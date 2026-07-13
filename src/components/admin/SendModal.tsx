@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { X, Loader, Save, Mail, Bell, AlertTriangle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { X, Loader, Save, Mail, Bell, AlertTriangle, Link2 } from 'lucide-react'
 import { authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from './EmailPdfModal'
 
@@ -40,12 +40,24 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
   const [reasonNote, setReasonNote] = useState('')
   // Only shown for "CUSDEC Passed" — the Save tick is the only thing that
   // decides whether this is a real save, never overridden automatically.
-  // Reference only does anything when Save is also ticked: if it matches an
-  // open Shipment Entry (temporary_shipments.reference), the save gets
-  // merged into that entry too (see matchAndMergeShipment) instead of
-  // standing alone. Left blank, or Save left unticked, changes nothing.
+  // Reference only does anything when Save is also ticked: picking an open
+  // Shipment Entry here merges the save into that entry too (see
+  // matchAndMergeShipment) instead of standing alone. Off by default (a
+  // toggle, not always shown) since most CUSDEC Passed sends aren't tied to
+  // one — one Shipment Entry only ever matches one CUSDEC, so once it's
+  // picked and merged it disappears from this list for everyone else.
+  const [useReference, setUseReference] = useState(false)
   const [reference, setReference] = useState('')
+  const [shipments, setShipments] = useState<{ id: string; reference: string; shipper: string; invoice_number: string }[]>([])
   const isTemporaryReason = reason === 'CUSDEC Passed'
+
+  useEffect(() => {
+    if (!useReference) return
+    authHeader().then(h => fetch('/api/temp-shipments', { headers: h }))
+      .then(r => r.json())
+      .then(d => setShipments((d.shipments || []).filter((s: any) => s.reference)))
+      .catch(() => {})
+  }, [useReference])
 
   // Notify requires Save (you can't let people Pick something that was never
   // actually persisted) — Mail has no such requirement. Ticking Notify forces
@@ -64,6 +76,7 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
   function setReasonChecked(value: string) {
     setReason(value)
     if (value === 'CUSDEC Passed') setSave(false)
+    else { setUseReference(false); setReference('') }
   }
   const [error, setError] = useState('')
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
@@ -170,14 +183,27 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
             )}
             {isTemporaryReason && (
               <>
-                <input value={reference} onChange={e => setReference(e.target.value)} placeholder="Shipment Entry Reference (optional)..." className="input text-sm mt-1.5"/>
+                <button type="button" onClick={() => { setUseReference(x => !x); setReference('') }}
+                  className={`w-full flex items-center gap-2 mt-1.5 px-3 py-2 rounded-lg text-xs font-medium border ${
+                    useReference ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                  }`}>
+                  <Link2 size={13}/> Attach to a Shipment Entry {useReference ? '(on)' : '(off)'}
+                </button>
+                {useReference && (
+                  <select value={reference} onChange={e => setReference(e.target.value)} className="input text-sm mt-1.5">
+                    <option value="">— Select Shipment Entry —</option>
+                    {shipments.map(s => (
+                      <option key={s.id} value={s.reference}>{s.reference} — {s.shipper} ({s.invoice_number})</option>
+                    ))}
+                  </select>
+                )}
                 {save ? (
                   <p className="text-[11px] text-gray-500 mt-1.5">
                     Save is ticked — this will be saved to Drive + the database like a normal document, and won't be deleted after Mail/Download.
-                    {reference.trim() && ` If "${reference.trim()}" matches an open Shipment Entry, it'll be attached to it too.`}
+                    {reference && ` It'll also be attached to "${reference}".`}
                   </p>
                 ) : (
-                  <p className="text-[11px] text-amber-600 mt-1.5">"CUSDEC Passed" sends this to Drive + Notify only (tick Save above to also save it to the database — a Reference above only takes effect together with Save) — it gets deleted the moment whoever picks it does Mail/Download.</p>
+                  <p className="text-[11px] text-amber-600 mt-1.5">"CUSDEC Passed" sends this to Drive + Notify only (tick Save above to also save it to the database) — it gets deleted the moment whoever picks it does Mail/Download.</p>
                 )}
               </>
             )}

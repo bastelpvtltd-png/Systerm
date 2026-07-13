@@ -20,7 +20,7 @@ interface TempShipment {
   created_at: string
 }
 
-const emptyForm = { reference: '', shipper: '', invoice_number: '', packing_number: '', consignee: '' }
+const emptyForm = { shipper: '', invoice_number: '', packing_number: '', consignee: '' }
 
 function ShipmentEntryContent() {
   const { has } = usePermission()
@@ -96,7 +96,7 @@ function ShipmentEntryContent() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Shipment Entry</h1>
-          <p className="text-gray-500 text-sm">Open a shipment as soon as an order arrives — merges into CUSDEC automatically once uploaded</p>
+          <p className="text-gray-500 text-sm">Open a shipment as soon as an order arrives — merges into CUSDEC automatically once uploaded. Reference is auto-generated from the Shipper + year.</p>
         </div>
       </div>
 
@@ -107,12 +107,7 @@ function ShipmentEntryContent() {
       )}
 
       <div className="card mb-6">
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Reference</label>
-            <input value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-          </div>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Shipper *</label>
             <input value={form.shipper} onChange={e => setForm({ ...form, shipper: e.target.value })}
