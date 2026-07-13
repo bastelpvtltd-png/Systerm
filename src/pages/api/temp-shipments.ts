@@ -16,10 +16,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     if (req.method === 'GET') {
-      const { data, error } = await supabaseAdmin
-        .from('temporary_shipments')
-        .select('*')
-        .order('created_at', { ascending: false })
+      // ?reference= is used by SendModal's "CUSDEC Passed" flow to check
+      // whether a typed Reference matches an open Shipment Entry before
+      // deciding whether to do a real save (see save-to-table.ts's
+      // matchAndMergeShipment) — otherwise this returns every open entry,
+      // as the Shipment Entry page itself uses it.
+      let query = supabaseAdmin.from('temporary_shipments').select('*').order('created_at', { ascending: false })
+      const reference = String(req.query.reference || '').trim()
+      if (reference) query = query.eq('reference', reference)
+      const { data, error } = await query
       if (error) return res.status(400).json({ error: error.message })
       return res.json({ shipments: data || [] })
     }

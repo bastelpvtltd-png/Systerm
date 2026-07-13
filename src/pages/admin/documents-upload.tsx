@@ -407,7 +407,7 @@ function DocumentsUploadContent() {
   // the doc-type's structured table row. mode/replaceId decide whether
   // save-to-table deletes a matched row first (+ its Drive file) or just
   // inserts alongside what's already there.
-  async function persistItem(item: UploadItem, mode: 'insert' | 'replace', replaceId?: string) {
+  async function persistItem(item: UploadItem, mode: 'insert' | 'replace', replaceId?: string, referenceOverride?: string) {
     const docType = item.detectedType || 'cusdec'
     updateItem(item.id, { status: 'saving' })
     try {
@@ -435,10 +435,15 @@ function DocumentsUploadContent() {
           extracted_data: item.fields.length ? Object.fromEntries(item.fields.map(f => [`grid_${f.key}`, f.value])) : null,
         }),
       })
+      // A reference passed in from SendModal's "CUSDEC Passed" flow (already
+      // confirmed to match an open Shipment Entry) rides along on the row
+      // itself so matchAndMergeShipment finds and merges it on save.
+      const tableData = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
+      if (referenceOverride && docType === 'cusdec') tableData.reference = referenceOverride
       const tablePromise = item.fields.length
         ? fetch('/api/save-to-table', {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-            body: JSON.stringify({ doc_type: docType, data: Object.fromEntries(item.fields.map(f => [f.key, f.value])), drive_url: link, mode, replace_id: replaceId }),
+            body: JSON.stringify({ doc_type: docType, data: tableData, drive_url: link, mode, replace_id: replaceId }),
           })
         : null
 
@@ -486,7 +491,7 @@ function DocumentsUploadContent() {
   // If so, show every match instead of silently creating a duplicate. For
   // CDN, also check the CUSDEC's CAP (how many CDN rows it should have)
   // before allowing a brand-new row.
-  async function saveOne(item: UploadItem) {
+  async function saveOne(item: UploadItem, referenceOverride?: string) {
     // A PDF whose type couldn't be identified, or whose fields came back
     // empty (nothing extracted), must not be saved — it would create a
     // structured-table row with no real data. The user has to fix
@@ -523,7 +528,7 @@ function DocumentsUploadContent() {
       setError(e.message)
       return { ok: false, error: e.message }
     }
-    return await persistItem(item, 'insert')
+    return await persistItem(item, 'insert', undefined, referenceOverride)
   }
 
   async function resolveMatchReplace(matchId: string) {
@@ -889,12 +894,12 @@ function DocumentsUploadContent() {
   // "Send All" batch path for SendModal — saves (or just Drive-uploads, if
   // Save was unticked) every ready/error item in this list, one at a time,
   // and reports back only the ones that actually succeeded.
-  async function sendAllSave(): Promise<{ ok: boolean; results: SendResultFile[] }> {
+  async function sendAllSave(referenceOverride?: string): Promise<{ ok: boolean; results: SendResultFile[] }> {
     setSavingAll(true)
     const toSave = items.filter(it => it.status === 'ready' || it.status === 'error')
     const results: SendResultFile[] = []
     for (const it of toSave) {
-      const r = await saveOne(it)
+      const r = await saveOne(it, referenceOverride)
       if (r?.ok && r.driveLink) results.push({ fileName: it.fileName, driveLink: r.driveLink })
     }
     setSavingAll(false)
@@ -1736,8 +1741,8 @@ function DocumentsUploadContent() {
         <SendModal
           label={sendModalItem.fileName}
           uploaderName={uploaderName}
-          onSave={async () => {
-            const r = await saveOne(sendModalItem)
+          onSave={async (referenceOverride?: string) => {
+            const r = await saveOne(sendModalItem, referenceOverride)
             return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink }] : [] }
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem) }]}

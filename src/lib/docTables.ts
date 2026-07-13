@@ -206,6 +206,25 @@ export async function matchAndMergeShipment(cusdecRow: any): Promise<{ matched: 
     }
   }
 
+  // Also try matching by an already-known Reference when Invoice Number
+  // didn't match — this is how a "CUSDEC Passed" reason-tagged send with a
+  // Reference typed in (see SendModal.tsx) attaches to a Shipment Entry that
+  // was opened before this CUSDEC existed, same merge as the Invoice Number
+  // path just keyed differently.
+  if (cusdecRow.reference) {
+    const { data: shipment } = await supabaseAdmin
+      .from('temporary_shipments')
+      .select('*')
+      .eq('reference', cusdecRow.reference)
+      .limit(1)
+      .maybeSingle()
+
+    if (shipment) {
+      await mergeShipmentIntoCusdec(cusdecRow, shipment)
+      return { matched: true, shipmentId: shipment.id }
+    }
+  }
+
   // No matching shipment — this CUSDEC stands alone; give it its own
   // reference if it doesn't already have one (e.g. from a prior merge attempt).
   if (!cusdecRow.reference) {
