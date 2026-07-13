@@ -17,12 +17,17 @@ export function stripExcludeWords(text: string, excludeWordsCsv: string | undefi
     .join('\n')
 }
 
+// The day-of-week/month/day pattern found after a CDN/CUSDEC voyage code —
+// e.g. "26053N Sun Jul 12 00:00". Shared by VOYAGECODE()/VOYAGEDATE() below.
+const VOYAGE_DATE_PATTERN = /(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+([A-Za-z]{3})\s+(\d{1,2})/i
+const MONTHS: Record<string, string> = { Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12' }
+
 // A tiny Excel-formula-like language for slicing a value out of a box's raw
 // OCR text — lets two fields point at the same box (one crop, OCR'd once)
 // and each pull a different piece out of it. Steps chain with "|", e.g.
 // "LINE(2)|AFTER(:)" takes the 2nd line, then everything after the colon.
 // Supported: LINE(n), LEFT(n), RIGHT(n), MID(start,len), AFTER(text),
-// BEFORE(text), TRIM().
+// BEFORE(text), TRIM(), VOYAGECODE(), VOYAGEDATE().
 export function applyFormula(text: string, formula: string | undefined): string {
   if (!formula || !formula.trim()) return text
   let result = text
@@ -56,6 +61,21 @@ export function applyFormula(text: string, formula: string | undefined): string 
           break
         }
         case 'TRIM': result = result.trim(); break
+        // A box shared by "voyage" and "voyage_date" often captures a whole
+        // line like "26053N Sun Jul 12 00:00" — the code is everything
+        // before the weekday abbreviation, the date is the weekday/month/day
+        // that follows it (no year in the source, so it defaults to the
+        // current year, same as the regex-fallback extractor).
+        case 'VOYAGECODE': {
+          const vm = result.match(new RegExp(`^([\\s\\S]*?)\\s*${VOYAGE_DATE_PATTERN.source}`, 'i'))
+          if (vm) result = vm[1].trim()
+          break
+        }
+        case 'VOYAGEDATE': {
+          const vm = result.match(VOYAGE_DATE_PATTERN)
+          if (vm) result = `${vm[3].padStart(2, '0')}.${MONTHS[vm[2]] || '01'}.${new Date().getFullYear()}`
+          break
+        }
         default: break
       }
     } catch { /* bad step — leave result as-is and keep going */ }

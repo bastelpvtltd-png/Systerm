@@ -921,8 +921,12 @@ function ExportReleaseCheckPanel() {
     return own.every(d => d.boat_note_passed)
   }
 
-  const eligible = cusdecs.filter(boatNotePassed)
-  const selected = eligible.find(c => c.id === selectedId) || null
+  // The list shows every CUSDEC that hasn't been released yet (blue-passed
+  // or not) so any of them can be picked for a manual/ad-hoc check — but
+  // Auto Trigger only ever runs on the blue (boat-note-passed) ones.
+  const visibleCusdecs = cusdecs.filter(c => !c.export_release_passed)
+  const eligible = visibleCusdecs.filter(boatNotePassed)
+  const selected = visibleCusdecs.find(c => c.id === selectedId) || null
 
   // The CUSDEC's own tin_vat column (filled in when it was extracted/imported)
   // is the authoritative source — shipper_profiles.tin is only a fallback for
@@ -938,7 +942,7 @@ function ExportReleaseCheckPanel() {
 
   async function pickCusdec(id: string) {
     setSelectedId(id)
-    const c = eligible.find(x => x.id === id)
+    const c = visibleCusdecs.find(x => x.id === id)
     if (!c) return
     const tin = await resolveTin(c)
     setForm({ officeCode: c.code || '', serial: 'E', cusdecNumber: cleanCusdecNumber(c.number), cusdecYear: yearOf(c.date), consigneeTIN: tin })
@@ -1007,24 +1011,25 @@ function ExportReleaseCheckPanel() {
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <div className="card">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-          <h2 className="font-semibold text-gray-900 text-sm">Select CUSDEC (Boat Note passed only)</h2>
+          <h2 className="font-semibold text-gray-900 text-sm">Select CUSDEC</h2>
           <button onClick={autoTrigger} disabled={autoBusy} className="btn-secondary flex items-center gap-2 text-xs">
             {autoBusy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Auto Trigger (all pending)
           </button>
         </div>
         <div className="mb-3"><SchedulerControl panel="export_release" label="Auto-check"/></div>
         {autoProgress && <p className="text-xs text-gray-500 mb-2">{autoProgress}</p>}
+        <p className="text-xs text-gray-400 mb-2">Blue-bordered = Boat Note passed, ready for Auto Trigger. Others can still be checked manually below.</p>
         <div className="space-y-1 max-h-96 overflow-y-auto">
-          {eligible.map(c => (
+          {visibleCusdecs.map(c => (
             <button key={c.id} onClick={() => pickCusdec(c.id)}
               className={`w-full text-left p-2.5 rounded-lg border-l-4 border text-xs ${
                 selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'
-              } ${c.export_release_passed ? '!border-l-green-500' : '!border-l-blue-400'}`}>
-              <p className="font-bold text-gray-800">E {c.number} {c.export_release_passed && <span className="text-green-600 font-normal">· released</span>}</p>
+              } ${boatNotePassed(c) ? '!border-l-blue-400' : '!border-l-transparent'}`}>
+              <p className="font-bold text-gray-800">E {c.number} {boatNotePassed(c) && <span className="text-blue-600 font-normal">· boat note passed</span>}</p>
               <p className="text-gray-600 truncate">{c.exporter?.slice(0, 40)}</p>
             </button>
           ))}
-          {eligible.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDEC has passed Boat Note check yet</p>}
+          {visibleCusdecs.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDEC pending release</p>}
         </div>
         <OrphanedDataMonitor
           label="Non-Matched (no Company TIN on record)"

@@ -27,17 +27,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const authed = await requireAuth(req)
     if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
 
-    const [{ data: shipments }, { data: cusdecs }, { data: cdns }, { data: reasonDocs }, { data: vesselTriggers }] = await Promise.all([
+    const [{ data: shipments }, { data: cusdecs }, { data: cdns }, { data: reasonDocsRaw }, { data: vesselTriggers }] = await Promise.all([
       supabaseAdmin.from('temporary_shipments').select('id, reference, shipper, invoice_number, packing_number, created_at').order('created_at', { ascending: false }),
       supabaseAdmin.from('cusdec').select('id, code, number, exporter, cap, export_release_passed'),
       supabaseAdmin.from('cdn').select('id, code, cusdec_number, container_no, vessel, voyage, boat_note_passed, export_release_passed'),
       // Reason-tagged Quick Upload queue — a document tagged reason:'CUSDEC
-      // Passed' counts as pending until whoever picks it does Mail/Download
-      // (which deletes it — see delete-reason-document.ts), so the count is
-      // just "how many of these rows currently exist", not a status field.
+      // Passed' counts as pending only while it's still sitting unpicked in
+      // the Incoming pool (dashboard_notifications.is_active) — Pick turns
+      // that off, Return turns it back on, same as Incoming itself. It was
+      // previously counting every such row regardless of pick state, so a
+      // document someone had already picked (and was sitting in their My
+      // Picked Tasks) kept inflating this count until it got Mailed/Downloaded.
       supabaseAdmin.from('document_uploads').select('id, file_name, reason, reason_note, created_at').eq('reason', 'CUSDEC Passed').order('created_at', { ascending: false }),
       supabaseAdmin.from('vessel_triggers').select('vessel, voyage, opening_time, closing_time, etb'),
     ])
+    let reasonDocs = reasonDocsRaw || []
+    if (reasonDocs.length) {
+      const { data: activeNotifs } = await supabaseAdmin.from('dashboard_notifications')
+        .select('document_id').eq('is_active', true).in('document_id', reasonDocs.map(d => d.id))
+      const activeIds = new Set((activeNotifs || []).map(n => n.document_id))
+      reasonDocs = reasonDocs.filter(d => activeIds.has(d.id))
+    }
 
     const cdnPending: any[] = []
     const boatNotePending: any[] = []
@@ -88,7 +98,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const cap = parseInt(c.cap || '', 10)
       const capKnown = !!cap && !Number.isNaN(cap)
       const capComplete = !capKnown || own.length >= cap
-      const allBoatNotePassed = own.length > 0 && own.every(d => d.boat_note_passed)
+      // Missing the capComplete check here let a CUSDEC still waiting on
+      // more CDN uploads show up in Export Release Pending the moment its
+      // few uploaded-so-far CDN rows all happened to individually pass Boat
+      // Note — Automation's Export Release Check panel already required
+      // capComplete (see isBoatNotePassed in automationChecks.ts), so the
+      // two disagreed: Dashboard showed a pending count with nothing to
+      // actually show in the Automation tab's eligible list.
+      const allBoatNotePassed = capComplete && own.length > 0 && own.every(d => d.boat_note_passed)
 
       const containers = own
         .filter(d => d.vessel && d.voyage)

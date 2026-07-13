@@ -120,12 +120,16 @@ function extractCdnFields(text: string): Record<string, string> {
       data.loading_port = 'COLOMBO'
     }
 
-    // Vessel / Date from "conditions &"
+    // Voyage code / date from "conditions &" — the line is shaped like
+    // "26053N Sun Jul 12 00:00": the code is everything before the weekday
+    // abbreviation, the date is the weekday/month/day after it (this was
+    // previously stored into `vessel` by mistake, and the code portion was
+    // never captured into `voyage` at all).
     if (line.includes('conditions &') && k + 1 < lines.length) {
       const target = lines[k + 1]
       const dayM = target.match(/(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+([A-Za-z]+)\s+(\d+)/)
       if (dayM) {
-        data.vessel = target.split(dayM[1])[0].trim()
+        data.voyage = target.split(dayM[1])[0].trim()
         const months: Record<string, string> = { Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12' }
         const yr = new Date().getFullYear()
         data.voyage_date = `${dayM[3].padStart(2,'0')}.${months[dayM[2]] || '01'}.${yr}`
