@@ -1,0 +1,24 @@
+name: Automation ping
+
+# Vercel's own cron (vercel.json) is capped at once/day on the Hobby plan —
+# every panel's configured interval_minutes (Boat Note Check, Export Release
+# Check, Vessel Trigger — see src/pages/api/cron-check-pending.ts) only
+# actually takes effect on a paid Vercel plan. This workflow is the
+# no-cost workaround: it just pings the same endpoint hourly from GitHub
+# Actions (free, independent of Vercel's plan), and cron-check-pending.ts's
+# own per-panel "is it actually due yet" check decides whether each panel
+# does anything on a given ping. Vercel's own daily cron keeps running too —
+# this only adds more frequent pings, it doesn't replace it.
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call cron-check-pending
+        run: |
+          curl -sf -X GET "https://export-system.vercel.app/api/cron-check-pending" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
