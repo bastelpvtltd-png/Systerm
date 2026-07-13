@@ -244,6 +244,94 @@ function FloatingChat() {
   )
 }
 
+// ─── In-App Notifications Bell ──────────────────────────────────────────────
+interface UserNotif { id: string; type: string; title: string; body: string; link_href?: string; created_at: string; read_at?: string | null }
+
+function InAppNotifications() {
+  const [notifs, setNotifs] = useState<UserNotif[]>([])
+  const [open, setOpen] = useState(false)
+  const router = useRouter()
+
+  async function load() {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      const res = await fetch('/api/user-notifications', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+      if (res.ok) { const d = await res.json(); setNotifs(d.notifications || []) }
+    } catch {}
+  }
+
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  async function markAllRead() {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      await fetch('/api/user-notifications', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ mark_read: true }),
+      })
+      setNotifs([])
+      setOpen(false)
+    } catch {}
+  }
+
+  const unread = notifs.filter(n => !n.read_at).length
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="fixed bottom-20 right-5 z-50 w-10 h-10 rounded-full shadow-xl flex items-center justify-center transition-all hover:scale-110"
+        style={{ background: unread > 0 ? '#ef4444' : '#6b7280' }}
+        title="In-App Notifications"
+      >
+        <Bell size={16} color="white"/>
+        {unread > 0 && (
+          <span className="absolute -top-1 -right-1 w-4 h-4 bg-orange-500 rounded-full flex items-center justify-center text-white text-[9px] font-bold">
+            {unread > 9 ? '9+' : unread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="fixed bottom-32 right-5 z-50 w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
+          style={{ maxHeight: '360px' }}>
+          <div className="px-4 py-3 flex items-center gap-2 border-b" style={{ background: '#1B3A5C' }}>
+            <Bell size={14} color="white"/>
+            <span className="text-white font-semibold text-sm flex-1">Notifications</span>
+            {unread > 0 && (
+              <button onClick={markAllRead} className="text-xs text-blue-200 hover:text-white">Mark all read</button>
+            )}
+            <button onClick={() => setOpen(false)} className="text-white/70 hover:text-white ml-1"><X size={15}/></button>
+          </div>
+          <div className="overflow-y-auto" style={{ maxHeight: '300px' }}>
+            {notifs.length === 0 ? (
+              <p className="text-center text-gray-400 text-xs py-8">No new notifications</p>
+            ) : (
+              notifs.map(n => (
+                <div key={n.id}
+                  className={`px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 ${n.type === 'conflict' ? 'border-l-4 border-l-orange-400' : ''}`}
+                  onClick={() => { if (n.link_href) router.push(n.link_href); setOpen(false) }}>
+                  <p className="text-xs font-semibold text-gray-800">{n.title}</p>
+                  <p className="text-xs text-gray-500 mt-0.5 leading-snug">{n.body}</p>
+                  <p className="text-[10px] text-gray-300 mt-1">{new Date(n.created_at).toLocaleString('en-GB', { timeZone: 'Asia/Colombo' })}</p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 export const TAB_ITEMS = [
   { href: '/admin',                  icon: LayoutDashboard, label: 'Dashboard' },
@@ -313,6 +401,7 @@ export const SECTION_ITEMS = [
   { key: 'section:automation.boat-note-check',      tabHref: '/admin/automation', label: 'Boat Note Check' },
   { key: 'section:automation.export-release-check', tabHref: '/admin/automation', label: 'Export Release Check' },
   { key: 'section:automation.vessel-trigger',       tabHref: '/admin/automation', label: 'Vessel Triggers' },
+  { key: 'section:automation.conflict-review',       tabHref: '/admin/automation', label: 'Conflict Review panel (admin)' },
   { key: 'section:automation.notes',                tabHref: '/admin/automation', label: 'System Logic & Integration Notes' },
 ]
 
@@ -461,6 +550,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* Floating chat — always visible across all pages */}
       <FloatingChat/>
+      {/* In-app notification bell */}
+      <InAppNotifications/>
     </PermissionContext.Provider>
   )
 }

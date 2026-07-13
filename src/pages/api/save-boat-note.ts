@@ -22,7 +22,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const nowIso = new Date().toISOString()
     const { data: cusdec, error } = await supabaseAdmin.from('cusdec')
-      .update({ boat_note_drive_url: drive_url, boat_note_saved_at: nowIso })
+      .update({
+        boat_note_drive_url: drive_url, boat_note_saved_at: nowIso,
+        boat_note_url: drive_url, boat_note_created_at: nowIso,
+      })
       .eq('id', cusdec_id)
       .select('number')
       .maybeSingle()
@@ -35,10 +38,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Every Save Only also archives into the "Done Boat Note" list.
     const { data: prof } = await supabaseAdmin.from('profiles').select('username, full_name').eq('id', authed.userId).maybeSingle()
+    const userName = prof?.full_name || prof?.username || ''
     await supabaseAdmin.from('generated_boat_notes').insert({
       cusdec_id, cusdec_number: cusdec?.number || null, file_name: file_name || 'boat_note.pdf', drive_url,
-      created_by: authed.userId, created_by_name: prof?.full_name || prof?.username || '',
+      created_by: authed.userId, created_by_name: userName,
     })
+
+    // Log to trigger_log so TriggerTimestamps widget picks it up in real-time.
+    try {
+      await supabaseAdmin.from('trigger_log').insert({
+        event_type: 'boat_note', cusdec_id, cusdec_number: cusdec?.number || null,
+        user_id: authed.userId, user_name: userName,
+      })
+    } catch {}
 
     res.json({ ok: true })
   } catch (err: any) {

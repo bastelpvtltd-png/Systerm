@@ -47,13 +47,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await supabaseAdmin.from('dashboard_notifications').insert({
           document_id: data.id, uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
         })
-        // Processed History (pick_history_log) gets its own 'notify' entry too,
-        // so who-notified-when is part of the same audit trail as
-        // pick/return/mail/download/look, not just implied by dashboard_notifications.
         await supabaseAdmin.from('pick_history_log').insert({
           document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'notify',
           pdf_notify_user: uploadedByName, notify_update_time: nowIso,
         })
+      }
+
+      // Conflict detection: if a document of the same type + extracted reference
+      // key is currently 'picked' by someone, flag it as a conflict and notify them.
+      if (doc_type && extracted_data) {
+        const refKey = extracted_data.container_no || extracted_data.number || extracted_data.cdn_no || null
+        if (refKey) {
+          // Find picked docs of same type with matching reference
+          const { data: picked } = await supabaseAdmin
+            .from('document_uploads')
+            .select('id, extracted_data')
+            .eq('doc_type', doc_type)
+            .eq('status', 'picked')
+            .neq('id', data.id)
+            .limit(10)
+          const matching = (picked || []).filter(p => {
+            const ed = p.extracted_data || {}
+            return ed.container_no === refKey || ed.number === refKey || ed.cdn_no === refKey
+          })
+
+          for (const old of matching) {
+            // Find who picked it
+            const { data: task } = await supabaseAdmin
+              .from('user_tasks')
+              .select('user_id, user_name')
+              .eq('document_id', old.id)
+              .eq('status', 'active')
+              .maybeSingle()
+
+            try {
+              await supabaseAdmin.from('document_conflicts').insert({
+                old_doc_id: old.id, new_doc_id: data.id,
+                picked_by: task?.user_id || null,
+                picked_by_name: task?.user_name || '',
+                doc_type, ref_key: refKey,
+              })
+            } catch {}
+
+            // In-app notification for the user who has the old doc
+            if (task?.user_id) {
+              try {
+                await supabaseAdmin.from('user_notifications').insert({
+                  user_id: task.user_id,
+                  type: 'conflict',
+                  title: 'Document Updated',
+                  body: `A new version of ${doc_type.replace('_', ' ').toUpperCase()} (${refKey}) was uploaded. Check Conflict Review in Admin.`,
+                  link_href: '/admin/automation',
+                })
+              } catch {}
+            }
+          }
+        }
       }
 
       return res.json({ document: data })

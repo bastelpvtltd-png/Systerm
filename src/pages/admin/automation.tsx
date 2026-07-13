@@ -7,12 +7,13 @@ import {
   Zap, Barcode as BarcodeIcon, Truck, RefreshCw,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Plus, Trash2,
   StickyNote, Save, Mail, CheckSquare, Square, AlertTriangle, Clock, Ship,
+  GitMerge, ExternalLink,
 } from 'lucide-react'
 
 type AutomationTab =
   | 'barcode' | 'trico' | 'data-updates'
   | 'boat-note-check' | 'export-release' | 'vessel-trigger'
-  | 'notes'
+  | 'conflict-review' | 'notes'
 
 interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean; tin_vat?: string }
 
@@ -28,6 +29,7 @@ const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: stri
   { key: 'boat-note-check', label: 'Boat Note Check', icon: ClipboardCheck, permission: 'section:automation.boat-note-check' },
   { key: 'export-release', label: 'Export Release Check', icon: ShieldCheck, permission: 'section:automation.export-release-check' },
   { key: 'vessel-trigger', label: 'Vessel Triggers', icon: Ship, permission: 'section:automation.vessel-trigger' },
+  { key: 'conflict-review', label: 'Conflict Review', icon: GitMerge, permission: 'section:automation.conflict-review' },
   { key: 'notes', label: 'System Logic & Integration Notes', icon: StickyNote, permission: 'section:automation.notes' },
 ]
 
@@ -91,6 +93,7 @@ function AutomationContent() {
       {tab === 'boat-note-check' && <BoatNoteCheckPanel/>}
       {tab === 'export-release' && <ExportReleaseCheckPanel/>}
       {tab === 'vessel-trigger' && <VesselTriggerPanel/>}
+      {tab === 'conflict-review' && <ConflictReviewPanel/>}
       {tab === 'notes' && <SystemNotes/>}
     </div>
   )
@@ -771,6 +774,161 @@ function VesselTriggerPanel() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Conflict Review Panel ─────────────────────────────────────────────────
+interface ConflictDoc { id: string; file_name: string; drive_url?: string; doc_type?: string; reason?: string; extracted_data?: Record<string, string> }
+interface Conflict { id: string; old_doc_id: string; new_doc_id: string; picked_by: string; picked_by_name: string; doc_type: string; ref_key: string; resolved: boolean; resolution?: string; created_at: string; old_doc?: ConflictDoc; new_doc?: ConflictDoc }
+
+function ConflictReviewPanel() {
+  const [conflicts, setConflicts] = useState<Conflict[]>([])
+  const [loading, setLoading] = useState(false)
+  const [showResolved, setShowResolved] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [msg, setMsg] = useState('')
+
+  async function load() {
+    setLoading(true); setMsg('')
+    try {
+      const r = await fetch(`/api/document-conflicts?resolved=${showResolved}`, { headers: await authHeader() })
+      if (r.ok) { const d = await r.json(); setConflicts(d.conflicts || []) }
+      else { const d = await r.json(); setMsg(`✗ ${d.error}`) }
+    } catch (e: any) { setMsg(`✗ ${e.message}`) }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { load() }, [showResolved])
+
+  async function resolve(conflictId: string, resolution: 'keep_old' | 'use_new' | 'both') {
+    setBusyId(conflictId); setMsg('')
+    try {
+      const r = await fetch('/api/document-conflicts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ conflict_id: conflictId, resolution }),
+      })
+      if (r.ok) { setMsg('✓ Resolved'); load() }
+      else { const d = await r.json(); setMsg(`✗ ${d.error}`) }
+    } catch (e: any) { setMsg(`✗ ${e.message}`) }
+    finally { setBusyId(null) }
+  }
+
+  const typeColor: Record<string, string> = { cusdec: '#1B3A5C', cdn: '#22A87A', barcode: '#f59e0b', boat_note: '#3b82f6', party_copy: '#8b5cf6', bill: '#ef4444' }
+
+  return (
+    <div className="max-w-4xl">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="font-semibold text-gray-900 flex items-center gap-2"><GitMerge size={16}/>Conflict Review</h2>
+          <p className="text-xs text-gray-500 mt-0.5">When a new document version is uploaded for an already-picked reference, it appears here for admin review.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+            <input type="checkbox" checked={showResolved} onChange={e => setShowResolved(e.target.checked)}/>
+            Show resolved
+          </label>
+          <button onClick={load} className="btn-secondary text-xs flex items-center gap-1"><RefreshCw size={12}/>Refresh</button>
+        </div>
+      </div>
+
+      {msg && <p className={`text-sm mb-4 font-medium ${msg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{msg}</p>}
+
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader size={20} className="animate-spin text-gray-400"/></div>
+      ) : conflicts.length === 0 ? (
+        <div className="card text-center py-10 text-gray-400">
+          <GitMerge size={28} className="mx-auto mb-2 text-gray-200"/>
+          <p className="text-sm">{showResolved ? 'No resolved conflicts' : 'No pending conflicts — all clear!'}</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {conflicts.map(c => {
+            const busy = busyId === c.id
+            const color = typeColor[c.doc_type] || '#6b7280'
+            return (
+              <div key={c.id} className="card border-l-4" style={{ borderLeftColor: color }}>
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                      <span className="text-[11px] font-normal px-2 py-0.5 rounded-full text-white" style={{ background: color }}>
+                        {c.doc_type?.toUpperCase() || 'DOC'}
+                      </span>
+                      {c.ref_key || 'Unknown reference'}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Picked by <span className="font-medium text-gray-700">{c.picked_by_name || 'unknown user'}</span>
+                      {' · '}
+                      {new Date(c.created_at).toLocaleString('en-GB', { timeZone: 'Asia/Colombo', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                  {c.resolved && (
+                    <span className="text-[11px] px-2 py-1 rounded-full bg-green-100 text-green-700 font-medium">
+                      {c.resolution?.replace('_', ' ')} ✓
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="bg-gray-50 rounded-xl p-3">
+                    <p className="text-[11px] font-bold text-gray-500 mb-1">OLD (Picked)</p>
+                    <p className="text-xs text-gray-700 truncate">{c.old_doc?.file_name || c.old_doc_id}</p>
+                    {c.old_doc?.drive_url && (
+                      <a href={c.old_doc.drive_url} target="_blank" rel="noopener noreferrer"
+                        className="text-[11px] text-blue-600 flex items-center gap-1 mt-1 hover:underline">
+                        <ExternalLink size={10}/>View PDF
+                      </a>
+                    )}
+                    {c.old_doc?.extracted_data && (
+                      <div className="mt-1.5 space-y-0.5">
+                        {Object.entries(c.old_doc.extracted_data).slice(0, 4).map(([k, v]) => (
+                          <p key={k} className="text-[10px] text-gray-400">{k}: <span className="text-gray-600">{v}</span></p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="bg-orange-50 rounded-xl p-3 border border-orange-100">
+                    <p className="text-[11px] font-bold text-orange-500 mb-1">NEW (Updated)</p>
+                    <p className="text-xs text-gray-700 truncate">{c.new_doc?.file_name || c.new_doc_id}</p>
+                    {c.new_doc?.drive_url && (
+                      <a href={c.new_doc.drive_url} target="_blank" rel="noopener noreferrer"
+                        className="text-[11px] text-blue-600 flex items-center gap-1 mt-1 hover:underline">
+                        <ExternalLink size={10}/>View PDF
+                      </a>
+                    )}
+                    {c.new_doc?.extracted_data && (
+                      <div className="mt-1.5 space-y-0.5">
+                        {Object.entries(c.new_doc.extracted_data).slice(0, 4).map(([k, v]) => (
+                          <p key={k} className="text-[10px] text-gray-400">{k}: <span className="text-gray-600">{v}</span></p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {!c.resolved && (
+                  <div className="flex gap-2">
+                    <button onClick={() => resolve(c.id, 'keep_old')} disabled={busy}
+                      className="flex-1 py-2 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40">
+                      {busy ? <Loader size={12} className="animate-spin inline"/> : null} Keep Old
+                    </button>
+                    <button onClick={() => resolve(c.id, 'use_new')} disabled={busy}
+                      className="flex-1 py-2 rounded-lg text-xs font-medium text-white disabled:opacity-40"
+                      style={{ background: '#22A87A' }}>
+                      Use New Version
+                    </button>
+                    <button onClick={() => resolve(c.id, 'both')} disabled={busy}
+                      className="flex-1 py-2 rounded-lg text-xs font-medium text-white disabled:opacity-40"
+                      style={{ background: '#1B3A5C' }}>
+                      Keep Both
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
