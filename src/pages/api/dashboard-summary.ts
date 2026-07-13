@@ -64,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // sharing that voyage.
     const normVoyage = (v: string) => (v || '').trim().toUpperCase()
     const normVessel = (v: string) => (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-    function vesselFuzzyMatch(a: string, b: string): boolean {
+    const vesselFuzzyMatch = (a: string, b: string): boolean => {
       const na = normVessel(a), nb = normVessel(b)
       if (!na || !nb) return false
       const len = Math.min(5, na.length, nb.length)
@@ -76,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!triggersByVoyage.has(key)) triggersByVoyage.set(key, [])
       triggersByVoyage.get(key)!.push(t)
     }
-    function findTrigger(vessel: string, voyage: string) {
+    const findTrigger = (vessel: string, voyage: string) => {
       if (!vessel || !voyage) return null
       const candidates = triggersByVoyage.get(normVoyage(voyage)) || []
       return candidates.find(t => vesselFuzzyMatch(vessel, t.vessel)) || null

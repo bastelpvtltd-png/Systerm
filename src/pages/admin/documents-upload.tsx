@@ -215,8 +215,8 @@ function DocumentsUploadContent() {
   const [recNumPages, setRecNumPages] = useState(1)
   const [recLoadingImg, setRecLoadingImg] = useState(false)
 
-  const loadRecords = useCallback(async () => {
-    setLoadingRecs(true)
+  const loadRecords = useCallback(async (silent = false) => {
+    if (!silent) setLoadingRecs(true)
     try {
       const url = filterType === 'all' ? '/api/list-documents' : `/api/list-documents?doc_type=${filterType}`
       const res = await fetch(url, { headers: await authHeader() })
@@ -224,13 +224,20 @@ function DocumentsUploadContent() {
       if (!res.ok) throw new Error(d.error || 'Failed to load documents')
       setRecords(d.records || [])
     } catch (e: any) {
-      setError(e.message)
+      if (!silent) setError(e.message)
     } finally {
-      setLoadingRecs(false)
+      if (!silent) setLoadingRecs(false)
     }
   }, [filterType])
 
-  useEffect(() => { if (panel === 'preview') loadRecords() }, [panel, loadRecords])
+  useEffect(() => {
+    if (panel !== 'preview') return
+    loadRecords()
+    // Live — a document someone else just saved shows up here without a
+    // refresh; an open preview (selectedRec below) is separate state.
+    const t = setInterval(() => loadRecords(true), 15000)
+    return () => clearInterval(t)
+  }, [panel, loadRecords])
   useEffect(() => { setRecPage(0) }, [selectedRec?.id])
   useEffect(() => {
     if (!selectedRec || !selectedRec.drive_url) return
@@ -1091,7 +1098,7 @@ function DocumentsUploadContent() {
                     <option value="all">All types</option>
                     {DOC_TYPES.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
                   </select>
-                  <button onClick={loadRecords} className="text-gray-400 hover:text-gray-700">
+                  <button onClick={() => loadRecords()} className="text-gray-400 hover:text-gray-700">
                     <RefreshCw size={14}/>
                   </button>
                 </div>

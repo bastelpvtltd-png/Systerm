@@ -23,15 +23,21 @@ export function useBoatNoteCreator() {
   const [sending, setSending] = useState(false)
   const [status, setStatus] = useState('')
 
-  useEffect(() => { loadCusdecs() }, [])
+  useEffect(() => {
+    loadCusdecs()
+    // Live — the CUSDEC picker stays current without a refresh; the current
+    // selection/generated boat notes below are separate state, untouched.
+    const t = setInterval(() => loadCusdecs(true), 20000)
+    return () => clearInterval(t)
+  }, [])
   useEffect(() => { if (selCusdec) loadCdns() }, [selCusdec])
 
-  async function loadCusdecs() {
-    setLoading(true)
+  async function loadCusdecs(silent = false) {
+    if (!silent) setLoading(true)
     try {
       const r = await fetch('/api/list-records?table=cusdec&limit=200')
       if (r.ok) { const d = await r.json(); setCusdecs(d.records || []) }
-    } finally { setLoading(false) }
+    } finally { if (!silent) setLoading(false) }
   }
 
   async function loadCdns() {

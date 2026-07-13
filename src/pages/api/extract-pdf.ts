@@ -4,7 +4,7 @@ import { detectType } from '@/lib/extractors'
 import { ocrPdf } from '@/lib/ocr'
 import { extractByGrid } from '@/lib/gridExtract'
 import { extractBoxes } from '@/lib/boxExtract'
-import { applyTextRules } from '@/lib/textClean'
+import { applyTextRules, cleanContainerNo } from '@/lib/textClean'
 import { DOC_TYPE_TABLE, getTableColumns } from '@/lib/docTables'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
@@ -82,11 +82,18 @@ function extractCdnFields(text: string): Record<string, string> {
   for (let k = 0; k < lines.length; k++) {
     const line = lines[k]
 
-    // Container No / Size from "Weight, ... Kg"
+    // Container No / Size from "Weight, ... Kg" — matched by shape (4
+    // letters + 7 digits) rather than a blind whitespace split, since a
+    // stray space between the letters and digits ("MSCU 1234567") used to
+    // split the container number itself in half and shove its digit half
+    // into pkg_no instead.
     if (line.includes('Weight,') && k + 1 < lines.length && lines[k + 1].includes('Kg')) {
       if (k + 2 < lines.length) {
-        const parts = lines[k + 2].split(/\s+/)
-        if (parts.length >= 2) { data.container_no = parts[0]; data.pkg_no = parts[1] }
+        const raw = lines[k + 2]
+        data.container_no = cleanContainerNo(raw)
+        const rest = raw.replace(/^\s*[A-Za-z]{4}\s?\d{7}\s*/, '').trim()
+        const pkgMatch = rest.match(/^(\S+)/)
+        if (pkgMatch) data.pkg_no = pkgMatch[1]
       }
     }
 

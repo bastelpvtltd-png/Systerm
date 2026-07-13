@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/router'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
@@ -115,7 +115,14 @@ function CusdecXmlGenerator() {
   const [status, setStatus] = useState('')
 
   useEffect(() => {
-    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    function load() {
+      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    }
+    load()
+    // Live — the CUSDEC list stays current without a refresh; an open XML
+    // form (`values` below) is untouched since it's separate state.
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
   }, [])
 
   const filtered = cusdecs.filter(c =>
@@ -298,8 +305,15 @@ function CdnTextExtractor() {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
-    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    function load() {
+      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    }
+    load()
+    // Live — the picker lists stay current; an already-selected/edited
+    // `fields` block (below) is separate state and untouched by this.
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
   }, [])
 
   const filtered = cdns.filter(c => !search || c.container_no?.toLowerCase().includes(search.toLowerCase()) || c.shipper?.toLowerCase().includes(search.toLowerCase()))
@@ -499,7 +513,7 @@ function BoatNoteCreate() {
         <div className="card">
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-semibold text-gray-900 text-sm">1 · Select CUSDEC</h2>
-            <button onClick={bn.loadCusdecs} className="text-gray-400 hover:text-gray-600"><RefreshCw size={13}/></button>
+            <button onClick={() => bn.loadCusdecs()} className="text-gray-400 hover:text-gray-600"><RefreshCw size={13}/></button>
           </div>
           {bn.loading ? (
             <div className="flex justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
@@ -614,13 +628,24 @@ function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_relea
   const [savedMsg, setSavedMsg] = useState('')
   const [toggling, setToggling] = useState(false)
 
-  async function load() {
+  async function load(silent = false) {
     const res = await fetch('/api/automation-runs', { headers: await authHeader() })
     const d = await res.json()
     const row = (d.runs || []).find((r: any) => r.panel === panel)
-    if (row) { setMinutes(String(row.interval_minutes)); setLastRunAt(row.last_run_at); setEnabled(row.enabled !== false) }
+    if (!row) return
+    // Only the initial (non-silent) load syncs the minutes input — a
+    // background poll shouldn't overwrite digits the user is mid-typing.
+    if (!silent) setMinutes(String(row.interval_minutes))
+    setLastRunAt(row.last_run_at)
+    setEnabled(row.enabled !== false)
   }
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load()
+    // "Last ran" is now genuinely live (the hourly GitHub Actions ping keeps
+    // bumping it) — poll so it updates here without a page refresh.
+    const t = setInterval(() => load(true), 15000)
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
     setSaving(true); setSavedMsg('')
@@ -734,7 +759,15 @@ function BoatNoteCheckPanel() {
     setCusdecs(cr.records || [])
     setCdns(dr.records || [])
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // Live — a container the hourly cron ping just passed (or an admin
+    // action from elsewhere) shows blue here without a manual refresh. Only
+    // the cusdec/cdn lists refresh; the search box, selection, and ad-hoc
+    // form below are untouched by this.
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, [])
 
   // A CDN only counts as ready for auto-checking once its parent CUSDEC's
   // CAP is complete (every expected CDN has actually been uploaded) — same
@@ -907,7 +940,13 @@ function ExportReleaseCheckPanel() {
     setCusdecs(cr.records || [])
     setCdns(dr.records || [])
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // Live — a CUSDEC the hourly cron ping just released shows green here
+    // without a manual refresh.
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, [])
 
   // A CUSDEC only counts as "Boat Note passed" once every CDN row that
   // belongs to it (matched by code+number, same as the Overview page) is
@@ -1081,18 +1120,31 @@ function VesselTriggerPanel() {
   const [search, setSearch] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [status, setStatus] = useState('')
+  // The mount-only poll interval below closes over `load` as it was at mount
+  // time — without this ref it would keep re-fetching with search='' forever
+  // once the interval is set up, silently wiping out an active search result
+  // every 15s. The ref always has the current value; `search` itself still
+  // drives the input as normal.
+  const searchRef = useRef(search)
+  useEffect(() => { searchRef.current = search }, [search])
 
-  async function load() {
-    setLoading(true)
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
     try {
       const params = new URLSearchParams()
-      if (search) params.set('search', search)
+      if (searchRef.current) params.set('search', searchRef.current)
       const res = await fetch(`/api/vessel-triggers?${params.toString()}`, { headers: await authHeader() })
       const d = await res.json()
       if (res.ok) setItems(d.items || [])
-    } finally { setLoading(false) }
+    } finally { if (!silent) setLoading(false) }
   }
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load()
+    // Live — reflects a sync that just ran (manual or the hourly cron ping)
+    // without a manual refresh.
+    const t = setInterval(() => load(true), 15000)
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function triggerNow() {
     setSyncing(true); setStatus('')
@@ -1122,7 +1174,7 @@ function VesselTriggerPanel() {
       <div className="flex items-center gap-2 mb-3">
         <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && load()}
           placeholder="Search vessel, voyage, or terminal..." className="input"/>
-        <button onClick={load} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white flex-shrink-0" style={{ background: '#1B3A5C' }}>
+        <button onClick={() => load()} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white flex-shrink-0" style={{ background: '#1B3A5C' }}>
           <Search size={12}/> Search
         </button>
       </div>
@@ -1171,7 +1223,14 @@ function SystemNotes() {
     const d = await res.json()
     if (res.ok) setNotes(d.notes || [])
   }
-  useEffect(() => { load() }, [])
+  // Live — a note someone else saved shows up here without a refresh; an
+  // in-progress edit (title/content/editId below) is untouched by this since
+  // it's separate state from the notes list itself.
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30000)
+    return () => clearInterval(t)
+  }, [])
 
   async function save() {
     if (!title.trim()) return

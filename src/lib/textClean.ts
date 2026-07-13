@@ -27,7 +27,20 @@ const MONTHS: Record<string, string> = { Jan:'01',Feb:'02',Mar:'03',Apr:'04',May
 // and each pull a different piece out of it. Steps chain with "|", e.g.
 // "LINE(2)|AFTER(:)" takes the 2nd line, then everything after the colon.
 // Supported: LINE(n), LEFT(n), RIGHT(n), MID(start,len), AFTER(text),
-// BEFORE(text), TRIM(), VOYAGECODE(), VOYAGEDATE().
+// BEFORE(text), TRIM(), VOYAGECODE(), VOYAGEDATE(), CONTAINERNO().
+// Standard container number shape (ISO 6346): 4 letters + 7 digits, 11
+// characters total, no space — e.g. "MSCU1234567". OCR/raw text often has a
+// stray space between the letters and digits ("MSCU 1234567"); this matches
+// either shape and always emits the clean, space-free 11-character form.
+const CONTAINER_NO_PATTERN = /([A-Z]{4})\s?(\d{7})/
+
+// Same rule as CONTAINERNO() above, exposed directly for the regex-fallback
+// extractor (extract-pdf.ts's extractCdnFields) which doesn't go through a
+// saved box/formula at all.
+export function cleanContainerNo(text: string): string {
+  const m = (text || '').toUpperCase().match(CONTAINER_NO_PATTERN)
+  return m ? `${m[1]}${m[2]}` : (text || '').trim()
+}
 export function applyFormula(text: string, formula: string | undefined): string {
   if (!formula || !formula.trim()) return text
   let result = text
@@ -74,6 +87,11 @@ export function applyFormula(text: string, formula: string | undefined): string 
         case 'VOYAGEDATE': {
           const vm = result.match(VOYAGE_DATE_PATTERN)
           if (vm) result = `${vm[3].padStart(2, '0')}.${MONTHS[vm[2]] || '01'}.${new Date().getFullYear()}`
+          break
+        }
+        case 'CONTAINERNO': {
+          const cm = result.toUpperCase().match(CONTAINER_NO_PATTERN)
+          if (cm) result = `${cm[1]}${cm[2]}`
           break
         }
         default: break

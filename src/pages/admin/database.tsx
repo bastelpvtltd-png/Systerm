@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import {
@@ -46,8 +46,15 @@ function DatabaseContent() {
   const [sortCol, setSortCol] = useState('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
-  const load = useCallback(async () => {
-    setLoading(true); setError(''); setDrafts({})
+  // Tracks whether there are any unsaved cell edits right now, without
+  // making the polling effect below depend on (and re-create its interval
+  // on) every keystroke — the poll checks this ref instead of the `drafts`
+  // state directly.
+  const draftsRef = useRef(drafts)
+  useEffect(() => { draftsRef.current = drafts }, [drafts])
+
+  const load = useCallback(async (silent = false) => {
+    if (!silent) { setLoading(true); setError(''); setDrafts({}) }
     try {
       const res = await fetch(`/api/admin-data?table=${table}`, { headers: await authHeader() })
       const d = await res.json()
@@ -55,13 +62,22 @@ function DatabaseContent() {
       setRows(d.rows || [])
       setColumns(d.columns?.length ? d.columns : (d.rows?.length ? Object.keys(d.rows[0]) : []))
     } catch (e: any) {
-      setError(e.message)
+      if (!silent) setError(e.message)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [table])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    // Live — but skips entirely while any cell is mid-edit (unsaved draft),
+    // since a refresh would otherwise silently wipe it out from under the
+    // user. Once every draft is saved or discarded, polling resumes.
+    const t = setInterval(() => {
+      if (Object.keys(draftsRef.current).length === 0) load(true)
+    }, 15000)
+    return () => clearInterval(t)
+  }, [load])
 
   // Jump to the first table this account is actually allowed to see
   useEffect(() => {
@@ -145,7 +161,7 @@ function DatabaseContent() {
             <p className="text-gray-500 text-sm mt-0.5">View · Edit · Delete — table wise</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={load} className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
+            <button onClick={() => load()} className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
               <RefreshCw size={13}/> Refresh
             </button>
             {canDelete && (

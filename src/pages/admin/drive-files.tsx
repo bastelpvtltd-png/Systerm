@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/router'
 import AdminLayout from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
@@ -129,29 +129,45 @@ export default function DriveFilesPage() {
       .catch(() => {})
   }, [shipper, code, number, reference, invoiceNumber])
 
-  async function search() {
-    setLoading(true)
-    setError('')
-    setSearched(true)
+  // The poll below needs the CURRENT search boxes at call time, not whatever
+  // they were when the interval was set up — kept in sync every render
+  // rather than listed as effect deps (which would restart the interval,
+  // and its non-silent counterpart, on every keystroke).
+  const searchParamsRef = useRef({ shipper, code, number, containerNo, reference, invoiceNumber })
+  useEffect(() => { searchParamsRef.current = { shipper, code, number, containerNo, reference, invoiceNumber } })
+
+  async function search(silent = false) {
+    if (!silent) { setLoading(true); setError(''); setSearched(true) }
     try {
+      const p = silent ? searchParamsRef.current : { shipper, code, number, containerNo, reference, invoiceNumber }
       const params = new URLSearchParams()
-      if (shipper) params.set('shipper', shipper)
-      if (code) params.set('code', code)
-      if (number) params.set('number', number)
-      if (containerNo) params.set('container_no', containerNo)
-      if (reference) params.set('reference', reference)
-      if (invoiceNumber) params.set('invoice_number', invoiceNumber)
+      if (p.shipper) params.set('shipper', p.shipper)
+      if (p.code) params.set('code', p.code)
+      if (p.number) params.set('number', p.number)
+      if (p.containerNo) params.set('container_no', p.containerNo)
+      if (p.reference) params.set('reference', p.reference)
+      if (p.invoiceNumber) params.set('invoice_number', p.invoiceNumber)
       const res = await fetch(`/api/shipment-overview?${params.toString()}`, { headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Search failed')
       setResults(d.overview || [])
       setOrphanBoatNotes(d.orphanBoatNotes || [])
     } catch (e: any) {
-      setError(e.message)
+      if (!silent) setError(e.message)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
+
+  // Live — once a search has actually been run, its results (e.g. a
+  // container's Boat Note/Export Release colors) stay current without a
+  // manual re-search; the email-selection checkboxes are separate state
+  // (keyed by doc id), untouched by this.
+  useEffect(() => {
+    if (!searched) return
+    const t = setInterval(() => search(true), 15000)
+    return () => clearInterval(t)
+  }, [searched]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (pendingAutoSearch) { setPendingAutoSearch(false); search() }
@@ -226,7 +242,7 @@ export default function DriveFilesPage() {
               <datalist id="container-options">{options.containers.map(c => <option key={c} value={c}/>)}</datalist>
             </div>
           </div>
-          <button onClick={search} disabled={loading || !(shipper || code || number || containerNo || reference || invoiceNumber)}
+          <button onClick={() => search()} disabled={loading || !(shipper || code || number || containerNo || reference || invoiceNumber)}
             className="mt-3 flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40" style={{ background: '#22A87A' }}>
             {loading ? <Loader size={14} className="animate-spin"/> : <Search size={14}/>} Search
           </button>

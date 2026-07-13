@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search } from 'lucide-react'
@@ -446,11 +446,18 @@ function BoatNoteContent() {
     }
   }
 
-  useEffect(() => { loadCusdecs() }, [])
+  useEffect(() => {
+    loadCusdecs()
+    // Live — the CUSDEC/CDN lists (and each row's completed/blue/green
+    // status) stay current without a refresh; the current selection and any
+    // generated boat notes are separate state, untouched by this.
+    const t = setInterval(() => loadCusdecs(true), 20000)
+    return () => clearInterval(t)
+  }, [])
   useEffect(() => { if (selCusdec) loadCdns() }, [selCusdec])
 
-  async function loadCusdecs() {
-    setLoading(true)
+  async function loadCusdecs(silent = false) {
+    if (!silent) setLoading(true)
     try {
       const [cr, dr] = await Promise.all([
         fetch('/api/list-records?table=cusdec&limit=200'),
@@ -458,7 +465,7 @@ function BoatNoteContent() {
       ])
       if (cr.ok) { const d = await cr.json(); setCusdecs(d.records || []) }
       if (dr.ok) { const d = await dr.json(); setAllCdns(d.records || []) }
-    } finally { setLoading(false) }
+    } finally { if (!silent) setLoading(false) }
   }
 
   // A CUSDEC counts as "completed" (hidden by default) once it's Export
@@ -920,7 +927,7 @@ function BoatNoteContent() {
           <div className="card">
             <div className="flex items-center justify-between mb-1.5">
               <h2 className="font-semibold text-gray-900 text-sm">1 · Select CUSDEC</h2>
-              <button onClick={loadCusdecs} className="text-gray-400 hover:text-gray-600"><RefreshCw size={13}/></button>
+              <button onClick={() => loadCusdecs()} className="text-gray-400 hover:text-gray-600"><RefreshCw size={13}/></button>
             </div>
             <label className="flex items-center gap-1.5 text-[11px] text-gray-500 mb-2.5 cursor-pointer">
               <input type="checkbox" checked={showCompleted} onChange={e => setShowCompleted(e.target.checked)}/>
@@ -1150,10 +1157,17 @@ function DoneBoatNotePanel() {
   const [emailTo, setEmailTo] = useState('')
   const [sendingMail, setSendingMail] = useState(false)
   const [status, setStatus] = useState('')
+  // Filters only actually apply via the Search button, not on every
+  // keystroke — the poll below needs the CURRENT filter values at call time,
+  // not whatever they were when the mount-only effect first ran, so it reads
+  // through this ref instead of closing over cusdecNumber/from/to directly.
+  const filtersRef = useRef({ cusdecNumber, from, to })
+  useEffect(() => { filtersRef.current = { cusdecNumber, from, to } }, [cusdecNumber, from, to])
 
-  async function load() {
-    setLoading(true)
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
     try {
+      const { cusdecNumber, from, to } = filtersRef.current
       const params = new URLSearchParams()
       if (cusdecNumber) params.set('cusdecNumber', cusdecNumber)
       if (from) params.set('from', from)
@@ -1161,9 +1175,15 @@ function DoneBoatNotePanel() {
       const res = await fetch(`/api/generated-boat-notes?${params.toString()}`, { headers: await authHeader() })
       const d = await res.json()
       if (res.ok) setItems(d.items || [])
-    } finally { setLoading(false) }
+    } finally { if (!silent) setLoading(false) }
   }
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load()
+    // Live — a Boat Note someone else just saved shows up here without a
+    // manual refresh, respecting whatever filter is currently applied.
+    const t = setInterval(() => load(true), 15000)
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
   const selectedIds = Object.keys(selected).filter(id => selected[id])
@@ -1230,7 +1250,7 @@ function DoneBoatNotePanel() {
           <input value={cusdecNumber} onChange={e => setCusdecNumber(e.target.value)} placeholder="CUSDEC number..." className="input max-w-[160px]"/>
           <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="input max-w-[150px]"/>
           <input type="date" value={to} onChange={e => setTo(e.target.value)} className="input max-w-[150px]"/>
-          <button onClick={load} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
+          <button onClick={() => load()} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
             <Search size={12}/> Search
           </button>
           {selectedIds.length > 1 && (

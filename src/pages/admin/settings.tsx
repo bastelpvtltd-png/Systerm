@@ -38,7 +38,11 @@ function CredentialsSettings() {
       if (res.ok) setCreds(d.credentials || [])
     } catch {}
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30000)
+    return () => clearInterval(t)
+  }, [])
 
   async function save() {
     setError('')
@@ -157,21 +161,33 @@ function SettingsContent() {
     })
   }, [])
 
-  useEffect(() => { if (tab === 'database') loadRecords() }, [tab, filterType])
-  useEffect(() => { if (tab === 'logs' && (isAdmin || myUsername)) loadLogs() }, [tab, isAdmin, myUsername])
+  // Both polls only run while their tab is actually open (recreated on tab
+  // switch since that's an infrequent dependency change, not per-keystroke).
+  useEffect(() => {
+    if (tab !== 'database') return
+    loadRecords()
+    const t = setInterval(() => loadRecords(true), 15000)
+    return () => clearInterval(t)
+  }, [tab, filterType])
+  useEffect(() => {
+    if (tab !== 'logs' || !(isAdmin || myUsername)) return
+    loadLogs()
+    const t = setInterval(() => loadLogs(true), 15000)
+    return () => clearInterval(t)
+  }, [tab, isAdmin, myUsername])
 
   // Admin sees everyone's login activity; everyone else only ever sees their
   // own — logging in as another account isn't something a regular user
   // should be able to observe.
-  async function loadLogs() {
-    setLoadingLogs(true)
+  async function loadLogs(silent = false) {
+    if (!silent) setLoadingLogs(true)
     try {
       let query = supabase.from('login_logs').select('*').order('created_at', { ascending: false }).limit(200)
       if (!isAdmin) query = query.eq('username', myUsername)
       const { data } = await query
       setLogs(data ?? [])
     } finally {
-      setLoadingLogs(false)
+      if (!silent) setLoadingLogs(false)
     }
   }
 
@@ -186,15 +202,15 @@ function SettingsContent() {
     }
   }
 
-  async function loadRecords() {
-    setLoading(true)
+  async function loadRecords(silent = false) {
+    if (!silent) setLoading(true)
     try {
       const url = filterType === 'all'
         ? '/api/list-documents'
         : `/api/list-documents?doc_type=${filterType}`
       const res = await fetch(url)
       if (res.ok) { const d = await res.json(); setRecords(d.records || []) }
-    } finally { setLoading(false) }
+    } finally { if (!silent) setLoading(false) }
   }
 
   async function deleteRecord(id: string) {
@@ -269,7 +285,7 @@ function SettingsContent() {
                     <option key={k} value={k}>{v}</option>
                   ))}
                 </select>
-                <button onClick={loadRecords} className="text-gray-400 hover:text-gray-700">
+                <button onClick={() => loadRecords()} className="text-gray-400 hover:text-gray-700">
                   <RefreshCw size={14}/>
                 </button>
               </div>
@@ -354,7 +370,7 @@ function SettingsContent() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={loadLogs} className="text-gray-400 hover:text-gray-700"><RefreshCw size={14}/></button>
+                <button onClick={() => loadLogs()} className="text-gray-400 hover:text-gray-700"><RefreshCw size={14}/></button>
                 {isAdmin && (
                   <button onClick={clearLogs} disabled={clearingLogs || !logs.length}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 disabled:opacity-40">

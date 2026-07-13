@@ -37,7 +37,13 @@ function TemplatesContent() {
     const d = await res.json()
     if (res.ok) setTemplates(d.templates || [])
   }
-  useEffect(() => { loadTemplates() }, [])
+  useEffect(() => {
+    loadTemplates()
+    // Live — a template someone else just uploaded shows up here without a
+    // refresh; an open fill-in form (`values` below) is separate state.
+    const t = setInterval(loadTemplates, 20000)
+    return () => clearInterval(t)
+  }, [])
 
   const selected = templates.find(t => t.id === selectedId) || null
   useEffect(() => { setValues({}) }, [selectedId])

@@ -87,6 +87,10 @@ function DashboardContent() {
       }
     }
     load()
+    // Live — the stat cards and their expanded lists stay current without a
+    // page refresh, same polling convention as Incoming/My Picked Tasks below.
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
   }, [])
 
   const { has } = usePermission()
@@ -433,15 +437,19 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
 
-  async function load() {
-    setLoading(true)
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
     try {
       const res = await fetch('/api/user-tasks', { headers: await authHeader() })
       const d = await res.json()
       if (res.ok) setTasks(d.tasks || [])
-    } finally { setLoading(false) }
+    } finally { if (!silent) setLoading(false) }
   }
-  useEffect(() => { load() }, [refreshKey])
+  useEffect(() => {
+    load()
+    const t = setInterval(() => load(true), 8000)
+    return () => clearInterval(t)
+  }, [refreshKey])
 
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
   const selectedTasks = tasks.filter(t => selected[t.id])

@@ -33,7 +33,14 @@ export default function UsersPage() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
 
-  useEffect(() => { fetchUsers() }, [])
+  useEffect(() => {
+    fetchUsers()
+    // Live — the user list stays current without a refresh; an open
+    // add/edit modal (`form` below) is separate state, only synced when
+    // editing starts, so this doesn't disturb it.
+    const t = setInterval(fetchUsers, 20000)
+    return () => clearInterval(t)
+  }, [])
 
   async function fetchUsers() {
     const { data } = await supabase.from('profiles').select('*').order('created_at')

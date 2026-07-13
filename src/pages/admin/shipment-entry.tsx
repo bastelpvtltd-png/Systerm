@@ -45,6 +45,11 @@ function ShipmentEntryContent() {
   useEffect(() => {
     loadRows()
     fetch('/api/temp-shipment-options').then(r => r.json()).then(d => setOptions({ shippers: d.shippers || [], consignees: d.consignees || [] })).catch(() => {})
+    // Live — a shipment someone else just entered (or one that got merged
+    // into a CUSDEC and disappeared) shows up here without a refresh; the
+    // entry form below is separate state, untouched by this.
+    const t = setInterval(loadRows, 15000)
+    return () => clearInterval(t)
   }, [])
 
   async function handleSave() {
