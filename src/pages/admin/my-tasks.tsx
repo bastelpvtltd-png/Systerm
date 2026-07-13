@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { supabase, authHeader } from '@/lib/supabase'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown } from 'lucide-react'
+import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon } from 'lucide-react'
 
 interface Task {
   id: string
@@ -22,13 +22,221 @@ interface BalanceEntry {
   created_at: string
 }
 
+interface SalaryPayment {
+  id: string
+  from_user_id: string
+  from_user_name: string | null
+  to_user_id: string | null
+  to_other_name: string | null
+  to_display_name: string
+  amount: number
+  status: 'pending' | 'confirmed' | 'declined'
+  created_at: string
+  responded_at: string | null
+}
+interface Profile { id: string; username: string; full_name: string }
+
+// Peer-to-peer "I paid you" log — anyone can record a payment they made (to
+// another user or an "Other" name), only the recipient can confirm it
+// actually landed (or say it didn't), and only the recipient's confirmed
+// total counts toward their Balance. Once responded to, an entry is locked
+// for everyone except Admin (see the admin-only monitoring panel below).
+function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
+  const [payments, setPayments] = useState<SalaryPayment[]>([])
+  const [workCounts, setWorkCounts] = useState<Record<string, number>>({})
+  const [users, setUsers] = useState<Profile[]>([])
+  const [toUserId, setToUserId] = useState('')
+  const [toOther, setToOther] = useState('')
+  const [amount, setAmount] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [respondingId, setRespondingId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [showAdminPanel, setShowAdminPanel] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  async function load() {
+    try {
+      const res = await fetch('/api/salary-payments', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) { setPayments(d.payments || []); setWorkCounts(d.workCounts || {}) }
+    } catch {}
+  }
+  useEffect(() => {
+    load()
+    supabase.from('profiles').select('id, username, full_name').then(({ data }) => setUsers((data as any) || []))
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function recordPayment() {
+    setError('')
+    const amt = Number(amount)
+    if (!amt || amt <= 0) { setError('Enter a valid amount'); return }
+    if (!toUserId && !toOther.trim()) { setError('Pick a recipient or type an Other name'); return }
+    setSaving(true)
+    try {
+      const res = await fetch('/api/salary-payments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ to_user_id: toUserId || undefined, to_other_name: toUserId ? undefined : toOther.trim(), amount: amt }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setToUserId(''); setToOther(''); setAmount('')
+      await load()
+    } catch (e: any) { setError(e.message) }
+    finally { setSaving(false) }
+  }
+
+  async function respond(id: string, status: 'confirmed' | 'declined') {
+    setRespondingId(id)
+    try {
+      const res = await fetch('/api/salary-payments', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ id, status }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setPayments(prev => prev.map(p => p.id === id ? d.payment : p))
+    } catch (e: any) { setError(e.message) }
+    finally { setRespondingId(null) }
+  }
+
+  async function deletePayment(id: string) {
+    if (!confirm('Permanently remove this payment record? This cannot be undone.')) return
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/salary-payments?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setPayments(prev => prev.filter(p => p.id !== id))
+    } catch (e: any) { setError(e.message) }
+    finally { setDeletingId(null) }
+  }
+
+  const awaitingMyResponse = payments.filter(p => p.to_user_id === userId && p.status === 'pending')
+  const myConfirmedTotal = payments.filter(p => p.to_user_id === userId && p.status === 'confirmed').reduce((s, p) => s + Number(p.amount), 0)
+  const sentByMe = payments.filter(p => p.from_user_id === userId)
+
+  const statusBadge = (s: SalaryPayment['status']) =>
+    s === 'confirmed' ? <span className="text-[11px] font-medium text-green-700 flex items-center gap-1"><Check size={11}/>Landed</span>
+    : s === 'declined' ? <span className="text-[11px] font-medium text-red-600 flex items-center gap-1"><X size={11}/>Declined</span>
+    : <span className="text-[11px] font-medium text-amber-600">Pending</span>
+
+  return (
+    <div className="card mb-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Send size={15}/>Salary Payments</h2>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-400">Your confirmed balance</span>
+          <span className="text-lg font-bold text-green-700">{myConfirmedTotal.toLocaleString('en-LK', { minimumFractionDigits: 2 })}</span>
+        </div>
+      </div>
+
+      {/* Record a payment */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-2">
+        <select value={toUserId} onChange={e => { setToUserId(e.target.value); if (e.target.value) setToOther('') }} className="input text-sm">
+          <option value="">— Select user —</option>
+          {users.filter(u => u.id !== userId).map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
+        </select>
+        <input value={toOther} onChange={e => { setToOther(e.target.value); if (e.target.value) setToUserId('') }}
+          placeholder="...or type an Other name" className="input text-sm"/>
+        <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="Amount" className="input text-sm"/>
+        <button onClick={recordPayment} disabled={saving} className="btn-primary flex items-center justify-center gap-2 text-sm">
+          {saving ? <Loader size={14} className="animate-spin"/> : <Plus size={14}/>}Record
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+
+      {/* Awaiting my response */}
+      {awaitingMyResponse.length > 0 && (
+        <div className="mb-4">
+          <p className="text-xs font-medium text-gray-600 mb-1.5">Awaiting your response</p>
+          <div className="space-y-1.5">
+            {awaitingMyResponse.map(p => (
+              <div key={p.id} className="flex items-center justify-between text-xs border border-amber-200 bg-amber-50 rounded-lg px-3 py-2">
+                <span><b>{p.from_user_name}</b> says they paid you <b>{Number(p.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })}</b></span>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button onClick={() => respond(p.id, 'confirmed')} disabled={respondingId === p.id}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-md text-white font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                    <Check size={12}/>Yes, landed
+                  </button>
+                  <button onClick={() => respond(p.id, 'declined')} disabled={respondingId === p.id}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-md border border-red-300 text-red-600 font-medium disabled:opacity-50 hover:bg-red-50">
+                    <X size={12}/>No
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* What I've sent */}
+      {sentByMe.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-gray-600 mb-1.5">Payments you've sent</p>
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {sentByMe.map(p => (
+              <div key={p.id} className="flex items-center justify-between text-xs py-1 border-t border-gray-50">
+                <span className="text-gray-600">{p.to_display_name} — {Number(p.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })}</span>
+                {statusBadge(p.status)}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Admin-only: everyone's salary activity + processed-document work count */}
+      {isAdmin && (
+        <div className="mt-5 pt-4 border-t border-gray-100">
+          <button onClick={() => setShowAdminPanel(x => !x)}
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700">
+            <UsersIcon size={13}/> {showAdminPanel ? 'Hide' : 'Show'} everyone's salary + work (Admin only)
+          </button>
+          {showAdminPanel && (
+            <div className="mt-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                {users.map(u => {
+                  const name = u.full_name || u.username
+                  const confirmed = payments.filter(p => p.to_display_name === name && p.status === 'confirmed').reduce((s, p) => s + Number(p.amount), 0)
+                  const pending = payments.filter(p => p.to_display_name === name && p.status === 'pending').length
+                  return (
+                    <div key={u.id} className="border border-gray-100 rounded-lg px-3 py-2 text-xs">
+                      <p className="font-semibold text-gray-800">{name}</p>
+                      <p className="text-gray-500">Confirmed: <b className="text-green-700">{confirmed.toLocaleString('en-LK', { minimumFractionDigits: 2 })}</b> {pending > 0 && `· ${pending} pending`}</p>
+                      <p className="text-gray-400">Documents processed: {workCounts[name] || 0}</p>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="max-h-64 overflow-y-auto space-y-1">
+                {payments.map(p => (
+                  <div key={p.id} className="flex items-center justify-between text-xs border-t border-gray-50 py-1.5">
+                    <span className="text-gray-600">{p.from_user_name} → {p.to_display_name} — {Number(p.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {statusBadge(p.status)}
+                      <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
+                        className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={12}/></button>
+                    </div>
+                  </div>
+                ))}
+                {payments.length === 0 && <p className="text-center text-gray-400 py-4">No salary payments recorded yet</p>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function MyTasksPage() {
   return <MyTasksContent/>
 }
 MyTasksPage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
 function MyTasksContent() {
-  const { has } = usePermission()
+  const { has, isAdmin } = usePermission()
   const canAddCost = has('section:my-tasks.daily-cost')
   const canDeposit = has('section:my-tasks.balance-update')
   const [tasks, setTasks] = useState<Task[]>([])
@@ -162,6 +370,8 @@ function MyTasksContent() {
           )}
         </div>
       )}
+
+      <SalaryPayments userId={userId} isAdmin={isAdmin}/>
 
       <div className="flex gap-2 mb-4">
         {(['pending','done'] as const).map(t => (
