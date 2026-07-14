@@ -233,14 +233,52 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
 interface WorkCountRow {
   id: string; user_id: string; user_name: string; document_id: string; file_name: string
   reason: string; action: string; cdn_inc: number; cusdec_inc: number; cap_inc: number
-  amount: number; created_at: string
+  created_at: string
 }
-interface WorkTotals { cdn_count: number; cusdec_count: number; cap_count: number; total_amount: number }
+interface WorkRates { cdn_rate: number; cap_rate: number }
+
+function fmtLKR(n: number) {
+  return n.toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function InvoiceBlock({ cdn, cap, rates }: { cdn: number; cap: number; rates: WorkRates }) {
+  const cdnTotal = cdn * rates.cdn_rate
+  const capTotal = cap * rates.cap_rate
+  const grand = cdnTotal + capTotal
+  return (
+    <div className="border border-gray-200 rounded-xl overflow-hidden text-xs">
+      <div className="bg-gray-50 px-3 py-1.5 flex items-center justify-between">
+        <span className="font-semibold text-gray-600 uppercase tracking-wide text-[10px]">Invoice</span>
+        <span className="font-bold text-amber-700 text-sm">Rs. {fmtLKR(grand)}</span>
+      </div>
+      <div className="divide-y divide-gray-100">
+        <div className="px-3 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>
+            <span className="text-gray-700">CDN <span className="font-bold text-green-700">{cdn}</span></span>
+            <span className="text-gray-400">× Rs. {fmtLKR(rates.cdn_rate)}</span>
+          </div>
+          <span className="font-semibold text-gray-800">Rs. {fmtLKR(cdnTotal)}</span>
+        </div>
+        <div className="px-3 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-purple-500 inline-block"/>
+            <span className="text-gray-700">CAP <span className="font-bold text-purple-700">{cap}</span></span>
+            <span className="text-gray-400">× Rs. {fmtLKR(rates.cap_rate)}</span>
+          </div>
+          <span className="font-semibold text-gray-800">Rs. {fmtLKR(capTotal)}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
-  const [totals, setTotals] = useState<WorkTotals>({ cdn_count: 0, cusdec_count: 0, cap_count: 0, total_amount: 0 })
   const [rows, setRows] = useState<WorkCountRow[]>([])
   const [allRows, setAllRows] = useState<WorkCountRow[]>([])
+  const [rates, setRates] = useState<WorkRates>({ cdn_rate: 0, cap_rate: 0 })
+  const [rateDraft, setRateDraft] = useState<WorkRates | null>(null)
+  const [savingRates, setSavingRates] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [adminView, setAdminView] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -248,20 +286,18 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
   const [savingId, setSavingId] = useState<string | null>(null)
   const [error, setError] = useState('')
 
+  const cdnCount = rows.reduce((s, x) => s + (x.cdn_inc || 0), 0)
+  const capCount = rows.reduce((s, x) => s + (x.cap_inc || 0), 0)
+
   async function load() {
     try {
-      const res = await fetch('/api/work-counts', { headers: await authHeader() })
-      const d = await res.json()
-      if (res.ok) {
-        const r: WorkCountRow[] = d.rows || []
-        setRows(r)
-        setTotals({
-          cdn_count:    r.reduce((s, x) => s + (x.cdn_inc || 0), 0),
-          cusdec_count: r.reduce((s, x) => s + (x.cusdec_inc || 0), 0),
-          cap_count:    r.reduce((s, x) => s + (x.cap_inc || 0), 0),
-          total_amount: r.reduce((s, x) => s + Number(x.amount || 0), 0),
-        })
-      }
+      const h = await authHeader()
+      const [wc, wr] = await Promise.all([
+        fetch('/api/work-counts', { headers: h }).then(r => r.json()),
+        fetch('/api/work-rates', { headers: h }).then(r => r.json()),
+      ])
+      setRows(wc.rows || [])
+      if (wr.cdn_rate !== undefined) setRates(wr)
     } catch {}
   }
 
@@ -273,6 +309,22 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
     } catch {}
   }
 
+  async function saveRates() {
+    if (!rateDraft) return
+    setSavingRates(true); setError('')
+    try {
+      const res = await fetch('/api/work-rates', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify(rateDraft),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setRates({ cdn_rate: d.cdn_rate, cap_rate: d.cap_rate })
+      setRateDraft(null)
+    } catch (e: any) { setError(e.message) }
+    finally { setSavingRates(false) }
+  }
+
   async function deleteRow(id: string) {
     setDeletingId(id); setError('')
     try {
@@ -281,7 +333,6 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
       if (!res.ok) throw new Error(d.error)
       setAllRows(prev => prev.filter(r => r.id !== id))
       setRows(prev => prev.filter(r => r.id !== id))
-      await load()
     } catch (e: any) { setError(e.message) }
     finally { setDeletingId(null) }
   }
@@ -297,15 +348,15 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setAllRows(prev => prev.map(r => r.id === id ? { ...r, ...draft } : r))
+      const updated = { ...draft, cdn_inc: Number(draft.cdn_inc ?? 0), cap_inc: Number(draft.cap_inc ?? 0) }
+      setAllRows(prev => prev.map(r => r.id === id ? { ...r, ...updated } : r))
       setEditDrafts(prev => { const n = { ...prev }; delete n[id]; return n })
-      await load()
     } catch (e: any) { setError(e.message) }
     finally { setSavingId(null) }
   }
 
   function setDraft(id: string, key: string, value: string) {
-    setEditDrafts(prev => ({ ...prev, [id]: { ...prev[id], [key]: value } }))
+    setEditDrafts(prev => ({ ...prev, [id]: { ...prev[id], [key]: value as any } }))
   }
 
   useEffect(() => {
@@ -314,18 +365,16 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
     return () => clearInterval(t)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Group allRows by user for admin summary
+  // Group allRows by user for admin view
   const byUser = allRows.reduce((acc, r) => {
-    if (!acc[r.user_name]) acc[r.user_name] = { name: r.user_name, cdn: 0, cusdec: 0, cap: 0, amount: 0, rows: [] }
+    if (!acc[r.user_name]) acc[r.user_name] = { name: r.user_name, cdn: 0, cap: 0, rows: [] }
     acc[r.user_name].cdn += r.cdn_inc || 0
-    acc[r.user_name].cusdec += r.cusdec_inc || 0
     acc[r.user_name].cap += r.cap_inc || 0
-    acc[r.user_name].amount += Number(r.amount || 0)
     acc[r.user_name].rows.push(r)
     return acc
-  }, {} as Record<string, { name: string; cdn: number; cusdec: number; cap: number; amount: number; rows: WorkCountRow[] }>)
+  }, {} as Record<string, { name: string; cdn: number; cap: number; rows: WorkCountRow[] }>)
 
-  const noData = totals.cdn_count === 0 && totals.cusdec_count === 0 && totals.cap_count === 0 && totals.total_amount === 0
+  const noData = cdnCount === 0 && capCount === 0
 
   return (
     <div className="card mb-5">
@@ -340,28 +389,24 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
         <p className="text-xs text-gray-400">No processed documents yet — counts increment when you Mail or Download a document from My Picked Tasks.</p>
       ) : (
         <>
-          <div className="grid grid-cols-4 gap-3 mb-3">
+          {/* Summary tiles */}
+          <div className="grid grid-cols-2 gap-3 mb-3">
             <div className="bg-green-50 rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-green-700">{totals.cdn_count}</p>
-              <p className="text-xs text-gray-500 mt-1">CDN Count</p>
-            </div>
-            <div className="bg-blue-50 rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-blue-700">{totals.cusdec_count}</p>
-              <p className="text-xs text-gray-500 mt-1">Cusdec Count</p>
+              <p className="text-2xl font-bold text-green-700">{cdnCount}</p>
+              <p className="text-xs text-gray-500 mt-1">CDN (Container Moved)</p>
             </div>
             <div className="bg-purple-50 rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-purple-700">{totals.cap_count}</p>
-              <p className="text-xs text-gray-500 mt-1">CAP Count</p>
-            </div>
-            <div className="bg-amber-50 rounded-lg p-3 text-center">
-              <p className="text-xl font-bold text-amber-700">{totals.total_amount.toLocaleString('en-LK', { minimumFractionDigits: 2 })}</p>
-              <p className="text-xs text-gray-500 mt-1">Total Earned</p>
+              <p className="text-2xl font-bold text-purple-700">{capCount}</p>
+              <p className="text-xs text-gray-500 mt-1">CAP (CUSDEC Passed)</p>
             </div>
           </div>
 
-          {/* My rows — read-only for users, shows amount per entry */}
+          {/* Invoice block */}
+          <InvoiceBlock cdn={cdnCount} cap={capCount} rates={rates}/>
+
+          {/* Detail rows */}
           {expanded && (
-            <div className="mt-2">
+            <div className="mt-3">
               {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
               <div className="max-h-48 overflow-y-auto space-y-0.5">
                 {rows.map(r => (
@@ -370,13 +415,9 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
                       <span className="text-gray-700 truncate block">{r.file_name || r.document_id}</span>
                       <span className="text-gray-400">{r.reason} · {r.action} · {new Date(r.created_at).toLocaleDateString('en-GB')}</span>
                     </div>
-                    <div className="flex items-center gap-2 ml-2 flex-shrink-0 text-right">
+                    <div className="flex items-center gap-2 ml-2 flex-shrink-0">
                       {r.cdn_inc > 0 && <span className="text-green-600 font-medium">CDN+{r.cdn_inc}</span>}
-                      {r.cusdec_inc > 0 && <span className="text-blue-600 font-medium">C+{r.cusdec_inc}</span>}
                       {r.cap_inc > 0 && <span className="text-purple-600 font-medium">CAP+{r.cap_inc}</span>}
-                      {Number(r.amount) > 0 && (
-                        <span className="text-amber-700 font-semibold">{Number(r.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })}</span>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -386,92 +427,98 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
         </>
       )}
 
-      {/* Admin: edit counts + amounts for all users */}
+      {/* Admin panel */}
       {isAdmin && (
-        <div className="mt-3 pt-3 border-t border-gray-100">
-          <button onClick={() => { setAdminView(x => !x); if (!adminView) loadAll() }}
-            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700">
-            <UsersIcon size={13}/>{adminView ? 'Hide' : 'Show'} all users (Admin)
-          </button>
-          {adminView && (
-            <div className="mt-3 space-y-4">
-              {Object.values(byUser).length === 0 && <p className="text-xs text-gray-400">No data yet</p>}
-              {Object.values(byUser).map(u => (
-                <div key={u.name} className="border border-gray-200 rounded-xl overflow-hidden">
-                  {/* Per-user header */}
-                  <div className="flex items-center justify-between px-3 py-2 bg-gray-50 text-xs">
-                    <span className="font-semibold text-gray-800">{u.name}</span>
-                    <div className="flex items-center gap-3">
-                      <span className="text-green-700">CDN <b>{u.cdn}</b></span>
-                      <span className="text-blue-700">C <b>{u.cusdec}</b></span>
-                      <span className="text-purple-700">CAP <b>{u.cap}</b></span>
-                      <span className="text-amber-700 font-bold">{u.amount.toLocaleString('en-LK', { minimumFractionDigits: 2 })}</span>
+        <div className="mt-3 pt-3 border-t border-gray-100 space-y-3">
+
+          {/* Rate settings */}
+          <div>
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Payment Rates (Global)</p>
+            <div className="flex items-end gap-3 flex-wrap">
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] text-gray-500">CDN Rate (Rs.)</span>
+                <input type="number" min={0} step="0.01"
+                  value={rateDraft ? rateDraft.cdn_rate : rates.cdn_rate}
+                  onChange={e => setRateDraft(prev => ({ ...(prev || rates), cdn_rate: Number(e.target.value) || 0 }))}
+                  className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-green-400"/>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] text-gray-500">CAP Rate (Rs.)</span>
+                <input type="number" min={0} step="0.01"
+                  value={rateDraft ? rateDraft.cap_rate : rates.cap_rate}
+                  onChange={e => setRateDraft(prev => ({ ...(prev || rates), cap_rate: Number(e.target.value) || 0 }))}
+                  className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-purple-400"/>
+              </label>
+              {rateDraft && (
+                <button onClick={saveRates} disabled={savingRates}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                  {savingRates ? <Loader size={11} className="animate-spin"/> : <Save size={11}/>}Save Rates
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Per-user view */}
+          <div>
+            <button onClick={() => { setAdminView(x => !x); if (!adminView) loadAll() }}
+              className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700">
+              <UsersIcon size={13}/>{adminView ? 'Hide' : 'Show'} all users
+            </button>
+            {adminView && (
+              <div className="mt-3 space-y-4">
+                {Object.values(byUser).length === 0 && <p className="text-xs text-gray-400">No data yet</p>}
+                {Object.values(byUser).map(u => (
+                  <div key={u.name} className="border border-gray-200 rounded-xl overflow-hidden">
+                    <div className="px-3 py-2 bg-gray-50">
+                      <p className="font-semibold text-gray-800 text-xs mb-2">{u.name}</p>
+                      <InvoiceBlock cdn={u.cdn} cap={u.cap} rates={rates}/>
                     </div>
-                  </div>
-                  {/* Per-row editable entries */}
-                  <div className="divide-y divide-gray-50">
-                    {u.rows.map(r => {
-                      const draft = editDrafts[r.id] || {}
-                      const isDirty = Object.keys(draft).length > 0
-                      return (
-                        <div key={r.id} className="px-3 py-2 text-xs">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <p className="text-gray-700 truncate font-medium">{r.file_name || '—'}</p>
-                              <p className="text-gray-400">{r.reason} · {r.action} · {new Date(r.created_at).toLocaleDateString('en-GB')}</p>
-                            </div>
-                            <div className="flex items-center gap-1 flex-shrink-0">
-                              {/* Editable: cdn_inc */}
-                              <label className="flex flex-col items-center gap-0.5">
-                                <span className="text-[10px] text-gray-400">CDN</span>
-                                <input type="number" min={0}
-                                  value={draft.cdn_inc !== undefined ? draft.cdn_inc : r.cdn_inc}
-                                  onChange={e => setDraft(r.id, 'cdn_inc', e.target.value)}
-                                  className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-green-400"/>
-                              </label>
-                              {/* Editable: cusdec_inc */}
-                              <label className="flex flex-col items-center gap-0.5">
-                                <span className="text-[10px] text-gray-400">C</span>
-                                <input type="number" min={0}
-                                  value={draft.cusdec_inc !== undefined ? draft.cusdec_inc : r.cusdec_inc}
-                                  onChange={e => setDraft(r.id, 'cusdec_inc', e.target.value)}
-                                  className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-blue-400"/>
-                              </label>
-                              {/* Editable: cap_inc */}
-                              <label className="flex flex-col items-center gap-0.5">
-                                <span className="text-[10px] text-gray-400">CAP</span>
-                                <input type="number" min={0}
-                                  value={draft.cap_inc !== undefined ? draft.cap_inc : r.cap_inc}
-                                  onChange={e => setDraft(r.id, 'cap_inc', e.target.value)}
-                                  className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-purple-400"/>
-                              </label>
-                              {/* Editable: amount */}
-                              <label className="flex flex-col items-center gap-0.5">
-                                <span className="text-[10px] text-gray-400">Amount</span>
-                                <input type="number" min={0} step="0.01"
-                                  value={draft.amount !== undefined ? draft.amount : (r.amount || 0)}
-                                  onChange={e => setDraft(r.id, 'amount', e.target.value)}
-                                  className="w-24 border border-amber-300 rounded px-1 py-0.5 text-right text-xs focus:outline-none focus:border-amber-500 bg-amber-50"/>
-                              </label>
-                              {isDirty && (
-                                <button onClick={() => saveEdit(r.id)} disabled={savingId === r.id}
-                                  className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px] font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
-                                  {savingId === r.id ? <Loader size={10} className="animate-spin"/> : <Save size={10}/>}
-                                </button>
-                              )}
-                              <button onClick={() => deleteRow(r.id)} disabled={deletingId === r.id}
-                                className="text-gray-300 hover:text-red-500 disabled:opacity-50 mt-3.5"><Trash2 size={11}/></button>
+                    <div className="divide-y divide-gray-50">
+                      {u.rows.map(r => {
+                        const draft = editDrafts[r.id] || {}
+                        const isDirty = Object.keys(draft).length > 0
+                        return (
+                          <div key={r.id} className="px-3 py-2 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-gray-700 truncate font-medium">{r.file_name || '—'}</p>
+                                <p className="text-gray-400">{r.reason} · {r.action} · {new Date(r.created_at).toLocaleDateString('en-GB')}</p>
+                              </div>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <label className="flex flex-col items-center gap-0.5">
+                                  <span className="text-[10px] text-gray-400">CDN</span>
+                                  <input type="number" min={0}
+                                    value={draft.cdn_inc !== undefined ? draft.cdn_inc : r.cdn_inc}
+                                    onChange={e => setDraft(r.id, 'cdn_inc', e.target.value)}
+                                    className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-green-400"/>
+                                </label>
+                                <label className="flex flex-col items-center gap-0.5">
+                                  <span className="text-[10px] text-gray-400">CAP</span>
+                                  <input type="number" min={0}
+                                    value={draft.cap_inc !== undefined ? draft.cap_inc : r.cap_inc}
+                                    onChange={e => setDraft(r.id, 'cap_inc', e.target.value)}
+                                    className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-purple-400"/>
+                                </label>
+                                {isDirty && (
+                                  <button onClick={() => saveEdit(r.id)} disabled={savingId === r.id}
+                                    className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px] font-medium text-white disabled:opacity-50 mt-3.5" style={{ background: '#22A87A' }}>
+                                    {savingId === r.id ? <Loader size={10} className="animate-spin"/> : <Save size={10}/>}
+                                  </button>
+                                )}
+                                <button onClick={() => deleteRow(r.id)} disabled={deletingId === r.id}
+                                  className="text-gray-300 hover:text-red-500 disabled:opacity-50 mt-3.5"><Trash2 size={11}/></button>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      )
-                    })}
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
-              {error && <p className="text-xs text-red-600">{error}</p>}
-            </div>
-          )}
+                ))}
+                {error && <p className="text-xs text-red-600">{error}</p>}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

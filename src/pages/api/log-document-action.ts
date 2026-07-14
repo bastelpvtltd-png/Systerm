@@ -47,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await supabaseAdmin.from('work_counts').insert({
             user_id: authed.userId, user_name: userName, document_id,
             file_name: doc.file_name, reason: doc.reason, action,
-            cdn_inc: 0, cusdec_inc: 1, cap_inc: 1,
+            cdn_inc: 0, cusdec_inc: 0, cap_inc: 1,
           })
         }
       } catch { /* work_counts table not yet created — run the SQL migration */ }
