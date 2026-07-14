@@ -776,7 +776,7 @@ function MyTasksContent() {
         </div>
       )}
 
-      {isAdmin && <CountWork userId={userId} isAdmin={isAdmin}/>}
+      <CountWork userId={userId} isAdmin={isAdmin}/>
 
       <SalaryPayments userId={userId} isAdmin={isAdmin}/>
 
