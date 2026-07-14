@@ -40,33 +40,42 @@ interface OtherWorkItem {
   amount: number; status: 'pending' | 'approved' | 'rejected'
   created_by: string | null; created_at: string; approved_at: string | null
 }
+type CostFilter = 'cdn' | 'cap' | null
 
 function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
-  const [payments, setPayments] = useState<SalaryPayment[]>([])
-  const [users, setUsers] = useState<Profile[]>([])
-  const [myWorkRows, setMyWorkRows] = useState<WorkCountRow[]>([])
+  // ── data ──────────────────────────────────────────────────────────────────
+  const [payments,    setPayments]    = useState<SalaryPayment[]>([])
+  const [users,       setUsers]       = useState<Profile[]>([])
+  const [myWorkRows,  setMyWorkRows]  = useState<WorkCountRow[]>([])
   const [allWorkRows, setAllWorkRows] = useState<WorkCountRow[]>([])
-  const [rates, setRates] = useState<WorkRates>({ cdn_rate: 0, cap_rate: 0 })
-  const [myOtherWork, setMyOtherWork] = useState<OtherWorkItem[]>([])
+  const [rates,       setRates]       = useState<WorkRates>({ cdn_rate: 0, cap_rate: 0 })
+  const [myOtherWork,  setMyOtherWork]  = useState<OtherWorkItem[]>([])
   const [allOtherWork, setAllOtherWork] = useState<OtherWorkItem[]>([])
-  const [toUserId, setToUserId] = useState('')
-  const [toOther, setToOther] = useState('')
-  const [amount, setAmount] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [respondingId, setRespondingId] = useState<string | null>(null)
-  const [error, setError] = useState('')
-  const [showMyHistory, setShowMyHistory] = useState(false)
-  const [showAdminPanel, setShowAdminPanel] = useState(false)
+  // ── ui state ──────────────────────────────────────────────────────────────
+  const [showCost,     setShowCost]     = useState(false)
+  const [showReceived, setShowReceived] = useState(false)
+  const [costFilter,   setCostFilter]   = useState<CostFilter>(null)
+  const [showAdminAll, setShowAdminAll] = useState(false)
   const [expandedUser, setExpandedUser] = useState<string | null>(null)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [returningId, setReturningId] = useState<string | null>(null)
-  // Admin: add other work
+  // ── payment form ──────────────────────────────────────────────────────────
+  const [toUserId,     setToUserId]     = useState('')
+  const [toOther,      setToOther]      = useState('')
+  const [amount,       setAmount]       = useState('')
+  const [saving,       setSaving]       = useState(false)
+  const [respondingId, setRespondingId] = useState<string | null>(null)
+  const [deletingId,   setDeletingId]   = useState<string | null>(null)
+  const [returningId,  setReturningId]  = useState<string | null>(null)
+  const [error,        setError]        = useState('')
+  // ── other work admin ──────────────────────────────────────────────────────
   const [owTargetUser, setOwTargetUser] = useState('')
-  const [owDesc, setOwDesc] = useState('')
-  const [owAmount, setOwAmount] = useState('')
-  const [owSaving, setOwSaving] = useState(false)
-  const [approvingId, setApprovingId] = useState<string | null>(null)
+  const [owDesc,       setOwDesc]       = useState('')
+  const [owAmount,     setOwAmount]     = useState('')
+  const [owSaving,     setOwSaving]     = useState(false)
+  const [approvingId,  setApprovingId]  = useState<string | null>(null)
   const [deletingOwId, setDeletingOwId] = useState<string | null>(null)
+  // ── rate edit (admin) ─────────────────────────────────────────────────────
+  const [rateDraft,   setRateDraft]   = useState<WorkRates | null>(null)
+  const [savingRates, setSavingRates] = useState(false)
 
   async function load() {
     try {
@@ -192,6 +201,22 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
     finally { setDeletingOwId(null) }
   }
 
+  async function saveRates() {
+    if (!rateDraft) return
+    setSavingRates(true)
+    try {
+      const res = await fetch('/api/work-rates', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify(rateDraft),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setRates({ cdn_rate: d.cdn_rate, cap_rate: d.cap_rate })
+      setRateDraft(null)
+    } catch (e: any) { setError(e.message) }
+    finally { setSavingRates(false) }
+  }
+
   // Current user computed values
   const myCdn = myWorkRows.reduce((s, r) => s + (r.cdn_inc || 0), 0)
   const myCap = myWorkRows.reduce((s, r) => s + (r.cap_inc || 0), 0)
@@ -229,67 +254,133 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
     : <span className="text-[11px] font-medium text-amber-600">Pending</span>
 
   return (
-    <div className="card mb-5">
-      {/* Header: Payments title + earned | received (clickable) | balance */}
-      <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
-        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Send size={15}/>Payments</h2>
-        <div className="flex items-center gap-4 text-xs">
-          <div className="text-right">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wide">Earned</p>
-            <p className="font-bold text-gray-800">Rs. {fmtLKR(myEarned)}</p>
-          </div>
-          <button onClick={() => setShowMyHistory(x => !x)} className="text-right hover:opacity-70 transition-opacity">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wide">Received {myReceivedPayments.length > 0 ? '▾' : ''}</p>
-            <p className="font-bold text-green-700">Rs. {fmtLKR(myReceived)}</p>
+    <>
+      {/* ═══ Panel 1 — Balance ═══ */}
+      <div className="card mb-5">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Balance</h2>
+
+        {/* Cost | Received | Balance row */}
+        <div className="flex items-center gap-5 mb-3 flex-wrap">
+          <button onClick={() => { setShowCost(x => !x); setCostFilter(null) }}
+            className="text-left hover:opacity-70 transition-opacity">
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide">Cost {showCost ? '▲' : '▾'}</p>
+            <p className="font-bold text-gray-800 text-sm">Rs. {fmtLKR(myEarned)}</p>
           </button>
-          <div className="text-right">
+          <div className="w-px h-7 bg-gray-200 flex-shrink-0"/>
+          <button onClick={() => setShowReceived(x => !x)}
+            className="text-left hover:opacity-70 transition-opacity">
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide">Received {showReceived ? '▲' : '▾'}</p>
+            <p className="font-bold text-green-700 text-sm">Rs. {fmtLKR(myReceived)}</p>
+          </button>
+          <div className="w-px h-7 bg-gray-200 flex-shrink-0"/>
+          <div className="text-left">
             <p className="text-[10px] text-gray-400 uppercase tracking-wide">Balance</p>
-            <p className={`font-bold ${myBalance >= 0 ? 'text-amber-700' : 'text-red-600'}`}>Rs. {fmtLKR(myBalance)}</p>
+            <p className={`font-bold text-sm ${myBalance >= 0 ? 'text-amber-700' : 'text-red-600'}`}>Rs. {fmtLKR(myBalance)}</p>
           </div>
         </div>
-      </div>
 
-      {/* My earned breakdown (expandable) */}
-      {showMyHistory && (
-        <div className="mb-3 space-y-2">
-          {/* Earned breakdown */}
-          <div className="bg-blue-50 rounded-xl p-3">
-            <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-2">Earned Breakdown</p>
-            <div className="space-y-1 text-xs">
-              <div className="flex justify-between">
-                <span className="text-gray-600">Count Work (CDN × {fmtLKR(rates.cdn_rate)} + CAP × {fmtLKR(rates.cap_rate)})</span>
-                <span className="font-semibold text-gray-800">Rs. {fmtLKR(myCountWorkEarned)}</span>
-              </div>
-              {myApprovedOtherWork.map(x => (
-                <div key={x.id} className="flex justify-between">
-                  <span className="text-gray-600 flex items-center gap-1"><Briefcase size={10} className="text-indigo-500"/>{x.description}</span>
-                  <span className="font-semibold text-indigo-700">Rs. {fmtLKR(Number(x.amount))}</span>
-                </div>
-              ))}
-              {myPendingOtherWork.length > 0 && (
-                <div className="pt-1 border-t border-blue-100 mt-1">
-                  <p className="text-[10px] text-amber-600 font-semibold mb-0.5">Pending approval (not counted yet)</p>
-                  {myPendingOtherWork.map(x => (
-                    <div key={x.id} className="flex justify-between text-gray-400">
-                      <span className="flex items-center gap-1"><Briefcase size={10}/>{x.description}</span>
-                      <span>Rs. {fmtLKR(Number(x.amount))}</span>
-                    </div>
-                  ))}
-                </div>
+        {/* Cost breakdown */}
+        {showCost && (
+          <div className="mb-3 bg-blue-50 rounded-xl p-3 space-y-3">
+            {/* Count Work */}
+            <div>
+              <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wide mb-2">Count Work</p>
+              {myCdn === 0 && myCap === 0 ? (
+                <p className="text-xs text-gray-400">No count work yet.</p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <button
+                      onClick={() => setCostFilter(f => f === 'cdn' ? null : 'cdn')}
+                      className={`rounded-lg p-2.5 text-center transition-all border-2 ${costFilter === 'cdn' ? 'bg-green-100 border-green-400' : 'bg-white border-transparent hover:border-green-200'}`}>
+                      <p className="text-xl font-bold text-green-700">{myCdn}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">CDN</p>
+                      <p className="text-[9px] text-green-600">{costFilter === 'cdn' ? '▲ hide' : '▼ details'}</p>
+                    </button>
+                    <button
+                      onClick={() => setCostFilter(f => f === 'cap' ? null : 'cap')}
+                      className={`rounded-lg p-2.5 text-center transition-all border-2 ${costFilter === 'cap' ? 'bg-purple-100 border-purple-400' : 'bg-white border-transparent hover:border-purple-200'}`}>
+                      <p className="text-xl font-bold text-purple-700">{myCap}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">CAP</p>
+                      <p className="text-[9px] text-purple-600">{costFilter === 'cap' ? '▲ hide' : '▼ details'}</p>
+                    </button>
+                  </div>
+                  {costFilter && (() => {
+                    const isCdn = costFilter === 'cdn'
+                    const filtered = myWorkRows.filter(r => isCdn ? r.cdn_inc > 0 : r.cap_inc > 0)
+                    return (
+                      <div className="mb-2 rounded-xl border overflow-hidden" style={{ borderColor: isCdn ? '#bbf7d0' : '#e9d5ff' }}>
+                        <div className="px-3 py-1.5" style={{ background: isCdn ? '#f0fdf4' : '#faf5ff' }}>
+                          <span className="text-[11px] font-semibold" style={{ color: isCdn ? '#15803d' : '#7e22ce' }}>
+                            {isCdn ? 'CDN — Container Moved' : 'CAP — CUSDEC Passed'}
+                          </span>
+                        </div>
+                        {filtered.length === 0 ? (
+                          <p className="text-xs text-gray-400 px-3 py-2">No records</p>
+                        ) : (
+                          <div className="max-h-44 overflow-y-auto divide-y divide-gray-50 bg-white">
+                            {filtered.map((r, i) => (
+                              <div key={r.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-gray-800 truncate font-medium">{r.file_name || '—'}</p>
+                                  <p className="text-gray-400">{new Date(r.created_at).toLocaleDateString('en-GB')} · {r.action}</p>
+                                </div>
+                                <span className="ml-2 flex-shrink-0 text-[11px] font-bold" style={{ color: isCdn ? '#16a34a' : '#9333ea' }}>#{i + 1}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>CDN × Rs.{fmtLKR(rates.cdn_rate)} + CAP × Rs.{fmtLKR(rates.cap_rate)}</span>
+                    <span className="font-semibold text-gray-800">Rs. {fmtLKR(myCountWorkEarned)}</span>
+                  </div>
+                </>
               )}
-              <div className="flex justify-between pt-1 border-t border-blue-200 font-bold">
-                <span className="text-blue-800">Total Earned</span>
-                <span className="text-blue-800">Rs. {fmtLKR(myEarned)}</span>
+            </div>
+
+            {/* Other Work */}
+            {(myApprovedOtherWork.length > 0 || myPendingOtherWork.length > 0) && (
+              <div className="border-t border-blue-100 pt-3">
+                <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wide mb-2">Other Work</p>
+                {myApprovedOtherWork.map(x => (
+                  <div key={x.id} className="flex items-center justify-between text-xs py-1">
+                    <span className="text-gray-700 flex items-center gap-1"><Briefcase size={10} className="text-indigo-500"/>{x.description}</span>
+                    <span className="font-semibold text-indigo-700">Rs. {fmtLKR(Number(x.amount))}</span>
+                  </div>
+                ))}
+                {myPendingOtherWork.length > 0 && (
+                  <div className="mt-1.5">
+                    <p className="text-[10px] text-amber-600 font-semibold mb-1">Pending approval (not counted yet)</p>
+                    {myPendingOtherWork.map(x => (
+                      <div key={x.id} className="flex items-center justify-between text-xs py-1 opacity-50">
+                        <span className="text-gray-500 flex items-center gap-1"><Briefcase size={10}/>{x.description}</span>
+                        <span className="text-gray-400">Rs. {fmtLKR(Number(x.amount))}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
+            )}
+
+            {/* Total */}
+            <div className="border-t border-blue-200 pt-2 flex items-center justify-between text-xs font-bold">
+              <span className="text-blue-800">Total Cost</span>
+              <span className="text-blue-800">Rs. {fmtLKR(myEarned)}</span>
             </div>
           </div>
-          {/* Received history */}
-          <div className="bg-gray-50 rounded-xl p-3">
+        )}
+
+        {/* Received history */}
+        {showReceived && (
+          <div className="mb-3 bg-gray-50 rounded-xl p-3">
             <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Payment History (Received)</p>
             {myReceivedPayments.length === 0 ? (
               <p className="text-xs text-gray-400">No payments received yet</p>
             ) : (
-              <div className="space-y-0.5 max-h-36 overflow-y-auto">
+              <div className="space-y-0.5 max-h-40 overflow-y-auto">
                 {myReceivedPayments.map(p => (
                   <div key={p.id} className="flex items-center justify-between text-xs py-1.5 border-t border-gray-100 first:border-0">
                     <span className="text-gray-600">{p.from_user_name} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
@@ -303,201 +394,215 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
               </div>
             )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Record a payment */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-2">
-        <select value={toUserId} onChange={e => { setToUserId(e.target.value); if (e.target.value) setToOther('') }} className="input text-sm">
-          <option value="">— Select user —</option>
-          {users.filter(u => u.id !== userId).map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
-        </select>
-        <input value={toOther} onChange={e => { setToOther(e.target.value); if (e.target.value) setToUserId('') }}
-          placeholder="...or type an Other name" className="input text-sm"/>
-        <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="Amount" className="input text-sm"/>
-        <button onClick={recordPayment} disabled={saving} className="btn-primary flex items-center justify-center gap-2 text-sm">
-          {saving ? <Loader size={14} className="animate-spin"/> : <Plus size={14}/>}Record
-        </button>
-      </div>
-      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+        {/* Admin section */}
+        {isAdmin && (
+          <div className="mt-2 pt-3 border-t border-gray-100">
+            <button onClick={() => { setShowAdminAll(x => !x); if (!showAdminAll) loadAllWork() }}
+              className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 mb-2">
+              <UsersIcon size={13}/>{showAdminAll ? 'Hide' : 'Show'} all users (Admin)
+            </button>
+            {showAdminAll && (
+              <div className="space-y-4 mt-2">
 
-      {/* Awaiting my response */}
-      {awaitingMyResponse.length > 0 && (
-        <div className="mb-4">
-          <p className="text-xs font-medium text-gray-600 mb-1.5">Awaiting your response</p>
-          <div className="space-y-1.5">
-            {awaitingMyResponse.map(p => (
-              <div key={p.id} className="flex items-center justify-between text-xs border border-amber-200 bg-amber-50 rounded-lg px-3 py-2">
-                <span><b>{p.from_user_name}</b> says they paid you <b>Rs. {fmtLKR(Number(p.amount))}</b></span>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <button onClick={() => respond(p.id, 'confirmed')} disabled={respondingId === p.id}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-md text-white font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
-                    <Check size={12}/>Yes, landed
-                  </button>
-                  <button onClick={() => respond(p.id, 'declined')} disabled={respondingId === p.id}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-md border border-red-300 text-red-600 font-medium disabled:opacity-50 hover:bg-red-50">
-                    <X size={12}/>No
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* What I've sent */}
-      {sentByMe.length > 0 && (
-        <div>
-          <p className="text-xs font-medium text-gray-600 mb-1.5">Payments you've sent</p>
-          <div className="space-y-1 max-h-40 overflow-y-auto">
-            {sentByMe.map(p => (
-              <div key={p.id} className="flex items-center justify-between text-xs py-1 border-t border-gray-50">
-                <span className="text-gray-600">{p.to_display_name} — Rs. {fmtLKR(Number(p.amount))}</span>
-                <div className="flex items-center gap-2">
-                  {statusBadge(p.status)}
-                  <button onClick={() => { if (confirm('Return this payment? This will remove it from the recipient\'s balance.')) deletePayment(p.id, true) }}
-                    disabled={returningId === p.id}
-                    className="flex items-center gap-0.5 text-[10px] text-gray-400 hover:text-amber-600 disabled:opacity-40">
-                    {returningId === p.id ? <Loader size={10} className="animate-spin"/> : <Undo2 size={10}/>}Return
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Admin panel */}
-      {isAdmin && (
-        <div className="mt-4 pt-3 border-t border-gray-100">
-          <button onClick={() => { setShowAdminPanel(x => !x); if (!showAdminPanel) loadAllWork() }}
-            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700">
-            <UsersIcon size={13}/> {showAdminPanel ? 'Hide' : 'Show'} all users balance (Admin)
-          </button>
-          {showAdminPanel && (
-            <div className="mt-3 space-y-4">
-
-              {/* Add Other Work */}
-              <div className="bg-indigo-50 rounded-xl p-3">
-                <p className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wide mb-2 flex items-center gap-1"><Briefcase size={12}/>Add Other Work</p>
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                  <select value={owTargetUser} onChange={e => setOwTargetUser(e.target.value)} className="input text-sm">
-                    <option value="">— Select user —</option>
-                    {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
-                  </select>
-                  <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder="Description" className="input text-sm sm:col-span-1"/>
-                  <input type="number" value={owAmount} onChange={e => setOwAmount(e.target.value)} placeholder="Amount (Rs.)" className="input text-sm"/>
-                  <button onClick={addOtherWork} disabled={owSaving} className="btn-primary flex items-center justify-center gap-1.5 text-sm">
-                    {owSaving ? <Loader size={13} className="animate-spin"/> : <Plus size={13}/>}Add
-                  </button>
-                </div>
-                <p className="text-[10px] text-indigo-500 mt-1.5">Needs your approval before counting in user balance — approve below after adding.</p>
-              </div>
-
-              {/* Pending Other Work approvals */}
-              {allOtherWork.filter(x => x.status === 'pending').length > 0 && (
-                <div className="border border-amber-200 rounded-xl overflow-hidden">
-                  <div className="px-3 py-1.5 bg-amber-50">
-                    <p className="text-[11px] font-semibold text-amber-700">Pending Approval — Other Work</p>
-                  </div>
-                  <div className="divide-y divide-gray-50">
-                    {allOtherWork.filter(x => x.status === 'pending').map(x => (
-                      <div key={x.id} className="flex items-center justify-between px-3 py-2 text-xs">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-gray-800">{x.user_name || x.user_id}</p>
-                          <p className="text-gray-500">{x.description} · Rs. {fmtLKR(Number(x.amount))}</p>
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <button onClick={() => approveOtherWork(x.id, 'approved')} disabled={approvingId === x.id}
-                            className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
-                            {approvingId === x.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
-                          </button>
-                          <button onClick={() => approveOtherWork(x.id, 'rejected')} disabled={approvingId === x.id}
-                            className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
-                            <X size={10}/>Reject
-                          </button>
-                          <button onClick={() => deleteOtherWork(x.id)} disabled={deletingOwId === x.id}
-                            className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Per-user summary */}
-              {users.map(u => {
-                const name = u.full_name || u.username
-                const userWork = workByUser[name] || { cdn: 0, cap: 0 }
-                const countEarned = userWork.cdn * rates.cdn_rate + userWork.cap * rates.cap_rate
-                const owData = otherWorkByUserId[u.id] || { approved: 0, pending: [] }
-                const earned = countEarned + owData.approved
-                const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
-                const received = userConfirmedPayments.reduce((s, p) => s + Number(p.amount), 0)
-                const balance = earned - received
-                const isExpanded = expandedUser === u.id
-                return (
-                  <div key={u.id} className="border border-gray-200 rounded-xl overflow-hidden">
-                    <div className="px-3 py-2.5 bg-gray-50">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <p className="font-semibold text-gray-800 text-xs">{name}</p>
-                        <span className={`text-xs font-bold ${balance >= 0 ? 'text-amber-700' : 'text-red-600'}`}>
-                          Balance: Rs. {fmtLKR(balance)}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-xs flex-wrap">
-                        <span className="text-gray-500">Count Work: <b className="text-gray-800">Rs. {fmtLKR(countEarned)}</b></span>
-                        {owData.approved > 0 && <span className="text-indigo-600">Other Work: <b>Rs. {fmtLKR(owData.approved)}</b></span>}
-                        {owData.pending.length > 0 && <span className="text-amber-500">Pending: {owData.pending.length}</span>}
-                        <button onClick={() => setExpandedUser(isExpanded ? null : u.id)}
-                          className="text-gray-500 hover:text-gray-700 flex items-center gap-1">
-                          Paid: <b className="text-green-700 ml-1">Rs. {fmtLKR(received)}</b>
-                          {userConfirmedPayments.length > 0 && <span className="text-gray-400 ml-0.5">▾</span>}
-                        </button>
-                      </div>
-                    </div>
-                    {isExpanded && (
-                      <div className="divide-y divide-gray-50 max-h-40 overflow-y-auto">
-                        {userConfirmedPayments.length === 0 ? (
-                          <p className="text-xs text-gray-400 p-3">No payments to this user yet</p>
-                        ) : userConfirmedPayments.map(p => (
-                          <div key={p.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
-                            <span className="text-gray-600">{p.from_user_name} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-green-700">Rs. {fmtLKR(Number(p.amount))}</span>
-                              <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
-                                className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                {/* Rate settings */}
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Payment Rates</p>
+                  <div className="flex items-end gap-3 flex-wrap">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] text-gray-500">CDN Rate (Rs.)</span>
+                      <input type="number" min={0} step="0.01"
+                        value={rateDraft ? rateDraft.cdn_rate : rates.cdn_rate}
+                        onChange={e => setRateDraft(prev => ({ ...(prev || rates), cdn_rate: Number(e.target.value) || 0 }))}
+                        className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-green-400"/>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] text-gray-500">CAP Rate (Rs.)</span>
+                      <input type="number" min={0} step="0.01"
+                        value={rateDraft ? rateDraft.cap_rate : rates.cap_rate}
+                        onChange={e => setRateDraft(prev => ({ ...(prev || rates), cap_rate: Number(e.target.value) || 0 }))}
+                        className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-purple-400"/>
+                    </label>
+                    {rateDraft && (
+                      <button onClick={saveRates} disabled={savingRates}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                        {savingRates ? <Loader size={11} className="animate-spin"/> : <Save size={11}/>}Save Rates
+                      </button>
                     )}
                   </div>
-                )
-              })}
-
-              {/* Full payments log */}
-              <div>
-                <p className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold mb-1.5">All Payments Log</p>
-                <div className="max-h-48 overflow-y-auto space-y-0.5">
-                  {payments.map(p => (
-                    <div key={p.id} className="flex items-center justify-between text-xs border-t border-gray-50 py-1.5">
-                      <span className="text-gray-600">{p.from_user_name} → {p.to_display_name} · Rs. {fmtLKR(Number(p.amount))} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {statusBadge(p.status)}
-                        <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
-                          className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={12}/></button>
-                      </div>
-                    </div>
-                  ))}
-                  {payments.length === 0 && <p className="text-center text-gray-400 py-4">No payments recorded yet</p>}
                 </div>
+
+                {/* Add Other Work */}
+                <div className="bg-indigo-50 rounded-xl p-3">
+                  <p className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wide mb-2 flex items-center gap-1"><Briefcase size={12}/>Add Other Work</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <select value={owTargetUser} onChange={e => setOwTargetUser(e.target.value)} className="input text-sm">
+                      <option value="">— Select user —</option>
+                      {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
+                    </select>
+                    <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder="Description" className="input text-sm sm:col-span-1"/>
+                    <input type="number" value={owAmount} onChange={e => setOwAmount(e.target.value)} placeholder="Amount (Rs.)" className="input text-sm"/>
+                    <button onClick={addOtherWork} disabled={owSaving} className="btn-primary flex items-center justify-center gap-1.5 text-sm">
+                      {owSaving ? <Loader size={13} className="animate-spin"/> : <Plus size={13}/>}Add
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-indigo-500 mt-1.5">Needs approval before counting in balance — approve below.</p>
+                </div>
+
+                {/* Pending Other Work approvals */}
+                {allOtherWork.filter(x => x.status === 'pending').length > 0 && (
+                  <div className="border border-amber-200 rounded-xl overflow-hidden">
+                    <div className="px-3 py-1.5 bg-amber-50">
+                      <p className="text-[11px] font-semibold text-amber-700">Pending Approval — Other Work</p>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {allOtherWork.filter(x => x.status === 'pending').map(x => (
+                        <div key={x.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-800">{x.user_name || x.user_id}</p>
+                            <p className="text-gray-500">{x.description} · Rs. {fmtLKR(Number(x.amount))}</p>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <button onClick={() => approveOtherWork(x.id, 'approved')} disabled={approvingId === x.id}
+                              className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                              {approvingId === x.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
+                            </button>
+                            <button onClick={() => approveOtherWork(x.id, 'rejected')} disabled={approvingId === x.id}
+                              className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
+                              <X size={10}/>Reject
+                            </button>
+                            <button onClick={() => deleteOtherWork(x.id)} disabled={deletingOwId === x.id}
+                              className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-user summary */}
+                {users.map(u => {
+                  const name = u.full_name || u.username
+                  const userWork = workByUser[name] || { cdn: 0, cap: 0 }
+                  const countCost = userWork.cdn * rates.cdn_rate + userWork.cap * rates.cap_rate
+                  const owData = otherWorkByUserId[u.id] || { approved: 0, pending: [] }
+                  const totalCost = countCost + owData.approved
+                  const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
+                  const received = userConfirmedPayments.reduce((s, p) => s + Number(p.amount), 0)
+                  const bal = totalCost - received
+                  const isExpanded = expandedUser === u.id
+                  return (
+                    <div key={u.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                      <div className="px-3 py-2.5 bg-gray-50">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <p className="font-semibold text-gray-800 text-xs">{name}</p>
+                          <span className={`text-xs font-bold ${bal >= 0 ? 'text-amber-700' : 'text-red-600'}`}>Balance: Rs. {fmtLKR(bal)}</span>
+                        </div>
+                        <div className="flex items-center gap-4 text-xs flex-wrap">
+                          <span className="text-gray-500">CDN: <b className="text-green-700">{userWork.cdn}</b> · CAP: <b className="text-purple-700">{userWork.cap}</b></span>
+                          <span className="text-gray-500">Cost: <b className="text-gray-800">Rs. {fmtLKR(totalCost)}</b></span>
+                          {owData.approved > 0 && <span className="text-indigo-600">Other: <b>Rs. {fmtLKR(owData.approved)}</b></span>}
+                          {owData.pending.length > 0 && <span className="text-amber-500">Pending: {owData.pending.length}</span>}
+                          <button onClick={() => setExpandedUser(isExpanded ? null : u.id)}
+                            className="text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                            Received: <b className="text-green-700 ml-1">Rs. {fmtLKR(received)}</b>
+                            {userConfirmedPayments.length > 0 && <span className="text-gray-400 ml-0.5">▾</span>}
+                          </button>
+                        </div>
+                      </div>
+                      {isExpanded && (
+                        <div className="divide-y divide-gray-50 max-h-40 overflow-y-auto">
+                          {userConfirmedPayments.length === 0 ? (
+                            <p className="text-xs text-gray-400 p-3">No payments yet</p>
+                          ) : userConfirmedPayments.map(p => (
+                            <div key={p.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                              <span className="text-gray-600">{p.from_user_name} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-green-700">Rs. {fmtLKR(Number(p.amount))}</span>
+                                <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
+                                  className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+
               </div>
-            </div>
-          )}
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ═══ Panel 2 — Payments ═══ */}
+      <div className="card mb-5">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2 mb-3"><Send size={15}/>Payments</h2>
+
+        {/* Record a payment */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-2">
+          <select value={toUserId} onChange={e => { setToUserId(e.target.value); if (e.target.value) setToOther('') }} className="input text-sm">
+            <option value="">— Select user —</option>
+            {users.filter(u => u.id !== userId).map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
+          </select>
+          <input value={toOther} onChange={e => { setToOther(e.target.value); if (e.target.value) setToUserId('') }}
+            placeholder="...or type an Other name" className="input text-sm"/>
+          <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="Amount" className="input text-sm"/>
+          <button onClick={recordPayment} disabled={saving} className="btn-primary flex items-center justify-center gap-2 text-sm">
+            {saving ? <Loader size={14} className="animate-spin"/> : <Plus size={14}/>}Record
+          </button>
         </div>
-      )}
-    </div>
+        {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+
+        {/* Awaiting my response */}
+        {awaitingMyResponse.length > 0 && (
+          <div className="mb-4">
+            <p className="text-xs font-medium text-gray-600 mb-1.5">Awaiting your response</p>
+            <div className="space-y-1.5">
+              {awaitingMyResponse.map(p => (
+                <div key={p.id} className="flex items-center justify-between text-xs border border-amber-200 bg-amber-50 rounded-lg px-3 py-2">
+                  <span><b>{p.from_user_name}</b> says they paid you <b>Rs. {fmtLKR(Number(p.amount))}</b></span>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button onClick={() => respond(p.id, 'confirmed')} disabled={respondingId === p.id}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-md text-white font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                      <Check size={12}/>Yes, landed
+                    </button>
+                    <button onClick={() => respond(p.id, 'declined')} disabled={respondingId === p.id}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-md border border-red-300 text-red-600 font-medium disabled:opacity-50 hover:bg-red-50">
+                      <X size={12}/>No
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Payments you've sent */}
+        {sentByMe.length > 0 && (
+          <div>
+            <p className="text-xs font-medium text-gray-600 mb-1.5">Payments you've sent</p>
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              {sentByMe.map(p => (
+                <div key={p.id} className="flex items-center justify-between text-xs py-1 border-t border-gray-50">
+                  <span className="text-gray-600">{p.to_display_name} — Rs. {fmtLKR(Number(p.amount))}</span>
+                  <div className="flex items-center gap-2">
+                    {statusBadge(p.status)}
+                    <button onClick={() => { if (confirm('Return this payment?')) deletePayment(p.id, true) }}
+                      disabled={returningId === p.id}
+                      className="flex items-center gap-0.5 text-[10px] text-gray-400 hover:text-amber-600 disabled:opacity-40">
+                      {returningId === p.id ? <Loader size={10} className="animate-spin"/> : <Undo2 size={10}/>}Return
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -949,8 +1054,6 @@ function MyTasksContent() {
           )}
         </div>
       )}
-
-      <CountWork userId={userId} isAdmin={isAdmin}/>
 
       <SalaryPayments userId={userId} isAdmin={isAdmin}/>
 
