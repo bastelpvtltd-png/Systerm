@@ -1648,6 +1648,36 @@ function DocumentsUploadContent() {
                   </div>
                 )}
 
+                {/* Inline format-error editing — visible to ALL users */}
+                {(() => {
+                  const badFields = selectedItem.fields
+                    .map((f, i) => ({ f, i }))
+                    .filter(({ f }) => isBadContainerNo(selectedItem.detectedType, f) || isBadCusdecNumber(selectedItem.detectedType, f))
+                  if (badFields.length === 0) return null
+                  return (
+                    <div className="px-5 py-3 border-t border-red-100 bg-red-50">
+                      <p className="text-xs font-semibold text-red-700 mb-2">⚠ Format error — send karannen kala fix karanna:</p>
+                      {badFields.map(({ f, i }) => (
+                        <div key={i} className="mb-2 last:mb-0">
+                          <label className="block text-[11px] font-medium text-red-700 mb-0.5">{f.label}</label>
+                          <textarea
+                            value={f.value}
+                            onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
+                            rows={1}
+                            className="w-full text-xs border border-red-400 bg-white rounded-md px-2 py-1.5 text-gray-800 focus:outline-none focus:ring-1 focus:ring-red-400 resize-none"
+                          />
+                          {isBadContainerNo(selectedItem.detectedType, f) && (
+                            <p className="text-[10px] text-red-600 mt-0.5">4 akuru (A-Z) + 7 ilakkam wenna one (space nathuwa), e.g. MSCU1234567</p>
+                          )}
+                          {isBadCusdecNumber(selectedItem.detectedType, f) && (
+                            <p className="text-[10px] text-red-600 mt-0.5">English akuru ha ilakkam dekai wenna one, e.g. E 38812</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
+
                 <div className="flex items-center justify-between px-5 py-4 border-t border-gray-100">
                   <button onClick={() => removeItem(selectedItem.id)}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
