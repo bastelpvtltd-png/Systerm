@@ -46,6 +46,24 @@ function isBadContainerNo(docType: string | undefined, field: PdfField): boolean
   return !!v && !/^[A-Z]{4}\d{7}$/.test(v.toUpperCase())
 }
 
+// CUSDEC number must have at least one English letter AND at least one digit.
+// Typical: "E 38812", "CE 12345". All-digit or all-letter values are wrong.
+function isBadCusdecNumber(docType: string | undefined, field: PdfField): boolean {
+  if (docType !== 'cusdec' || field.key !== 'number') return false
+  const v = field.value.replace(/\s/g, '')
+  if (!v) return false
+  return !/[A-Za-z]/.test(v) || !/\d/.test(v)
+}
+
+// Auto-normalize known fields immediately after extraction (both native + scanned).
+// CDN container_no: strip all spaces and uppercase → "MSCU 1234567" → "MSCU1234567".
+function normalizeFieldValue(docType: string, key: string, value: string): string {
+  if (docType === 'cdn' && key === 'container_no') {
+    return value.replace(/\s+/g, '').toUpperCase()
+  }
+  return value
+}
+
 interface PctBox { x: number; y: number; w: number; h: number; page?: number }
 
 interface UploadItem {
@@ -290,7 +308,10 @@ function DocumentsUploadContent() {
       updateItem(itemId, {
         status: 'ready',
         detectedType: (json.detectedDocType as DocType) || '',
-        fields: (json.fields || []).map((f: PdfField) => ({ ...f, rawValue: f.value })),
+        fields: (json.fields || []).map((f: PdfField) => {
+          const normalized = normalizeFieldValue(json.detectedDocType || '', f.key, f.value)
+          return { ...f, rawValue: f.value, value: normalized }
+        }),
         rawText: json.rawText || '',
         scanned: !!json.scanned,
         boxes: json.boxes || {},
@@ -352,9 +373,16 @@ function DocumentsUploadContent() {
   }
 
   function updateItemField(id: string, idx: number, val: string) {
-    setItems(prev => prev.map(it => it.id === id
-      ? { ...it, fields: it.fields.map((f, i) => i === idx ? { ...f, value: val, rawValue: val } : f) }
-      : it))
+    setItems(prev => prev.map(it => {
+      if (it.id !== id) return it
+      return {
+        ...it, fields: it.fields.map((f, i) => {
+          if (i !== idx) return f
+          const normalized = normalizeFieldValue(it.detectedType, f.key, val)
+          return { ...f, value: normalized, rawValue: val }
+        }),
+      }
+    }))
   }
 
   function updateFieldRuleText(id: string, idx: number, patch: Partial<Pick<PdfField, 'excludeWords' | 'formula' | 'specNote'>>) {
@@ -396,11 +424,17 @@ function DocumentsUploadContent() {
   }
 
   function setFieldFromOcr(id: string, idx: number, rawText: string) {
-    setItems(prev => prev.map(it => it.id === id
-      ? { ...it, fields: it.fields.map((f, i) => i === idx
-          ? { ...f, rawValue: rawText, value: applyTextRules(rawText, f.formula, f.excludeWords) }
-          : f) }
-      : it))
+    setItems(prev => prev.map(it => {
+      if (it.id !== id) return it
+      return {
+        ...it, fields: it.fields.map((f, i) => {
+          if (i !== idx) return f
+          const applied = applyTextRules(rawText, f.formula, f.excludeWords)
+          const normalized = normalizeFieldValue(it.detectedType, f.key, applied)
+          return { ...f, rawValue: rawText, value: normalized }
+        }),
+      }
+    }))
   }
 
   async function useSharedBox(id: string, idx: number, sourceIdx: number) {
@@ -520,6 +554,22 @@ function DocumentsUploadContent() {
       return { ok: false, error: 'No data extracted' }
     }
     const docType = item.detectedType || 'cusdec'
+
+    // Field format warnings — shown before save, user can proceed or cancel.
+    for (const f of item.fields) {
+      if (isBadContainerNo(item.detectedType, f)) {
+        const go = window.confirm(
+          `⚠ Container No. "${f.value}" does not match ISO 6346 format (4 letters + 7 digits, e.g. MSCU1234567).\n\nSave anyway?`
+        )
+        if (!go) return { ok: false, error: 'Cancelled — fix Container No. first' }
+      }
+      if (isBadCusdecNumber(item.detectedType, f)) {
+        const go = window.confirm(
+          `⚠ CUSDEC No. "${f.value}" looks wrong — it should have both English letters and digits (e.g. E 38812).\n\nSave anyway?`
+        )
+        if (!go) return { ok: false, error: 'Cancelled — fix CUSDEC No. first' }
+      }
+    }
     const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
     try {
       const res = await fetch('/api/check-document-match', {
@@ -1470,10 +1520,13 @@ function DocumentsUploadContent() {
                                 <textarea value={f.value} disabled={f.locked} onChange={e => updateItemField(selectedItem.id, i, e.target.value)}
                                   placeholder="—" rows={f.value.includes('\n') ? Math.min(4, f.value.split('\n').length) : 1}
                                   className={`w-full bg-transparent border-b focus:outline-none py-0.5 text-gray-800 disabled:text-gray-400 resize-none leading-tight ${
-                                    isBadContainerNo(selectedItem.detectedType, f) ? 'border-red-400 bg-red-50 focus:border-red-500' : 'border-transparent hover:border-gray-200 focus:border-current'
+                                    (isBadContainerNo(selectedItem.detectedType, f) || isBadCusdecNumber(selectedItem.detectedType, f)) ? 'border-red-400 bg-red-50 focus:border-red-500' : 'border-transparent hover:border-gray-200 focus:border-current'
                                   }`}/>
                                 {isBadContainerNo(selectedItem.detectedType, f) && (
                                   <p className="text-[10px] text-red-600 mt-0.5">Container No. format eka waradi — 4 akuru (A-Z) + 7 ilakkam wenna one (space nathuwa), e.g. MSCU1234567. Hariyata edit karanna.</p>
+                                )}
+                                {isBadCusdecNumber(selectedItem.detectedType, f) && (
+                                  <p className="text-[10px] text-red-600 mt-0.5">CUSDEC No. format eka waradi — English akuru ha ilakkam dekai wenna one, e.g. E 38812. Hariyata edit karanna.</p>
                                 )}
                                 <input value={f.excludeWords || ''} disabled={f.locked}
                                   onChange={e => updateFieldRuleText(selectedItem.id, i, { excludeWords: e.target.value })}
