@@ -453,8 +453,15 @@ function BoatNoteCheckPanel() {
             <button key={c.id} onClick={() => setSelectedId(c.id)}
               className={`w-full text-left p-2.5 rounded-lg border-l-4 border text-xs ${
                 selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'
-              } ${c.boat_note_passed ? '!border-l-blue-500' : '!border-l-transparent'}`}>
-              <p className="font-bold text-gray-800">{c.container_no || '—'} {c.boat_note_passed && <span className="text-blue-600 font-normal">· passed</span>}</p>
+              } ${c.export_release_passed ? '!border-l-green-500' : c.boat_note_passed ? '!border-l-blue-500' : '!border-l-transparent'}`}>
+              <p className="font-bold text-gray-800">
+                {c.container_no || '—'}{' '}
+                {c.export_release_passed
+                  ? <span className="text-green-600 font-normal">· released</span>
+                  : c.boat_note_passed
+                    ? <span className="text-blue-600 font-normal">· passed</span>
+                    : null}
+              </p>
               <p className="text-gray-600 truncate">{c.shipper?.slice(0, 40)}</p>
             </button>
           ))}

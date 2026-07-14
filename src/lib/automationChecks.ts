@@ -100,8 +100,11 @@ export async function checkExportRelease(params: ExportReleaseParams): Promise<E
     const { data: cusdec } = await supabaseAdmin.from('cusdec').select('code, number').eq('id', cusdecId).single()
     await supabaseAdmin.from('cusdec').update({ export_release_passed: true, export_release_checked_at: nowIso }).eq('id', cusdecId)
     if (cusdec) {
+      // All CDNs belonging to this CUSDEC turn green — no boat_note_passed filter,
+      // since the CUSDEC's release covers the whole shipment regardless of which
+      // containers individually passed the boat note check.
       await supabaseAdmin.from('cdn').update({ export_release_passed: true, export_release_checked_at: nowIso })
-        .eq('code', cusdec.code).eq('cusdec_number', cusdec.number).eq('boat_note_passed', true)
+        .eq('code', cusdec.code).eq('cusdec_number', cusdec.number)
     }
   }
 
