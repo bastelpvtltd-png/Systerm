@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase, authHeader } from '@/lib/supabase'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight, Save } from 'lucide-react'
+import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight, Save, Undo2, Briefcase } from 'lucide-react'
 
 interface Task {
   id: string
@@ -35,6 +35,11 @@ interface SalaryPayment {
   responded_at: string | null
 }
 interface Profile { id: string; username: string; full_name: string }
+interface OtherWorkItem {
+  id: string; user_id: string; user_name: string | null; description: string
+  amount: number; status: 'pending' | 'approved' | 'rejected'
+  created_by: string | null; created_at: string; approved_at: string | null
+}
 
 function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
   const [payments, setPayments] = useState<SalaryPayment[]>([])
@@ -42,6 +47,8 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   const [myWorkRows, setMyWorkRows] = useState<WorkCountRow[]>([])
   const [allWorkRows, setAllWorkRows] = useState<WorkCountRow[]>([])
   const [rates, setRates] = useState<WorkRates>({ cdn_rate: 0, cap_rate: 0 })
+  const [myOtherWork, setMyOtherWork] = useState<OtherWorkItem[]>([])
+  const [allOtherWork, setAllOtherWork] = useState<OtherWorkItem[]>([])
   const [toUserId, setToUserId] = useState('')
   const [toOther, setToOther] = useState('')
   const [amount, setAmount] = useState('')
@@ -52,26 +59,40 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   const [showAdminPanel, setShowAdminPanel] = useState(false)
   const [expandedUser, setExpandedUser] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [returningId, setReturningId] = useState<string | null>(null)
+  // Admin: add other work
+  const [owTargetUser, setOwTargetUser] = useState('')
+  const [owDesc, setOwDesc] = useState('')
+  const [owAmount, setOwAmount] = useState('')
+  const [owSaving, setOwSaving] = useState(false)
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+  const [deletingOwId, setDeletingOwId] = useState<string | null>(null)
 
   async function load() {
     try {
       const h = await authHeader()
-      const [sp, wc, wr] = await Promise.all([
+      const [sp, wc, wr, ow] = await Promise.all([
         fetch('/api/salary-payments', { headers: h }).then(r => r.json()),
         fetch('/api/work-counts', { headers: h }).then(r => r.json()),
         fetch('/api/work-rates', { headers: h }).then(r => r.json()),
+        fetch('/api/other-work', { headers: h }).then(r => r.json()),
       ])
       if (sp.payments) setPayments(sp.payments)
       if (wc.rows) setMyWorkRows(wc.rows)
       if (wr.cdn_rate !== undefined) setRates(wr)
+      if (ow.items) setMyOtherWork(ow.items)
     } catch {}
   }
 
   async function loadAllWork() {
     try {
-      const res = await fetch('/api/work-counts?all=1', { headers: await authHeader() })
-      const d = await res.json()
-      if (res.ok) setAllWorkRows(d.rows || [])
+      const h = await authHeader()
+      const [wc, ow] = await Promise.all([
+        fetch('/api/work-counts?all=1', { headers: h }).then(r => r.json()),
+        fetch('/api/other-work?all=1', { headers: h }).then(r => r.json()),
+      ])
+      if (wc.rows) setAllWorkRows(wc.rows || [])
+      if (ow.items) setAllOtherWork(ow.items || [])
     } catch {}
   }
 
@@ -115,24 +136,73 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
     finally { setRespondingId(null) }
   }
 
-  async function deletePayment(id: string) {
-    setDeletingId(id)
+  async function deletePayment(id: string, returning = false) {
+    returning ? setReturningId(id) : setDeletingId(id)
     try {
       const res = await fetch(`/api/salary-payments?id=${id}`, { method: 'DELETE', headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setPayments(prev => prev.filter(p => p.id !== id))
     } catch (e: any) { setError(e.message) }
-    finally { setDeletingId(null) }
+    finally { returning ? setReturningId(null) : setDeletingId(null) }
+  }
+
+  async function addOtherWork() {
+    if (!owTargetUser || !owDesc.trim() || !owAmount) { setError('Fill all fields for Other Work'); return }
+    setOwSaving(true); setError('')
+    try {
+      const targetUser = users.find(u => u.id === owTargetUser)
+      const res = await fetch('/api/other-work', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ user_id: owTargetUser, user_name: targetUser?.full_name || targetUser?.username, description: owDesc.trim(), amount: Number(owAmount) }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setOwTargetUser(''); setOwDesc(''); setOwAmount('')
+      await loadAllWork()
+    } catch (e: any) { setError(e.message) }
+    finally { setOwSaving(false) }
+  }
+
+  async function approveOtherWork(id: string, status: 'approved' | 'rejected') {
+    setApprovingId(id)
+    try {
+      const res = await fetch('/api/other-work', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ id, status }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setAllOtherWork(prev => prev.map(x => x.id === id ? d.item : x))
+      if (status === 'approved') setMyOtherWork(prev => prev.map(x => x.id === id ? d.item : x))
+      await load()
+    } catch (e: any) { setError(e.message) }
+    finally { setApprovingId(null) }
+  }
+
+  async function deleteOtherWork(id: string) {
+    setDeletingOwId(id)
+    try {
+      const res = await fetch(`/api/other-work?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setAllOtherWork(prev => prev.filter(x => x.id !== id))
+      setMyOtherWork(prev => prev.filter(x => x.id !== id))
+    } catch (e: any) { setError(e.message) }
+    finally { setDeletingOwId(null) }
   }
 
   // Current user computed values
   const myCdn = myWorkRows.reduce((s, r) => s + (r.cdn_inc || 0), 0)
   const myCap = myWorkRows.reduce((s, r) => s + (r.cap_inc || 0), 0)
-  const myEarned = myCdn * rates.cdn_rate + myCap * rates.cap_rate
+  const myCountWorkEarned = myCdn * rates.cdn_rate + myCap * rates.cap_rate
+  const myApprovedOtherWork = myOtherWork.filter(x => x.status === 'approved')
+  const myOtherWorkEarned = myApprovedOtherWork.reduce((s, x) => s + Number(x.amount), 0)
+  const myEarned = myCountWorkEarned + myOtherWorkEarned
   const myReceivedPayments = payments.filter(p => p.to_user_id === userId && p.status === 'confirmed')
   const myReceived = myReceivedPayments.reduce((s, p) => s + Number(p.amount), 0)
   const myBalance = myEarned - myReceived
+  const myPendingOtherWork = myOtherWork.filter(x => x.status === 'pending')
 
   // Admin: per-user work earned from allWorkRows
   const workByUser = allWorkRows.reduce((acc, r) => {
@@ -141,6 +211,14 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
     acc[r.user_name].cap += r.cap_inc || 0
     return acc
   }, {} as Record<string, { cdn: number; cap: number }>)
+
+  // Admin: per-user other work (approved)
+  const otherWorkByUserId = allOtherWork.reduce((acc, x) => {
+    if (!acc[x.user_id]) acc[x.user_id] = { approved: 0, pending: [] }
+    if (x.status === 'approved') acc[x.user_id].approved += Number(x.amount)
+    if (x.status === 'pending') acc[x.user_id].pending.push(x)
+    return acc
+  }, {} as Record<string, { approved: number; pending: OtherWorkItem[] }>)
 
   const awaitingMyResponse = payments.filter(p => p.to_user_id === userId && p.status === 'pending')
   const sentByMe = payments.filter(p => p.from_user_id === userId)
@@ -171,26 +249,60 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
         </div>
       </div>
 
-      {/* My payment received history (expandable by clicking Received) */}
+      {/* My earned breakdown (expandable) */}
       {showMyHistory && (
-        <div className="mb-3 bg-gray-50 rounded-xl p-3">
-          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Payment History (Received)</p>
-          {myReceivedPayments.length === 0 ? (
-            <p className="text-xs text-gray-400">No payments received yet</p>
-          ) : (
-            <div className="space-y-0.5 max-h-36 overflow-y-auto">
-              {myReceivedPayments.map(p => (
-                <div key={p.id} className="flex items-center justify-between text-xs py-1.5 border-t border-gray-100 first:border-0">
-                  <span className="text-gray-600">{p.from_user_name} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-green-700">Rs. {fmtLKR(Number(p.amount))}</span>
-                    <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
-                      className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
-                  </div>
+        <div className="mb-3 space-y-2">
+          {/* Earned breakdown */}
+          <div className="bg-blue-50 rounded-xl p-3">
+            <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-2">Earned Breakdown</p>
+            <div className="space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Count Work (CDN × {fmtLKR(rates.cdn_rate)} + CAP × {fmtLKR(rates.cap_rate)})</span>
+                <span className="font-semibold text-gray-800">Rs. {fmtLKR(myCountWorkEarned)}</span>
+              </div>
+              {myApprovedOtherWork.map(x => (
+                <div key={x.id} className="flex justify-between">
+                  <span className="text-gray-600 flex items-center gap-1"><Briefcase size={10} className="text-indigo-500"/>{x.description}</span>
+                  <span className="font-semibold text-indigo-700">Rs. {fmtLKR(Number(x.amount))}</span>
                 </div>
               ))}
+              {myPendingOtherWork.length > 0 && (
+                <div className="pt-1 border-t border-blue-100 mt-1">
+                  <p className="text-[10px] text-amber-600 font-semibold mb-0.5">Pending approval (not counted yet)</p>
+                  {myPendingOtherWork.map(x => (
+                    <div key={x.id} className="flex justify-between text-gray-400">
+                      <span className="flex items-center gap-1"><Briefcase size={10}/>{x.description}</span>
+                      <span>Rs. {fmtLKR(Number(x.amount))}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex justify-between pt-1 border-t border-blue-200 font-bold">
+                <span className="text-blue-800">Total Earned</span>
+                <span className="text-blue-800">Rs. {fmtLKR(myEarned)}</span>
+              </div>
             </div>
-          )}
+          </div>
+          {/* Received history */}
+          <div className="bg-gray-50 rounded-xl p-3">
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Payment History (Received)</p>
+            {myReceivedPayments.length === 0 ? (
+              <p className="text-xs text-gray-400">No payments received yet</p>
+            ) : (
+              <div className="space-y-0.5 max-h-36 overflow-y-auto">
+                {myReceivedPayments.map(p => (
+                  <div key={p.id} className="flex items-center justify-between text-xs py-1.5 border-t border-gray-100 first:border-0">
+                    <span className="text-gray-600">{p.from_user_name} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-green-700">Rs. {fmtLKR(Number(p.amount))}</span>
+                      {isAdmin && <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
+                        className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -241,14 +353,21 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
             {sentByMe.map(p => (
               <div key={p.id} className="flex items-center justify-between text-xs py-1 border-t border-gray-50">
                 <span className="text-gray-600">{p.to_display_name} — Rs. {fmtLKR(Number(p.amount))}</span>
-                {statusBadge(p.status)}
+                <div className="flex items-center gap-2">
+                  {statusBadge(p.status)}
+                  <button onClick={() => { if (confirm('Return this payment? This will remove it from the recipient\'s balance.')) deletePayment(p.id, true) }}
+                    disabled={returningId === p.id}
+                    className="flex items-center gap-0.5 text-[10px] text-gray-400 hover:text-amber-600 disabled:opacity-40">
+                    {returningId === p.id ? <Loader size={10} className="animate-spin"/> : <Undo2 size={10}/>}Return
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Admin: per-user earned + paid + balance with expandable payment history */}
+      {/* Admin panel */}
       {isAdmin && (
         <div className="mt-4 pt-3 border-t border-gray-100">
           <button onClick={() => { setShowAdminPanel(x => !x); if (!showAdminPanel) loadAllWork() }}
@@ -256,11 +375,63 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
             <UsersIcon size={13}/> {showAdminPanel ? 'Hide' : 'Show'} all users balance (Admin)
           </button>
           {showAdminPanel && (
-            <div className="mt-3 space-y-3">
+            <div className="mt-3 space-y-4">
+
+              {/* Add Other Work */}
+              <div className="bg-indigo-50 rounded-xl p-3">
+                <p className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wide mb-2 flex items-center gap-1"><Briefcase size={12}/>Add Other Work</p>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                  <select value={owTargetUser} onChange={e => setOwTargetUser(e.target.value)} className="input text-sm">
+                    <option value="">— Select user —</option>
+                    {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
+                  </select>
+                  <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder="Description" className="input text-sm sm:col-span-1"/>
+                  <input type="number" value={owAmount} onChange={e => setOwAmount(e.target.value)} placeholder="Amount (Rs.)" className="input text-sm"/>
+                  <button onClick={addOtherWork} disabled={owSaving} className="btn-primary flex items-center justify-center gap-1.5 text-sm">
+                    {owSaving ? <Loader size={13} className="animate-spin"/> : <Plus size={13}/>}Add
+                  </button>
+                </div>
+                <p className="text-[10px] text-indigo-500 mt-1.5">Needs your approval before counting in user balance — approve below after adding.</p>
+              </div>
+
+              {/* Pending Other Work approvals */}
+              {allOtherWork.filter(x => x.status === 'pending').length > 0 && (
+                <div className="border border-amber-200 rounded-xl overflow-hidden">
+                  <div className="px-3 py-1.5 bg-amber-50">
+                    <p className="text-[11px] font-semibold text-amber-700">Pending Approval — Other Work</p>
+                  </div>
+                  <div className="divide-y divide-gray-50">
+                    {allOtherWork.filter(x => x.status === 'pending').map(x => (
+                      <div key={x.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-gray-800">{x.user_name || x.user_id}</p>
+                          <p className="text-gray-500">{x.description} · Rs. {fmtLKR(Number(x.amount))}</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <button onClick={() => approveOtherWork(x.id, 'approved')} disabled={approvingId === x.id}
+                            className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                            {approvingId === x.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
+                          </button>
+                          <button onClick={() => approveOtherWork(x.id, 'rejected')} disabled={approvingId === x.id}
+                            className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
+                            <X size={10}/>Reject
+                          </button>
+                          <button onClick={() => deleteOtherWork(x.id)} disabled={deletingOwId === x.id}
+                            className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Per-user summary */}
               {users.map(u => {
                 const name = u.full_name || u.username
                 const userWork = workByUser[name] || { cdn: 0, cap: 0 }
-                const earned = userWork.cdn * rates.cdn_rate + userWork.cap * rates.cap_rate
+                const countEarned = userWork.cdn * rates.cdn_rate + userWork.cap * rates.cap_rate
+                const owData = otherWorkByUserId[u.id] || { approved: 0, pending: [] }
+                const earned = countEarned + owData.approved
                 const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
                 const received = userConfirmedPayments.reduce((s, p) => s + Number(p.amount), 0)
                 const balance = earned - received
@@ -274,8 +445,10 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
                           Balance: Rs. {fmtLKR(balance)}
                         </span>
                       </div>
-                      <div className="flex items-center gap-4 text-xs">
-                        <span className="text-gray-500">Earned: <b className="text-gray-800">Rs. {fmtLKR(earned)}</b></span>
+                      <div className="flex items-center gap-4 text-xs flex-wrap">
+                        <span className="text-gray-500">Count Work: <b className="text-gray-800">Rs. {fmtLKR(countEarned)}</b></span>
+                        {owData.approved > 0 && <span className="text-indigo-600">Other Work: <b>Rs. {fmtLKR(owData.approved)}</b></span>}
+                        {owData.pending.length > 0 && <span className="text-amber-500">Pending: {owData.pending.length}</span>}
                         <button onClick={() => setExpandedUser(isExpanded ? null : u.id)}
                           className="text-gray-500 hover:text-gray-700 flex items-center gap-1">
                           Paid: <b className="text-green-700 ml-1">Rs. {fmtLKR(received)}</b>
@@ -302,6 +475,7 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
                   </div>
                 )
               })}
+
               {/* Full payments log */}
               <div>
                 <p className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold mb-1.5">All Payments Log</p>

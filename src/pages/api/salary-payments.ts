@@ -94,10 +94,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'DELETE') {
-      const admin = await requireAdmin(req)
-      if (!admin.ok) return res.status(admin.status).json({ error: admin.error })
+      const authed = await requireAuth(req)
+      if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
       const id = String(req.query.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })
+
+      const { data: prof } = await supabaseAdmin.from('profiles').select('is_admin').eq('id', authed.userId).maybeSingle()
+      const isAdmin = !!prof?.is_admin
+
+      if (!isAdmin) {
+        // Sender can "return" their own payment (pending or confirmed) — not admin-only
+        const { data: pay } = await supabaseAdmin.from('salary_payments').select('from_user_id').eq('id', id).maybeSingle()
+        if (!pay) return res.status(404).json({ error: 'Not found' })
+        if (pay.from_user_id !== authed.userId) return res.status(403).json({ error: 'Only the sender or an admin can return this payment' })
+      }
+
       const { error } = await supabaseAdmin.from('salary_payments').delete().eq('id', id)
       if (error) return res.status(400).json({ error: error.message })
       return res.json({ ok: true })
