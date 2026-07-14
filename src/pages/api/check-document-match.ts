@@ -1,5 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { createClient } from '@supabase/supabase-js'
 import { findExistingMatches, checkCdnCap } from '@/lib/docTables'
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
 // Called right before a Save in Upload Docs — tells the frontend every
 // existing row that looks like a duplicate of this document (by the doc
@@ -15,11 +21,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const matches = await findExistingMatches(doc_type, data)
 
     let capInfo = null
-    if (doc_type === 'cdn' && data.code && data.cusdec_number) {
-      capInfo = await checkCdnCap(data.code, data.cusdec_number)
+    let cusdecMissing = false
+    if (doc_type === 'cdn' && data.cusdec_number) {
+      // Block CDN save if no parent CUSDEC exists for this cusdec_number
+      const { data: cusdecRows } = await supabaseAdmin
+        .from('cusdec')
+        .select('id')
+        .eq('number', data.cusdec_number)
+        .limit(1)
+      if (!cusdecRows?.length) {
+        cusdecMissing = true
+      } else if (data.code) {
+        capInfo = await checkCdnCap(data.code, data.cusdec_number)
+      }
     }
 
-    res.json({ matches, capInfo })
+    res.json({ matches, capInfo, cusdecMissing })
   } catch (err: any) {
     console.error('[check-document-match] error:', err)
     res.status(500).json({ error: err.message })

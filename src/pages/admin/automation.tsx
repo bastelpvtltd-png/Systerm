@@ -13,7 +13,7 @@ import {
 type AutomationTab =
   | 'barcode' | 'trico' | 'data-updates'
   | 'boat-note-check' | 'export-release' | 'vessel-trigger'
-  | 'conflict-review' | 'notes'
+  | 'conflict-review' | 'cdn-approval' | 'notes'
 
 interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean; tin_vat?: string }
 
@@ -30,6 +30,7 @@ const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: stri
   { key: 'export-release', label: 'Export Release Check', icon: ShieldCheck, permission: 'section:automation.export-release-check' },
   { key: 'vessel-trigger', label: 'Vessel Triggers', icon: Ship, permission: 'section:automation.vessel-trigger' },
   { key: 'conflict-review', label: 'Conflict Review', icon: GitMerge, permission: 'section:automation.conflict-review' },
+  { key: 'cdn-approval', label: 'CDN Approval', icon: CheckSquare, permission: 'section:automation.cdn-approval' },
   { key: 'notes', label: 'System Logic & Integration Notes', icon: StickyNote, permission: 'section:automation.notes' },
 ]
 
@@ -94,6 +95,7 @@ function AutomationContent() {
       {tab === 'export-release' && <ExportReleaseCheckPanel/>}
       {tab === 'vessel-trigger' && <VesselTriggerPanel/>}
       {tab === 'conflict-review' && <ConflictReviewPanel/>}
+      {tab === 'cdn-approval' && <CdnApprovalPanel/>}
       {tab === 'notes' && <SystemNotes/>}
     </div>
   )
@@ -929,6 +931,74 @@ function ConflictReviewPanel() {
               </div>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── CDN Approval Panel (admin) ─────────────────────────────────────────────
+// CDNs uploaded are held in pending_admin_approval = true until admin approves
+// here. Only approved CDNs count toward the CUSDEC's CAP.
+interface PendingCdn { id: string; code: string; cusdec_number: string; container_no: string; vessel: string; voyage: string; seal_no: string; cdn_no: string; uploaded_at: string }
+function CdnApprovalPanel() {
+  const [cdns, setCdns] = useState<PendingCdn[]>([])
+  const [loading, setLoading] = useState(false)
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+
+  async function load() {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/cdn-approval', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setCdns(d.cdns || [])
+    } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, []) // eslint-disable-line
+
+  async function approve(id: string) {
+    setApprovingId(id)
+    try {
+      const res = await fetch('/api/cdn-approval', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ cdn_id: id }),
+      })
+      if (res.ok) setCdns(prev => prev.filter(c => c.id !== id))
+    } finally { setApprovingId(null) }
+  }
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><CheckSquare size={15} className="text-blue-600"/>CDN Approval</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Approve uploaded CDNs to count them toward the CUSDEC&apos;s CAP. Unapproved CDNs do not count.</p>
+        </div>
+        <button onClick={load} disabled={loading} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border border-gray-200 hover:bg-gray-50 disabled:opacity-50">
+          {loading ? <Loader size={12} className="animate-spin"/> : <RefreshCw size={12}/>} Refresh
+        </button>
+      </div>
+      {loading && cdns.length === 0 ? (
+        <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : cdns.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-8">No CDNs pending approval</p>
+      ) : (
+        <div className="space-y-2">
+          {cdns.map(c => (
+            <div key={c.id} className="flex items-center justify-between gap-3 border border-amber-100 bg-amber-50 rounded-lg p-3 text-xs">
+              <div className="min-w-0 space-y-0.5">
+                <p className="font-semibold text-gray-900">Container: {c.container_no || '—'} · CDN: {c.cdn_no || '—'}</p>
+                <p className="text-gray-500">CUSDEC: {c.cusdec_number || '—'} · Code: {c.code || '—'}</p>
+                <p className="text-gray-400">Vessel: {c.vessel || '—'} / {c.voyage || '—'} · Seal: {c.seal_no || '—'}</p>
+                <p className="text-gray-400">Uploaded: {c.uploaded_at ? new Date(c.uploaded_at).toLocaleString('en-GB') : '—'}</p>
+              </div>
+              <button onClick={() => approve(c.id)} disabled={approvingId === c.id}
+                className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                {approvingId === c.id ? <Loader size={12} className="animate-spin"/> : <CheckSquare size={12}/>}
+                Approve
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>

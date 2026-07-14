@@ -113,7 +113,9 @@ export async function checkCdnCap(code: string, cusdecNumber: string): Promise<{
   const cap = parseInt(cusdecRows?.[0]?.cap || '', 10)
   if (!cusdecRows?.[0] || !cap || Number.isNaN(cap)) return null
   const { data: cdnRows } = await supabaseAdmin.from('cdn').select('*').eq('code', code).eq('cusdec_number', cusdecNumber)
-  return { cap, currentCount: cdnRows?.length || 0, rows: cdnRows || [] }
+  // Only approved CDNs count toward CAP — pending_admin_approval=true rows don't count yet
+  const approvedRows = (cdnRows || []).filter((r: any) => !r.pending_admin_approval)
+  return { cap, currentCount: approvedRows.length, rows: cdnRows || [] }
 }
 
 export async function dropColumn(table: string, key: string): Promise<void> {

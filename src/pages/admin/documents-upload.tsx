@@ -578,6 +578,13 @@ function DocumentsUploadContent() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Duplicate check failed')
+      if (d.cusdecMissing) {
+        const num = data.cusdec_number || ''
+        const msg = `CDN eka save karana pita, paha CUSDEC eka (${num}) add karanna. CUSDEC eka system eke naha.`
+        setError(msg)
+        updateItem(item.id, { status: 'error', error: msg })
+        return { ok: false, error: msg }
+      }
       if (d.matches?.length) {
         setMatchModal({ item, matches: d.matches, capInfo: d.capInfo, table: DOC_TYPE_TABLE[docType] })
         return { ok: false, error: 'A matching document already exists — resolve it above, then Send again.' }
@@ -1713,30 +1720,23 @@ function DocumentsUploadContent() {
                 {matchModal.matches.length} matching row{matchModal.matches.length === 1 ? '' : 's'} already saved
               </h3>
               <p className="text-xs text-gray-500 mt-1">This upload: <span className="font-medium text-gray-700">{matchModal.item.fileName}</span> — looks the same as what's below.</p>
-              <p className="text-xs text-gray-500 mt-1">Edit any of these directly, delete one and save this PDF in its place, keep everything and add this as a new row, or skip this upload entirely.</p>
+              <p className="text-xs text-gray-400 mt-1">To change the existing data, edit it directly from the Database tab. Here you can only replace (delete old + save new PDF) or skip.</p>
             </div>
             <div className="p-5 overflow-y-auto flex-1 space-y-4">
               {matchModal.matches.map((match: any) => (
                 <div key={match.id} className="border border-gray-100 rounded-lg p-3">
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs mb-2">
-                    {Object.entries(match).filter(([k]) => !['id', 'created_at', 'uploaded_at', 'pdf_url'].includes(k)).map(([k, v]) => (
-                      <label key={k} className="block">
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs mb-3">
+                    {Object.entries(match).filter(([k]) => !['id', 'created_at', 'uploaded_at', 'pdf_url', 'drive_url', 'uploaded_by'].includes(k)).map(([k, v]) => (
+                      <div key={k}>
                         <span className="text-gray-400 block mb-0.5">{k}</span>
-                        <input value={v == null ? '' : String(v)} onChange={e => updateMatchDraft(match.id, k, e.target.value)}
-                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:border-gray-400"/>
-                      </label>
+                        <span className="text-gray-700 font-medium">{v == null || v === '' ? '—' : String(v)}</span>
+                      </div>
                     ))}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => saveMatchEdit(match)} disabled={resolvingConflict}
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-white disabled:opacity-50" style={{ background: '#1B3A5C' }}>
-                      <Save size={11}/> Save Changes
-                    </button>
-                    <button onClick={() => resolveMatchReplace(match.id)}
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50">
-                      <Trash2 size={11}/> Delete this + save new PDF here
-                    </button>
-                  </div>
+                  <button onClick={() => resolveMatchReplace(match.id)} disabled={resolvingConflict}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 disabled:opacity-50">
+                    <Trash2 size={11}/> Delete this + save new PDF here
+                  </button>
                 </div>
               ))}
             </div>

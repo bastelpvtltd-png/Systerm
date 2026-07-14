@@ -402,6 +402,7 @@ export const SECTION_ITEMS = [
   { key: 'section:automation.export-release-check', tabHref: '/admin/automation', label: 'Export Release Check' },
   { key: 'section:automation.vessel-trigger',       tabHref: '/admin/automation', label: 'Vessel Triggers' },
   { key: 'section:automation.conflict-review',       tabHref: '/admin/automation', label: 'Conflict Review panel (admin)' },
+  { key: 'section:automation.cdn-approval',          tabHref: '/admin/automation', label: 'CDN Approval (admin)' },
   { key: 'section:automation.notes',                tabHref: '/admin/automation', label: 'System Logic & Integration Notes' },
 ]
 
