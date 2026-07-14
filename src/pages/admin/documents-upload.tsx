@@ -976,7 +976,7 @@ function DocumentsUploadContent() {
     const results: SendResultFile[] = []
     for (const it of toSave) {
       const r = await saveOne(it, referenceOverride)
-      if (r?.ok && r.driveLink) results.push({ fileName: it.fileName, driveLink: r.driveLink })
+      if (r?.ok && r.driveLink) results.push({ fileName: it.fileName, driveLink: r.driveLink, docType: it.detectedType })
     }
     setSavingAll(false)
     return { ok: true, results }
@@ -1848,9 +1848,10 @@ function DocumentsUploadContent() {
         <SendModal
           label={sendModalItem.fileName}
           uploaderName={uploaderName}
+          docType={sendModalItem.detectedType}
           onSave={async (referenceOverride?: string) => {
             const r = await saveOne(sendModalItem, referenceOverride)
-            return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink }] : [] }
+            return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink, docType: sendModalItem.detectedType }] : [] }
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem) }]}
           onClose={() => setSendModalItem(null)}

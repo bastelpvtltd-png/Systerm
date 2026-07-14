@@ -3,7 +3,7 @@ import { X, Loader, Save, Mail, Bell, AlertTriangle, Link2 } from 'lucide-react'
 import { authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from './EmailPdfModal'
 
-export interface SendResultFile { fileName: string; driveLink: string }
+export interface SendResultFile { fileName: string; driveLink: string; docType?: string }
 
 // The Upload Docs "Send" workflow: Save is ticked by default (matches the
 // old one-click Save behavior), Mail/Notify are opt-in. Nothing touches
@@ -15,9 +15,10 @@ export interface SendResultFile { fileName: string; driveLink: string }
 // everything in one message.
 const REASON_OPTIONS = ['', 'CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Other']
 
-export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks, onClose, onDone }: {
+export default function SendModal({ label, uploaderName, docType, onSave, onGetDriveLinks, onClose, onDone }: {
   label: string
   uploaderName?: string
+  docType?: string
   onSave: (referenceOverride?: string) => Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }>
   onGetDriveLinks: () => Promise<SendResultFile[]>
   onClose: () => void
@@ -120,6 +121,7 @@ export default function SendModal({ label, uploaderName, onSave, onGetDriveLinks
           body: JSON.stringify({
             file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: effectiveSave, notify: effectiveNotify, uploaded_by_name: uploaderName,
             reason: reason || undefined, reason_note: reason === 'Other' ? reasonNote.trim() : undefined,
+            doc_type: f.docType || docType || undefined,
           }),
         })
       ))
