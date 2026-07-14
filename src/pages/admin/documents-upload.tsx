@@ -999,8 +999,9 @@ function DocumentsUploadContent() {
     setSelectedId(null)
   }
 
+  const canSeePreview = canUpload || canSeeUploaded || canPreview || isAdmin
   const panelOptions: Panel[] = (['upload', 'preview', 'admin-edit'] as Panel[]).filter(p =>
-    p === 'upload' ? (canUpload || canSeeUploaded) : p === 'preview' ? canPreview : canAdminEdit
+    p === 'upload' ? (canUpload || canSeeUploaded) : p === 'preview' ? canSeePreview : canAdminEdit
   )
 
   return (
@@ -1164,7 +1165,7 @@ function DocumentsUploadContent() {
         )}
 
         {/* === PREVIEW panel: saved documents from anyone, read-only === */}
-        {panel === 'preview' && canPreview && (
+        {panel === 'preview' && canSeePreview && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div className="card">
               <div className="flex items-center justify-between mb-4">
