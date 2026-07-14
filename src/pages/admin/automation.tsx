@@ -304,7 +304,25 @@ function OrphanedDataMonitor({ label, count, items }: { label: string; count: nu
   )
 }
 
+function useTriggerTimestamp(field: 'boatNote' | 'exportRelease') {
+  const [info, setInfo] = useState<{ time: string; cusdec?: string; user?: string } | null>(null)
+  useEffect(() => {
+    authHeader().then(h =>
+      fetch('/api/trigger-timestamps', { headers: h })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setInfo(d[field] || null) })
+        .catch(() => {})
+    )
+  }, [field])
+  function fmt(iso: string | null | undefined) {
+    if (!iso) return null
+    try { return new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Colombo', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) } catch { return iso }
+  }
+  return info ? fmt(info.time) : null
+}
+
 function BoatNoteCheckPanel() {
+  const lastTriggered = useTriggerTimestamp('boatNote')
   const [cdns, setCdns] = useState<CdnRec[]>([])
   const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
   const [search, setSearch] = useState('')
@@ -450,7 +468,14 @@ function BoatNoteCheckPanel() {
       </div>
 
       <div className="card">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Manual Trigger</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-900 text-sm">Manual Trigger</h2>
+          {lastTriggered && (
+            <span className="text-[11px] text-green-700 bg-green-50 border border-green-200 rounded-md px-2 py-0.5 flex items-center gap-1">
+              <Clock size={10}/> Last: {lastTriggered}
+            </span>
+          )}
+        </div>
         {!selected ? (
           <p className="text-xs text-gray-400 text-center py-12">Select a CDN to check</p>
         ) : (
@@ -494,6 +519,7 @@ function BoatNoteCheckPanel() {
 }
 
 function ExportReleaseCheckPanel() {
+  const lastTriggered = useTriggerTimestamp('exportRelease')
   const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
   const [cdns, setCdns] = useState<CdnRec[]>([])
   const [selectedId, setSelectedId] = useState('')
@@ -650,7 +676,14 @@ function ExportReleaseCheckPanel() {
       </div>
 
       <div className="card">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Manual Trigger</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-900 text-sm">Manual Trigger</h2>
+          {lastTriggered && (
+            <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-0.5 flex items-center gap-1">
+              <Clock size={10}/> Last: {lastTriggered}
+            </span>
+          )}
+        </div>
         <p className="text-xs text-gray-400 mb-3">
           {selected ? <>Checking E {selected.number} — <button onClick={() => { setSelectedId(''); setForm({ officeCode: '', serial: 'E', cusdecNumber: '', cusdecYear: '', consigneeTIN: '' }) }} className="text-blue-600 hover:underline">clear selection</button></>
             : 'No CUSDEC selected — type any values below to check ad-hoc (nothing gets saved to the database).'}

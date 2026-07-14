@@ -22,13 +22,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let capInfo = null
     let cusdecMissing = false
+    let cdnMissing = false
+
     if (doc_type === 'cdn' && data.cusdec_number) {
       // Block CDN save if no parent CUSDEC exists for this cusdec_number
       const { data: cusdecRows } = await supabaseAdmin
-        .from('cusdec')
-        .select('id')
-        .eq('number', data.cusdec_number)
-        .limit(1)
+        .from('cusdec').select('id').eq('number', data.cusdec_number).limit(1)
       if (!cusdecRows?.length) {
         cusdecMissing = true
       } else if (data.code) {
@@ -36,7 +35,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    res.json({ matches, capInfo, cusdecMissing })
+    if (doc_type === 'barcode' && data.container_no) {
+      // Block barcode save if no CDN exists for this container_no
+      const { data: cdnRows } = await supabaseAdmin
+        .from('cdn').select('id').eq('container_no', data.container_no).limit(1)
+      if (!cdnRows?.length) cdnMissing = true
+    }
+
+    res.json({ matches, capInfo, cusdecMissing, cdnMissing })
   } catch (err: any) {
     console.error('[check-document-match] error:', err)
     res.status(500).json({ error: err.message })

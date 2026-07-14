@@ -585,6 +585,13 @@ function DocumentsUploadContent() {
         updateItem(item.id, { status: 'error', error: msg })
         return { ok: false, error: msg }
       }
+      if (d.cdnMissing) {
+        const cno = data.container_no || ''
+        const msg = `Barcode eka save karana pita, paha CDN eka (${cno}) add karanna. Meka container eke CDN eka system eke naha.`
+        setError(msg)
+        updateItem(item.id, { status: 'error', error: msg })
+        return { ok: false, error: msg }
+      }
       if (d.matches?.length) {
         setMatchModal({ item, matches: d.matches, capInfo: d.capInfo, table: DOC_TYPE_TABLE[docType] })
         return { ok: false, error: 'A matching document already exists — resolve it above, then Send again.' }

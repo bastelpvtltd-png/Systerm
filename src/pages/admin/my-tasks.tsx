@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase, authHeader } from '@/lib/supabase'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight } from 'lucide-react'
+import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight, Save } from 'lucide-react'
 
 interface Task {
   id: string
@@ -232,24 +232,36 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
 
 interface WorkCountRow {
   id: string; user_id: string; user_name: string; document_id: string; file_name: string
-  reason: string; action: string; cdn_inc: number; cusdec_inc: number; cap_inc: number; created_at: string
+  reason: string; action: string; cdn_inc: number; cusdec_inc: number; cap_inc: number
+  amount: number; created_at: string
 }
-interface WorkTotals { cdn_count: number; cusdec_count: number; cap_count: number }
+interface WorkTotals { cdn_count: number; cusdec_count: number; cap_count: number; total_amount: number }
 
 function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
-  const [totals, setTotals] = useState<WorkTotals>({ cdn_count: 0, cusdec_count: 0, cap_count: 0 })
+  const [totals, setTotals] = useState<WorkTotals>({ cdn_count: 0, cusdec_count: 0, cap_count: 0, total_amount: 0 })
   const [rows, setRows] = useState<WorkCountRow[]>([])
-  const [allUsers, setAllUsers] = useState<{ name: string; cdn: number; cusdec: number; cap: number }[]>([])
+  const [allRows, setAllRows] = useState<WorkCountRow[]>([])
   const [expanded, setExpanded] = useState(false)
   const [adminView, setAdminView] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [editDrafts, setEditDrafts] = useState<Record<string, Partial<WorkCountRow>>>({})
+  const [savingId, setSavingId] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   async function load() {
     try {
       const res = await fetch('/api/work-counts', { headers: await authHeader() })
       const d = await res.json()
-      if (res.ok) { setTotals(d.totals || { cdn_count: 0, cusdec_count: 0, cap_count: 0 }); setRows(d.rows || []) }
+      if (res.ok) {
+        const r: WorkCountRow[] = d.rows || []
+        setRows(r)
+        setTotals({
+          cdn_count:    r.reduce((s, x) => s + (x.cdn_inc || 0), 0),
+          cusdec_count: r.reduce((s, x) => s + (x.cusdec_inc || 0), 0),
+          cap_count:    r.reduce((s, x) => s + (x.cap_inc || 0), 0),
+          total_amount: r.reduce((s, x) => s + Number(x.amount || 0), 0),
+        })
+      }
     } catch {}
   }
 
@@ -257,16 +269,7 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
     try {
       const res = await fetch('/api/work-counts?all=1', { headers: await authHeader() })
       const d = await res.json()
-      if (res.ok) {
-        const byUser: Record<string, { name: string; cdn: number; cusdec: number; cap: number }> = {}
-        for (const r of (d.rows || [])) {
-          if (!byUser[r.user_name]) byUser[r.user_name] = { name: r.user_name, cdn: 0, cusdec: 0, cap: 0 }
-          byUser[r.user_name].cdn += r.cdn_inc || 0
-          byUser[r.user_name].cusdec += r.cusdec_inc || 0
-          byUser[r.user_name].cap += r.cap_inc || 0
-        }
-        setAllUsers(Object.values(byUser))
-      }
+      if (res.ok) setAllRows(d.rows || [])
     } catch {}
   }
 
@@ -276,10 +279,33 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
       const res = await fetch(`/api/work-counts?id=${id}`, { method: 'DELETE', headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
+      setAllRows(prev => prev.filter(r => r.id !== id))
       setRows(prev => prev.filter(r => r.id !== id))
       await load()
     } catch (e: any) { setError(e.message) }
     finally { setDeletingId(null) }
+  }
+
+  async function saveEdit(id: string) {
+    const draft = editDrafts[id]
+    if (!draft) return
+    setSavingId(id)
+    try {
+      const res = await fetch('/api/work-counts', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ id, ...draft }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setAllRows(prev => prev.map(r => r.id === id ? { ...r, ...draft } : r))
+      setEditDrafts(prev => { const n = { ...prev }; delete n[id]; return n })
+      await load()
+    } catch (e: any) { setError(e.message) }
+    finally { setSavingId(null) }
+  }
+
+  function setDraft(id: string, key: string, value: string) {
+    setEditDrafts(prev => ({ ...prev, [id]: { ...prev[id], [key]: value } }))
   }
 
   useEffect(() => {
@@ -288,7 +314,18 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
     return () => clearInterval(t)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const noData = totals.cdn_count === 0 && totals.cusdec_count === 0 && totals.cap_count === 0
+  // Group allRows by user for admin summary
+  const byUser = allRows.reduce((acc, r) => {
+    if (!acc[r.user_name]) acc[r.user_name] = { name: r.user_name, cdn: 0, cusdec: 0, cap: 0, amount: 0, rows: [] }
+    acc[r.user_name].cdn += r.cdn_inc || 0
+    acc[r.user_name].cusdec += r.cusdec_inc || 0
+    acc[r.user_name].cap += r.cap_inc || 0
+    acc[r.user_name].amount += Number(r.amount || 0)
+    acc[r.user_name].rows.push(r)
+    return acc
+  }, {} as Record<string, { name: string; cdn: number; cusdec: number; cap: number; amount: number; rows: WorkCountRow[] }>)
+
+  const noData = totals.cdn_count === 0 && totals.cusdec_count === 0 && totals.cap_count === 0 && totals.total_amount === 0
 
   return (
     <div className="card mb-5">
@@ -302,47 +339,54 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
       {noData ? (
         <p className="text-xs text-gray-400">No processed documents yet — counts increment when you Mail or Download a document from My Picked Tasks.</p>
       ) : (
-        <div className="grid grid-cols-3 gap-3 mb-3">
-          <div className="bg-green-50 rounded-lg p-3 text-center">
-            <p className="text-2xl font-bold text-green-700">{totals.cdn_count}</p>
-            <p className="text-xs text-gray-500 mt-1">CDN Count</p>
+        <>
+          <div className="grid grid-cols-4 gap-3 mb-3">
+            <div className="bg-green-50 rounded-lg p-3 text-center">
+              <p className="text-2xl font-bold text-green-700">{totals.cdn_count}</p>
+              <p className="text-xs text-gray-500 mt-1">CDN Count</p>
+            </div>
+            <div className="bg-blue-50 rounded-lg p-3 text-center">
+              <p className="text-2xl font-bold text-blue-700">{totals.cusdec_count}</p>
+              <p className="text-xs text-gray-500 mt-1">Cusdec Count</p>
+            </div>
+            <div className="bg-purple-50 rounded-lg p-3 text-center">
+              <p className="text-2xl font-bold text-purple-700">{totals.cap_count}</p>
+              <p className="text-xs text-gray-500 mt-1">CAP Count</p>
+            </div>
+            <div className="bg-amber-50 rounded-lg p-3 text-center">
+              <p className="text-xl font-bold text-amber-700">{totals.total_amount.toLocaleString('en-LK', { minimumFractionDigits: 2 })}</p>
+              <p className="text-xs text-gray-500 mt-1">Total Earned</p>
+            </div>
           </div>
-          <div className="bg-blue-50 rounded-lg p-3 text-center">
-            <p className="text-2xl font-bold text-blue-700">{totals.cusdec_count}</p>
-            <p className="text-xs text-gray-500 mt-1">Cusdec Count</p>
-          </div>
-          <div className="bg-purple-50 rounded-lg p-3 text-center">
-            <p className="text-2xl font-bold text-purple-700">{totals.cap_count}</p>
-            <p className="text-xs text-gray-500 mt-1">CAP Count</p>
-          </div>
-        </div>
-      )}
 
-      {expanded && !noData && (
-        <div className="mt-2">
-          {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
-          <div className="max-h-48 overflow-y-auto space-y-0.5">
-            {rows.map(r => (
-              <div key={r.id} className="flex items-center justify-between text-xs py-1 border-t border-gray-50">
-                <div className="flex-1 min-w-0">
-                  <span className="text-gray-700 truncate block">{r.file_name || r.document_id}</span>
-                  <span className="text-gray-400">{r.reason} · {r.action} · {new Date(r.created_at).toLocaleDateString('en-GB')}</span>
-                </div>
-                <div className="flex items-center gap-2 ml-2 flex-shrink-0">
-                  {r.cdn_inc > 0 && <span className="text-green-600 font-medium">CDN+{r.cdn_inc}</span>}
-                  {r.cusdec_inc > 0 && <span className="text-blue-600 font-medium">Cusdec+{r.cusdec_inc}</span>}
-                  {r.cap_inc > 0 && <span className="text-purple-600 font-medium">CAP+{r.cap_inc}</span>}
-                  {isAdmin && (
-                    <button onClick={() => deleteRow(r.id)} disabled={deletingId === r.id}
-                      className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
-                  )}
-                </div>
+          {/* My rows — read-only for users, shows amount per entry */}
+          {expanded && (
+            <div className="mt-2">
+              {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+              <div className="max-h-48 overflow-y-auto space-y-0.5">
+                {rows.map(r => (
+                  <div key={r.id} className="flex items-center justify-between text-xs py-1.5 border-t border-gray-50">
+                    <div className="flex-1 min-w-0">
+                      <span className="text-gray-700 truncate block">{r.file_name || r.document_id}</span>
+                      <span className="text-gray-400">{r.reason} · {r.action} · {new Date(r.created_at).toLocaleDateString('en-GB')}</span>
+                    </div>
+                    <div className="flex items-center gap-2 ml-2 flex-shrink-0 text-right">
+                      {r.cdn_inc > 0 && <span className="text-green-600 font-medium">CDN+{r.cdn_inc}</span>}
+                      {r.cusdec_inc > 0 && <span className="text-blue-600 font-medium">C+{r.cusdec_inc}</span>}
+                      {r.cap_inc > 0 && <span className="text-purple-600 font-medium">CAP+{r.cap_inc}</span>}
+                      {Number(r.amount) > 0 && (
+                        <span className="text-amber-700 font-semibold">{Number(r.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
+          )}
+        </>
       )}
 
+      {/* Admin: edit counts + amounts for all users */}
       {isAdmin && (
         <div className="mt-3 pt-3 border-t border-gray-100">
           <button onClick={() => { setAdminView(x => !x); if (!adminView) loadAll() }}
@@ -350,16 +394,82 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
             <UsersIcon size={13}/>{adminView ? 'Hide' : 'Show'} all users (Admin)
           </button>
           {adminView && (
-            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {allUsers.map(u => (
-                <div key={u.name} className="border border-gray-100 rounded-lg px-3 py-2 text-xs">
-                  <p className="font-semibold text-gray-800 mb-1">{u.name}</p>
-                  <p className="text-gray-500">
-                    CDN: <b className="text-green-700">{u.cdn}</b> · Cusdec: <b className="text-blue-700">{u.cusdec}</b> · CAP: <b className="text-purple-700">{u.cap}</b>
-                  </p>
+            <div className="mt-3 space-y-4">
+              {Object.values(byUser).length === 0 && <p className="text-xs text-gray-400">No data yet</p>}
+              {Object.values(byUser).map(u => (
+                <div key={u.name} className="border border-gray-200 rounded-xl overflow-hidden">
+                  {/* Per-user header */}
+                  <div className="flex items-center justify-between px-3 py-2 bg-gray-50 text-xs">
+                    <span className="font-semibold text-gray-800">{u.name}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-green-700">CDN <b>{u.cdn}</b></span>
+                      <span className="text-blue-700">C <b>{u.cusdec}</b></span>
+                      <span className="text-purple-700">CAP <b>{u.cap}</b></span>
+                      <span className="text-amber-700 font-bold">{u.amount.toLocaleString('en-LK', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  </div>
+                  {/* Per-row editable entries */}
+                  <div className="divide-y divide-gray-50">
+                    {u.rows.map(r => {
+                      const draft = editDrafts[r.id] || {}
+                      const isDirty = Object.keys(draft).length > 0
+                      return (
+                        <div key={r.id} className="px-3 py-2 text-xs">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-gray-700 truncate font-medium">{r.file_name || '—'}</p>
+                              <p className="text-gray-400">{r.reason} · {r.action} · {new Date(r.created_at).toLocaleDateString('en-GB')}</p>
+                            </div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              {/* Editable: cdn_inc */}
+                              <label className="flex flex-col items-center gap-0.5">
+                                <span className="text-[10px] text-gray-400">CDN</span>
+                                <input type="number" min={0}
+                                  value={draft.cdn_inc !== undefined ? draft.cdn_inc : r.cdn_inc}
+                                  onChange={e => setDraft(r.id, 'cdn_inc', e.target.value)}
+                                  className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-green-400"/>
+                              </label>
+                              {/* Editable: cusdec_inc */}
+                              <label className="flex flex-col items-center gap-0.5">
+                                <span className="text-[10px] text-gray-400">C</span>
+                                <input type="number" min={0}
+                                  value={draft.cusdec_inc !== undefined ? draft.cusdec_inc : r.cusdec_inc}
+                                  onChange={e => setDraft(r.id, 'cusdec_inc', e.target.value)}
+                                  className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-blue-400"/>
+                              </label>
+                              {/* Editable: cap_inc */}
+                              <label className="flex flex-col items-center gap-0.5">
+                                <span className="text-[10px] text-gray-400">CAP</span>
+                                <input type="number" min={0}
+                                  value={draft.cap_inc !== undefined ? draft.cap_inc : r.cap_inc}
+                                  onChange={e => setDraft(r.id, 'cap_inc', e.target.value)}
+                                  className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-purple-400"/>
+                              </label>
+                              {/* Editable: amount */}
+                              <label className="flex flex-col items-center gap-0.5">
+                                <span className="text-[10px] text-gray-400">Amount</span>
+                                <input type="number" min={0} step="0.01"
+                                  value={draft.amount !== undefined ? draft.amount : (r.amount || 0)}
+                                  onChange={e => setDraft(r.id, 'amount', e.target.value)}
+                                  className="w-24 border border-amber-300 rounded px-1 py-0.5 text-right text-xs focus:outline-none focus:border-amber-500 bg-amber-50"/>
+                              </label>
+                              {isDirty && (
+                                <button onClick={() => saveEdit(r.id)} disabled={savingId === r.id}
+                                  className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px] font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                                  {savingId === r.id ? <Loader size={10} className="animate-spin"/> : <Save size={10}/>}
+                                </button>
+                              )}
+                              <button onClick={() => deleteRow(r.id)} disabled={deletingId === r.id}
+                                className="text-gray-300 hover:text-red-500 disabled:opacity-50 mt-3.5"><Trash2 size={11}/></button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               ))}
-              {allUsers.length === 0 && <p className="text-xs text-gray-400">No data yet</p>}
+              {error && <p className="text-xs text-red-600">{error}</p>}
             </div>
           )}
         </div>
