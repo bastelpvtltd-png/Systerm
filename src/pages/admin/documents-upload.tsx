@@ -987,7 +987,7 @@ function DocumentsUploadContent() {
     for (const it of toSend) {
       try {
         const link = await uploadToDriveOnly(it)
-        results.push({ fileName: it.fileName, driveLink: link })
+        results.push({ fileName: it.fileName, driveLink: link, docType: it.detectedType })
       } catch { /* skip files that fail to upload, keep going */ }
     }
     return results
@@ -1853,7 +1853,7 @@ function DocumentsUploadContent() {
             const r = await saveOne(sendModalItem, referenceOverride)
             return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink, docType: sendModalItem.detectedType }] : [] }
           }}
-          onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem) }]}
+          onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}
           onClose={() => setSendModalItem(null)}
           onDone={() => { setSendModalItem(null); setSelectedId(null) }}
         />
