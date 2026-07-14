@@ -36,31 +36,45 @@ interface SalaryPayment {
 }
 interface Profile { id: string; username: string; full_name: string }
 
-// Peer-to-peer "I paid you" log — anyone can record a payment they made (to
-// another user or an "Other" name), only the recipient can confirm it
-// actually landed (or say it didn't), and only the recipient's confirmed
-// total counts toward their Balance. Once responded to, an entry is locked
-// for everyone except Admin (see the admin-only monitoring panel below).
 function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
   const [payments, setPayments] = useState<SalaryPayment[]>([])
-  const [workCounts, setWorkCounts] = useState<Record<string, number>>({})
   const [users, setUsers] = useState<Profile[]>([])
+  const [myWorkRows, setMyWorkRows] = useState<WorkCountRow[]>([])
+  const [allWorkRows, setAllWorkRows] = useState<WorkCountRow[]>([])
+  const [rates, setRates] = useState<WorkRates>({ cdn_rate: 0, cap_rate: 0 })
   const [toUserId, setToUserId] = useState('')
   const [toOther, setToOther] = useState('')
   const [amount, setAmount] = useState('')
   const [saving, setSaving] = useState(false)
   const [respondingId, setRespondingId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [showMyHistory, setShowMyHistory] = useState(false)
   const [showAdminPanel, setShowAdminPanel] = useState(false)
+  const [expandedUser, setExpandedUser] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   async function load() {
     try {
-      const res = await fetch('/api/salary-payments', { headers: await authHeader() })
-      const d = await res.json()
-      if (res.ok) { setPayments(d.payments || []); setWorkCounts(d.workCounts || {}) }
+      const h = await authHeader()
+      const [sp, wc, wr] = await Promise.all([
+        fetch('/api/salary-payments', { headers: h }).then(r => r.json()),
+        fetch('/api/work-counts', { headers: h }).then(r => r.json()),
+        fetch('/api/work-rates', { headers: h }).then(r => r.json()),
+      ])
+      if (sp.payments) setPayments(sp.payments)
+      if (wc.rows) setMyWorkRows(wc.rows)
+      if (wr.cdn_rate !== undefined) setRates(wr)
     } catch {}
   }
+
+  async function loadAllWork() {
+    try {
+      const res = await fetch('/api/work-counts?all=1', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setAllWorkRows(d.rows || [])
+    } catch {}
+  }
+
   useEffect(() => {
     load()
     supabase.from('profiles').select('id, username, full_name').then(({ data }) => setUsers((data as any) || []))
@@ -102,7 +116,6 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   }
 
   async function deletePayment(id: string) {
-    if (!confirm('Permanently remove this payment record? This cannot be undone.')) return
     setDeletingId(id)
     try {
       const res = await fetch(`/api/salary-payments?id=${id}`, { method: 'DELETE', headers: await authHeader() })
@@ -113,8 +126,23 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
     finally { setDeletingId(null) }
   }
 
+  // Current user computed values
+  const myCdn = myWorkRows.reduce((s, r) => s + (r.cdn_inc || 0), 0)
+  const myCap = myWorkRows.reduce((s, r) => s + (r.cap_inc || 0), 0)
+  const myEarned = myCdn * rates.cdn_rate + myCap * rates.cap_rate
+  const myReceivedPayments = payments.filter(p => p.to_user_id === userId && p.status === 'confirmed')
+  const myReceived = myReceivedPayments.reduce((s, p) => s + Number(p.amount), 0)
+  const myBalance = myEarned - myReceived
+
+  // Admin: per-user work earned from allWorkRows
+  const workByUser = allWorkRows.reduce((acc, r) => {
+    if (!acc[r.user_name]) acc[r.user_name] = { cdn: 0, cap: 0 }
+    acc[r.user_name].cdn += r.cdn_inc || 0
+    acc[r.user_name].cap += r.cap_inc || 0
+    return acc
+  }, {} as Record<string, { cdn: number; cap: number }>)
+
   const awaitingMyResponse = payments.filter(p => p.to_user_id === userId && p.status === 'pending')
-  const myConfirmedTotal = payments.filter(p => p.to_user_id === userId && p.status === 'confirmed').reduce((s, p) => s + Number(p.amount), 0)
   const sentByMe = payments.filter(p => p.from_user_id === userId)
 
   const statusBadge = (s: SalaryPayment['status']) =>
@@ -124,13 +152,47 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
 
   return (
     <div className="card mb-5">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Send size={15}/>Salary Payments</h2>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-400">Your confirmed balance</span>
-          <span className="text-lg font-bold text-green-700">{myConfirmedTotal.toLocaleString('en-LK', { minimumFractionDigits: 2 })}</span>
+      {/* Header: Payments title + earned | received (clickable) | balance */}
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Send size={15}/>Payments</h2>
+        <div className="flex items-center gap-4 text-xs">
+          <div className="text-right">
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide">Earned</p>
+            <p className="font-bold text-gray-800">Rs. {fmtLKR(myEarned)}</p>
+          </div>
+          <button onClick={() => setShowMyHistory(x => !x)} className="text-right hover:opacity-70 transition-opacity">
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide">Received {myReceivedPayments.length > 0 ? '▾' : ''}</p>
+            <p className="font-bold text-green-700">Rs. {fmtLKR(myReceived)}</p>
+          </button>
+          <div className="text-right">
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide">Balance</p>
+            <p className={`font-bold ${myBalance >= 0 ? 'text-amber-700' : 'text-red-600'}`}>Rs. {fmtLKR(myBalance)}</p>
+          </div>
         </div>
       </div>
+
+      {/* My payment received history (expandable by clicking Received) */}
+      {showMyHistory && (
+        <div className="mb-3 bg-gray-50 rounded-xl p-3">
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Payment History (Received)</p>
+          {myReceivedPayments.length === 0 ? (
+            <p className="text-xs text-gray-400">No payments received yet</p>
+          ) : (
+            <div className="space-y-0.5 max-h-36 overflow-y-auto">
+              {myReceivedPayments.map(p => (
+                <div key={p.id} className="flex items-center justify-between text-xs py-1.5 border-t border-gray-100 first:border-0">
+                  <span className="text-gray-600">{p.from_user_name} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-green-700">Rs. {fmtLKR(Number(p.amount))}</span>
+                    <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
+                      className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Record a payment */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-2">
@@ -154,7 +216,7 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
           <div className="space-y-1.5">
             {awaitingMyResponse.map(p => (
               <div key={p.id} className="flex items-center justify-between text-xs border border-amber-200 bg-amber-50 rounded-lg px-3 py-2">
-                <span><b>{p.from_user_name}</b> says they paid you <b>{Number(p.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })}</b></span>
+                <span><b>{p.from_user_name}</b> says they paid you <b>Rs. {fmtLKR(Number(p.amount))}</b></span>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   <button onClick={() => respond(p.id, 'confirmed')} disabled={respondingId === p.id}
                     className="flex items-center gap-1 px-2.5 py-1 rounded-md text-white font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
@@ -178,7 +240,7 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
           <div className="space-y-1 max-h-40 overflow-y-auto">
             {sentByMe.map(p => (
               <div key={p.id} className="flex items-center justify-between text-xs py-1 border-t border-gray-50">
-                <span className="text-gray-600">{p.to_display_name} — {Number(p.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })}</span>
+                <span className="text-gray-600">{p.to_display_name} — Rs. {fmtLKR(Number(p.amount))}</span>
                 {statusBadge(p.status)}
               </div>
             ))}
@@ -186,41 +248,76 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
         </div>
       )}
 
-      {/* Admin-only: everyone's salary activity + processed-document work count */}
+      {/* Admin: per-user earned + paid + balance with expandable payment history */}
       {isAdmin && (
-        <div className="mt-5 pt-4 border-t border-gray-100">
-          <button onClick={() => setShowAdminPanel(x => !x)}
+        <div className="mt-4 pt-3 border-t border-gray-100">
+          <button onClick={() => { setShowAdminPanel(x => !x); if (!showAdminPanel) loadAllWork() }}
             className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700">
-            <UsersIcon size={13}/> {showAdminPanel ? 'Hide' : 'Show'} everyone's salary + work (Admin only)
+            <UsersIcon size={13}/> {showAdminPanel ? 'Hide' : 'Show'} all users balance (Admin)
           </button>
           {showAdminPanel && (
-            <div className="mt-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-                {users.map(u => {
-                  const name = u.full_name || u.username
-                  const confirmed = payments.filter(p => p.to_display_name === name && p.status === 'confirmed').reduce((s, p) => s + Number(p.amount), 0)
-                  const pending = payments.filter(p => p.to_display_name === name && p.status === 'pending').length
-                  return (
-                    <div key={u.id} className="border border-gray-100 rounded-lg px-3 py-2 text-xs">
-                      <p className="font-semibold text-gray-800">{name}</p>
-                      <p className="text-gray-500">Confirmed: <b className="text-green-700">{confirmed.toLocaleString('en-LK', { minimumFractionDigits: 2 })}</b> {pending > 0 && `· ${pending} pending`}</p>
-                      <p className="text-gray-400">Documents processed: {workCounts[name] || 0}</p>
+            <div className="mt-3 space-y-3">
+              {users.map(u => {
+                const name = u.full_name || u.username
+                const userWork = workByUser[name] || { cdn: 0, cap: 0 }
+                const earned = userWork.cdn * rates.cdn_rate + userWork.cap * rates.cap_rate
+                const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
+                const received = userConfirmedPayments.reduce((s, p) => s + Number(p.amount), 0)
+                const balance = earned - received
+                const isExpanded = expandedUser === u.id
+                return (
+                  <div key={u.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                    <div className="px-3 py-2.5 bg-gray-50">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <p className="font-semibold text-gray-800 text-xs">{name}</p>
+                        <span className={`text-xs font-bold ${balance >= 0 ? 'text-amber-700' : 'text-red-600'}`}>
+                          Balance: Rs. {fmtLKR(balance)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs">
+                        <span className="text-gray-500">Earned: <b className="text-gray-800">Rs. {fmtLKR(earned)}</b></span>
+                        <button onClick={() => setExpandedUser(isExpanded ? null : u.id)}
+                          className="text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                          Paid: <b className="text-green-700 ml-1">Rs. {fmtLKR(received)}</b>
+                          {userConfirmedPayments.length > 0 && <span className="text-gray-400 ml-0.5">▾</span>}
+                        </button>
+                      </div>
                     </div>
-                  )
-                })}
-              </div>
-              <div className="max-h-64 overflow-y-auto space-y-1">
-                {payments.map(p => (
-                  <div key={p.id} className="flex items-center justify-between text-xs border-t border-gray-50 py-1.5">
-                    <span className="text-gray-600">{p.from_user_name} → {p.to_display_name} — {Number(p.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      {statusBadge(p.status)}
-                      <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
-                        className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={12}/></button>
-                    </div>
+                    {isExpanded && (
+                      <div className="divide-y divide-gray-50 max-h-40 overflow-y-auto">
+                        {userConfirmedPayments.length === 0 ? (
+                          <p className="text-xs text-gray-400 p-3">No payments to this user yet</p>
+                        ) : userConfirmedPayments.map(p => (
+                          <div key={p.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                            <span className="text-gray-600">{p.from_user_name} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-green-700">Rs. {fmtLKR(Number(p.amount))}</span>
+                              <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
+                                className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                ))}
-                {payments.length === 0 && <p className="text-center text-gray-400 py-4">No salary payments recorded yet</p>}
+                )
+              })}
+              {/* Full payments log */}
+              <div>
+                <p className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold mb-1.5">All Payments Log</p>
+                <div className="max-h-48 overflow-y-auto space-y-0.5">
+                  {payments.map(p => (
+                    <div key={p.id} className="flex items-center justify-between text-xs border-t border-gray-50 py-1.5">
+                      <span className="text-gray-600">{p.from_user_name} → {p.to_display_name} · Rs. {fmtLKR(Number(p.amount))} · {new Date(p.created_at).toLocaleDateString('en-GB')}</span>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {statusBadge(p.status)}
+                        <button onClick={() => deletePayment(p.id)} disabled={deletingId === p.id}
+                          className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={12}/></button>
+                      </div>
+                    </div>
+                  ))}
+                  {payments.length === 0 && <p className="text-center text-gray-400 py-4">No payments recorded yet</p>}
+                </div>
               </div>
             </div>
           )}
@@ -609,7 +706,7 @@ function MyTasksContent() {
         </div>
       )}
 
-      {(canAddCost || canDeposit) && (
+      {isAdmin && (canAddCost || canDeposit) && (
         <div className="card mb-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-gray-900 text-sm">Balance</h2>
@@ -666,7 +763,7 @@ function MyTasksContent() {
         </div>
       )}
 
-      <CountWork userId={userId} isAdmin={isAdmin}/>
+      {isAdmin && <CountWork userId={userId} isAdmin={isAdmin}/>}
 
       <SalaryPayments userId={userId} isAdmin={isAdmin}/>
 
