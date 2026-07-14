@@ -376,7 +376,7 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
   const [rates, setRates] = useState<WorkRates>({ cdn_rate: 0, cap_rate: 0 })
   const [rateDraft, setRateDraft] = useState<WorkRates | null>(null)
   const [savingRates, setSavingRates] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  const [detailFilter, setDetailFilter] = useState<'cdn' | 'cap' | null>(null)
   const [adminView, setAdminView] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [editDrafts, setEditDrafts] = useState<Record<string, Partial<WorkCountRow>>>({})
@@ -477,50 +477,63 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
     <div className="card mb-5">
       <div className="flex items-center justify-between mb-3">
         <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><BarChart2 size={15}/>Count Work</h2>
-        <button onClick={() => setExpanded(x => !x)} className="text-gray-400 hover:text-gray-600">
-          {expanded ? <ChevronDown size={15}/> : <ChevronRight size={15}/>}
-        </button>
       </div>
 
       {noData ? (
         <p className="text-xs text-gray-400">No processed documents yet — counts increment when you Mail or Download a document from My Picked Tasks.</p>
       ) : (
         <>
-          {/* Summary tiles */}
+          {/* Summary tiles — click to toggle detail list */}
           <div className="grid grid-cols-2 gap-3 mb-3">
-            <div className="bg-green-50 rounded-lg p-3 text-center">
+            <button
+              onClick={() => setDetailFilter(f => f === 'cdn' ? null : 'cdn')}
+              className={`rounded-lg p-3 text-center transition-all border-2 ${detailFilter === 'cdn' ? 'bg-green-100 border-green-400' : 'bg-green-50 border-transparent hover:border-green-200'}`}>
               <p className="text-2xl font-bold text-green-700">{cdnCount}</p>
               <p className="text-xs text-gray-500 mt-1">CDN (Container Moved)</p>
-            </div>
-            <div className="bg-purple-50 rounded-lg p-3 text-center">
+              <p className="text-[10px] text-green-600 mt-0.5">{detailFilter === 'cdn' ? '▲ hide' : '▼ details'}</p>
+            </button>
+            <button
+              onClick={() => setDetailFilter(f => f === 'cap' ? null : 'cap')}
+              className={`rounded-lg p-3 text-center transition-all border-2 ${detailFilter === 'cap' ? 'bg-purple-100 border-purple-400' : 'bg-purple-50 border-transparent hover:border-purple-200'}`}>
               <p className="text-2xl font-bold text-purple-700">{capCount}</p>
               <p className="text-xs text-gray-500 mt-1">CAP (CUSDEC Passed)</p>
-            </div>
+              <p className="text-[10px] text-purple-600 mt-0.5">{detailFilter === 'cap' ? '▲ hide' : '▼ details'}</p>
+            </button>
           </div>
+
+          {/* Detail rows — filtered by tile click */}
+          {detailFilter && (() => {
+            const isCdn = detailFilter === 'cdn'
+            const filtered = rows.filter(r => isCdn ? r.cdn_inc > 0 : r.cap_inc > 0)
+            return (
+              <div className="mb-3 rounded-xl border overflow-hidden" style={{ borderColor: isCdn ? '#bbf7d0' : '#e9d5ff' }}>
+                <div className="px-3 py-1.5 flex items-center justify-between" style={{ background: isCdn ? '#f0fdf4' : '#faf5ff' }}>
+                  <span className="text-[11px] font-semibold" style={{ color: isCdn ? '#15803d' : '#7e22ce' }}>
+                    {isCdn ? 'CDN Documents — Container Moved' : 'CAP Documents — CUSDEC Passed'}
+                  </span>
+                  <span className="text-[10px]" style={{ color: isCdn ? '#16a34a' : '#9333ea' }}>{filtered.length} records</span>
+                </div>
+                {filtered.length === 0 ? (
+                  <p className="text-xs text-gray-400 px-3 py-2">No records</p>
+                ) : (
+                  <div className="max-h-52 overflow-y-auto divide-y divide-gray-50">
+                    {filtered.map((r, i) => (
+                      <div key={r.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-gray-800 truncate font-medium">{r.file_name || '—'}</p>
+                          <p className="text-gray-400">{new Date(r.created_at).toLocaleDateString('en-GB')} · {r.action}</p>
+                        </div>
+                        <span className="ml-2 flex-shrink-0 text-[11px] font-bold" style={{ color: isCdn ? '#16a34a' : '#9333ea' }}>#{i + 1}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           {/* Invoice block */}
           <InvoiceBlock cdn={cdnCount} cap={capCount} rates={rates}/>
-
-          {/* Detail rows */}
-          {expanded && (
-            <div className="mt-3">
-              {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
-              <div className="max-h-48 overflow-y-auto space-y-0.5">
-                {rows.map(r => (
-                  <div key={r.id} className="flex items-center justify-between text-xs py-1.5 border-t border-gray-50">
-                    <div className="flex-1 min-w-0">
-                      <span className="text-gray-700 truncate block">{r.file_name || r.document_id}</span>
-                      <span className="text-gray-400">{r.reason} · {r.action} · {new Date(r.created_at).toLocaleDateString('en-GB')}</span>
-                    </div>
-                    <div className="flex items-center gap-2 ml-2 flex-shrink-0">
-                      {r.cdn_inc > 0 && <span className="text-green-600 font-medium">CDN+{r.cdn_inc}</span>}
-                      {r.cap_inc > 0 && <span className="text-purple-600 font-medium">CAP+{r.cap_inc}</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
 
