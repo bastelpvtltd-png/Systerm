@@ -36,14 +36,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Increment work counts based on document reason (non-fatal if table missing)
       try {
         const { data: doc } = await supabaseAdmin
-          .from('document_uploads').select('reason, file_name, doc_type').eq('id', document_id).maybeSingle()
-        if (doc?.reason === 'Container Moved' && doc?.doc_type === 'cdn') {
+          .from('document_uploads').select('reason, file_name').eq('id', document_id).maybeSingle()
+        if (doc?.reason === 'Container Moved') {
           await supabaseAdmin.from('work_counts').insert({
             user_id: authed.userId, user_name: userName, document_id,
             file_name: doc.file_name, reason: doc.reason, action,
             cdn_inc: 1, cusdec_inc: 0, cap_inc: 0,
           })
-        } else if (doc?.reason === 'CUSDEC Passed' && doc?.doc_type === 'cusdec') {
+        } else if (doc?.reason === 'CUSDEC Passed') {
           await supabaseAdmin.from('work_counts').insert({
             user_id: authed.userId, user_name: userName, document_id,
             file_name: doc.file_name, reason: doc.reason, action,
