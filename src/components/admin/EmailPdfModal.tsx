@@ -11,10 +11,11 @@ export interface EmailAttachment { filename: string; url: string }
 // recipient (saved_recipients) and the last subject used (email_settings)
 // so neither has to be retyped next time. "To" accepts more than one address
 // (comma-separated), plus CC/BCC.
-export default function EmailPdfModal({ attachments, defaultSubject, onClose }: {
+export default function EmailPdfModal({ attachments, defaultSubject, onClose, onSent }: {
   attachments: EmailAttachment[]
   defaultSubject?: string
   onClose: () => void
+  onSent?: () => void
 }) {
   const [emails, setEmails] = useState<string[]>([])
   const [to, setTo] = useState('')
@@ -64,6 +65,7 @@ export default function EmailPdfModal({ attachments, defaultSubject, onClose }: 
       })
       fetch('/api/email-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lastSubject: subject.trim() }) }).catch(() => {})
       setSent(true)
+      onSent?.()
     } catch (e: any) { setError(e.message) }
     finally { setSending(false) }
   }

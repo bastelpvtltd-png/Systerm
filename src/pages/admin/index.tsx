@@ -435,6 +435,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   const [bulkBusy, setBulkBusy] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
+  const [pendingMailActions, setPendingMailActions] = useState<{ taskIds: string[]; docIds: { id: string; ephemeral: boolean }[] } | null>(null)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
 
   async function load(silent = false) {
@@ -541,16 +542,13 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
 
   function mailSelected() {
     if (!confirmReasonDeleteBatch(selectedTasks)) return
-    const ids = new Set(selectedTasks.map(t => t.id))
-    const attachments = selectedTasks
-      .filter(t => t.document_uploads?.drive_url)
-      .map(t => {
-        logAction(t.document_uploads.id, 'mail')
-        if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
-        return { filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }
-      })
-    if (attachments.length) setEmailAttachments(attachments)
-    setTasks(prev => prev.filter(t => !ids.has(t.id)))
+    const eligible = selectedTasks.filter(t => t.document_uploads?.drive_url)
+    if (!eligible.length) return
+    const attachments = eligible.map(t => ({ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }))
+    const taskIds = eligible.map(t => t.id)
+    const docIds = eligible.map(t => ({ id: t.document_uploads.id, ephemeral: isEphemeralReason(t.document_uploads) }))
+    setEmailAttachments(attachments)
+    setPendingMailActions({ taskIds, docIds })
     setSelected({})
   }
 
@@ -629,10 +627,8 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                     </button>
                     <button onClick={() => {
                       if (!confirmReasonDelete(t.document_uploads)) return
-                      logAction(t.document_uploads.id, 'mail')
-                      if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
                       setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }])
-                      setTasks(prev => prev.filter(x => x.id !== t.id))
+                      setPendingMailActions({ taskIds: [t.id], docIds: [{ id: t.document_uploads.id, ephemeral: isEphemeralReason(t.document_uploads) }] })
                     }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                       <Mail size={12}/>
                     </button>
@@ -652,7 +648,23 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
           ))}
         </div>
       )}
-      {emailAttachments && <EmailPdfModal attachments={emailAttachments} onClose={() => setEmailAttachments(null)}/>}
+      {emailAttachments && (
+        <EmailPdfModal
+          attachments={emailAttachments}
+          onClose={() => { setEmailAttachments(null); setPendingMailActions(null) }}
+          onSent={() => {
+            if (pendingMailActions) {
+              const idSet = new Set(pendingMailActions.taskIds)
+              for (const doc of pendingMailActions.docIds) {
+                logAction(doc.id, 'mail')
+                if (doc.ephemeral) deleteReasonDoc(doc.id)
+              }
+              setTasks(prev => prev.filter(t => !idSet.has(t.id)))
+              setPendingMailActions(null)
+            }
+          }}
+        />
+      )}
     </div>
   )
 }
