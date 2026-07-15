@@ -220,7 +220,24 @@ function TemplatesContent() {
 
 // ── Excel Templates: Type management + cell mapping + generate ───────────
 interface TemplateType { id: string; key: string; label: string; is_auto_capable: boolean }
-interface MappingEntry { key: string; label: string; source: 'cusdec' | 'cdn' | 'manual'; dbColumn?: string; isArray: boolean; cellRef?: string; cellRange?: string; sheetName?: string }
+interface MappingEntry { key: string; label: string; source: 'cusdec' | 'cdn' | 'manual'; dbColumn?: string; isArray: boolean; cellRef?: string; cellRange?: string; colRange?: string; rowRange?: string; sheetName?: string }
+
+// Parse "A10:A25" → { col: 'A', rows: '10:25' }; "A10:D25" → { col: 'A:D', rows: '10:25' }
+function parseCellRange(range: string): { col: string; rows: string } {
+  const m = (range || '').replace(/\s/g, '').match(/^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$/)
+  if (!m) return { col: '', rows: '' }
+  const sc = m[1].toUpperCase(), ec = m[3].toUpperCase()
+  return { col: sc === ec ? sc : `${sc}:${ec}`, rows: `${m[2]}:${m[4]}` }
+}
+// Build "A10:A25" from col="A", rows="10:25"; supports col range "A:D" → "A10:D25"
+function buildCellRange(col: string, rows: string): string {
+  const c = col.trim().toUpperCase()
+  const r = rows.trim().split(':')
+  if (!c || r.length !== 2 || !r[0] || !r[1]) return ''
+  const parts = c.split(':')
+  const sc = parts[0], ec = parts.length > 1 ? parts[1] : parts[0]
+  return `${sc}${r[0]}:${ec}${r[1]}`
+}
 interface ExcelTemplate { id: string; type_key: string; name: string; file_name: string; drive_url: string; mapping: MappingEntry[]; print_range?: string | null }
 interface CusdecRec { id: string; code: string; number: string; exporter: string; cap: string }
 
@@ -303,7 +320,15 @@ function ExcelTemplatesContent() {
   const selected = templates.find(t => t.id === selectedId) || null
   const selectedType = types.find(t => t.key === typeKey) || null
   useEffect(() => {
-    setMapping(selected?.mapping || [])
+    const raw = selected?.mapping || []
+    // Backfill colRange/rowRange from legacy cellRange for existing entries
+    setMapping(raw.map(m => {
+      if (m.isArray && m.cellRange && !m.colRange && !m.rowRange) {
+        const p = parseCellRange(m.cellRange)
+        return { ...m, colRange: p.col, rowRange: p.rows }
+      }
+      return m
+    }))
     const pr = selected?.print_range || ''
     if (pr.includes('!')) {
       const [sheet, range] = pr.split('!', 2)
@@ -391,12 +416,22 @@ function ExcelTemplatesContent() {
     if (!selected) return
     setSavingMapping(true)
     try {
+      // Compute cellRange from colRange+rowRange for array fields; validate
+      const finalMapping = mapping.map(m => {
+        if (m.isArray && (m.colRange || m.rowRange)) {
+          if (!m.colRange || !m.rowRange) throw new Error(`Field "${m.label || m.key}": fill both Column and Rows`)
+          const cellRange = buildCellRange(m.colRange, m.rowRange)
+          if (!cellRange) throw new Error(`Field "${m.label || m.key}": Rows must be like 10:25`)
+          return { ...m, cellRange }
+        }
+        return m
+      })
       const combinedPrintRange = printSheet.trim()
         ? `${printSheet.trim()}!${printRange.trim()}`
         : printRange.trim() || null
       const res = await fetch('/api/document-templates', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping, print_range: combinedPrintRange }),
+        body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping: finalMapping, print_range: combinedPrintRange }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
@@ -546,7 +581,33 @@ function ExcelTemplatesContent() {
                       </label>
                     )}
                     {m.isArray ? (
-                      <input value={m.cellRange || ''} onChange={e => updateMappingRow(i, { cellRange: e.target.value })} placeholder="Cell range e.g. A10:A20" className="input text-xs font-mono"/>
+                      <div className="space-y-1">
+                        <div className="flex gap-1.5">
+                          <div className="flex-1">
+                            <label className="block text-[10px] text-gray-400 mb-0.5">Column(s)</label>
+                            <input
+                              value={m.colRange || ''}
+                              onChange={e => updateMappingRow(i, { colRange: e.target.value.toUpperCase() })}
+                              placeholder="e.g. A"
+                              className="input text-xs font-mono"
+                              title="Column letter — e.g. A  or A:D for multi-column"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <label className="block text-[10px] text-gray-400 mb-0.5">Rows</label>
+                            <input
+                              value={m.rowRange || ''}
+                              onChange={e => updateMappingRow(i, { rowRange: e.target.value })}
+                              placeholder="e.g. 10:25"
+                              className="input text-xs font-mono"
+                              title="Row range — e.g. 10:25"
+                            />
+                          </div>
+                        </div>
+                        {m.colRange && m.rowRange && buildCellRange(m.colRange, m.rowRange) && (
+                          <p className="text-[10px] text-indigo-500 font-mono">→ {buildCellRange(m.colRange, m.rowRange)}</p>
+                        )}
+                      </div>
                     ) : (
                       <input value={m.cellRef || ''} onChange={e => updateMappingRow(i, { cellRef: e.target.value })} placeholder="Cell e.g. B5" className="input text-xs font-mono"/>
                     )}

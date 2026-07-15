@@ -185,7 +185,10 @@ function FloatingChat() {
       supabase.from('profiles').select('id, full_name, username, last_active_at').order('full_name')
         .then(({ data }) => { if (data) setUsers(data as ChatUser[]) })
     }, 30000)
-    return () => { supabase.removeChannel(ch); clearInterval(pingId); clearInterval(msgPollId); clearInterval(pollId) }
+    // Open chat when notification bell chat item is clicked
+    function handleOpenRequest() { setOpen(true) }
+    window.addEventListener('chat:open-request', handleOpenRequest)
+    return () => { supabase.removeChannel(ch); clearInterval(pingId); clearInterval(msgPollId); clearInterval(pollId); window.removeEventListener('chat:open-request', handleOpenRequest) }
   }, [])
 
   // Ping immediately when userId resolves
@@ -214,8 +217,13 @@ function FloatingChat() {
         if (latest.id !== toastMsgId.current) {
           toastMsgId.current = latest.id
           const sp = Array.isArray(latest.profiles) ? latest.profiles[0] : latest.profiles
-          setMsgToast({ name: sp?.full_name || sp?.username || 'Someone', body: latest.body.slice(0, 50) })
+          const senderName = sp?.full_name || sp?.username || 'Someone'
+          setMsgToast({ name: senderName, body: latest.body.slice(0, 50) })
           setTimeout(() => setMsgToast(null), 4000)
+          // Notify the InAppNotifications bell about this new chat message
+          window.dispatchEvent(new CustomEvent('chat:new-message', {
+            detail: { id: latest.id, name: senderName, body: latest.body.slice(0, 80) }
+          }))
         }
       }
     }
@@ -278,7 +286,11 @@ function FloatingChat() {
     <>
       {/* Floating button */}
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => {
+          const next = !open
+          setOpen(next)
+          if (next) window.dispatchEvent(new CustomEvent('chat:opened'))
+        }}
         className="fixed bottom-5 right-5 z-[51] w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all hover:scale-110"
         style={{ background: '#22A87A' }}
       >
@@ -348,7 +360,7 @@ function FloatingChat() {
                 className={`text-[11px] px-2.5 py-1 rounded-lg flex-shrink-0 font-medium transition-colors flex items-center gap-1 ${
                   recipientId === u.id ? 'bg-green-600 text-white' : 'text-gray-500 hover:bg-gray-200'}`}>
                 {isOnline(u) && <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"/>}
-                {(u.full_name || u.username).split(' ')[0]}
+                {(u.full_name || u.username).split(' ').slice(0, 2).join(' ')}
               </button>
             ))}
             {isAdmin && (
@@ -368,6 +380,7 @@ function FloatingChat() {
             )}
             {visibleMsgs.map(m => {
               const isMe = m.sender_id === userId
+              const isNew = !isMe && m.created_at > lastSeen
               const senderProfile = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles
               const name = senderProfile?.full_name || senderProfile?.username || 'User'
               // Exclude sender and current viewer from "seen by" list
@@ -412,7 +425,7 @@ function FloatingChat() {
                       <div
                         onClick={() => seenNames.length > 0 && setSeenPopup(p => p === m.id ? null : m.id)}
                         className={`px-3 py-2 rounded-2xl text-sm break-words ${seenNames.length > 0 ? 'cursor-pointer' : ''} ${
-                          isMe ? 'text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
+                          isMe ? 'text-white rounded-br-sm' : isNew ? 'bg-red-50 text-gray-800 border border-red-200 rounded-bl-sm' : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
                         }`}
                         style={isMe ? { background: '#22A87A' } : {}}
                       >
@@ -493,8 +506,11 @@ function FloatingChat() {
 // ─── In-App Notifications Bell ──────────────────────────────────────────────
 interface UserNotif { id: string; type: string; title: string; body: string; link_href?: string; created_at: string; read_at?: string | null }
 
+interface ChatNotif { id: string; name: string; body: string; ts: string }
+
 function InAppNotifications() {
   const [notifs, setNotifs] = useState<UserNotif[]>([])
+  const [chatNotifs, setChatNotifs] = useState<ChatNotif[]>([])
   const [open, setOpen] = useState(false)
   const router = useRouter()
 
@@ -512,7 +528,14 @@ function InAppNotifications() {
   useEffect(() => {
     load()
     const id = setInterval(load, 30000)
-    return () => clearInterval(id)
+    function onNewChatMsg(e: Event) {
+      const { id: msgId, name, body } = (e as CustomEvent).detail
+      setChatNotifs(prev => prev.some(n => n.id === msgId) ? prev : [{ id: msgId, name, body, ts: new Date().toISOString() }, ...prev.slice(0, 4)])
+    }
+    function onChatOpened() { setChatNotifs([]) }
+    window.addEventListener('chat:new-message', onNewChatMsg)
+    window.addEventListener('chat:opened', onChatOpened)
+    return () => { clearInterval(id); window.removeEventListener('chat:new-message', onNewChatMsg); window.removeEventListener('chat:opened', onChatOpened) }
   }, [])
 
   async function markAllRead() {
@@ -524,52 +547,70 @@ function InAppNotifications() {
         body: JSON.stringify({ mark_read: true }),
       })
       setNotifs([])
+      setChatNotifs([])
       setOpen(false)
     } catch {}
   }
 
-  const unread = notifs.filter(n => !n.read_at).length
+  const sysUnread = notifs.filter(n => !n.read_at).length
+  const totalUnread = sysUnread + chatNotifs.length
+  const bellBg = sysUnread > 0 ? '#ef4444' : chatNotifs.length > 0 ? '#22A87A' : '#6b7280'
 
   return (
     <>
       <button
         onClick={() => setOpen(o => !o)}
         className="fixed bottom-5 right-[72px] z-[51] w-10 h-10 rounded-full shadow-xl flex items-center justify-center transition-all hover:scale-110"
-        style={{ background: unread > 0 ? '#ef4444' : '#6b7280' }}
+        style={{ background: bellBg }}
         title="In-App Notifications"
       >
         <Bell size={16} color="white"/>
-        {unread > 0 && (
+        {totalUnread > 0 && (
           <span className="absolute -top-1 -right-1 w-4 h-4 bg-orange-500 rounded-full flex items-center justify-center text-white text-[9px] font-bold">
-            {unread > 9 ? '9+' : unread}
+            {totalUnread > 9 ? '9+' : totalUnread}
           </span>
         )}
       </button>
 
       {open && (
         <div className="fixed bottom-20 right-[72px] z-[51] w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
-          style={{ maxHeight: '360px' }}>
+          style={{ maxHeight: '400px' }}>
           <div className="px-4 py-3 flex items-center gap-2 border-b" style={{ background: '#1B3A5C' }}>
             <Bell size={14} color="white"/>
             <span className="text-white font-semibold text-sm flex-1">Notifications</span>
-            {unread > 0 && (
+            {totalUnread > 0 && (
               <button onClick={markAllRead} className="text-xs text-blue-200 hover:text-white">Mark all read</button>
             )}
             <button onClick={() => setOpen(false)} className="text-white/70 hover:text-white ml-1"><X size={15}/></button>
           </div>
-          <div className="overflow-y-auto" style={{ maxHeight: '300px' }}>
-            {notifs.length === 0 ? (
+          <div className="overflow-y-auto" style={{ maxHeight: '340px' }}>
+            {totalUnread === 0 ? (
               <p className="text-center text-gray-400 text-xs py-8">No new notifications</p>
             ) : (
-              notifs.map(n => (
-                <div key={n.id}
-                  className={`px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 ${n.type === 'conflict' ? 'border-l-4 border-l-orange-400' : ''}`}
-                  onClick={() => { if (n.link_href) router.push(n.link_href); setOpen(false) }}>
-                  <p className="text-xs font-semibold text-gray-800">{n.title}</p>
-                  <p className="text-xs text-gray-500 mt-0.5 leading-snug">{n.body}</p>
-                  <p className="text-[10px] text-gray-300 mt-1">{new Date(n.created_at).toLocaleString('en-GB', { timeZone: 'Asia/Colombo' })}</p>
-                </div>
-              ))
+              <>
+                {chatNotifs.map(n => (
+                  <div key={`chat-${n.id}`}
+                    className="px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-green-50"
+                    style={{ borderLeft: '4px solid #22A87A' }}
+                    onClick={() => { window.dispatchEvent(new CustomEvent('chat:open-request')); setOpen(false) }}>
+                    <div className="flex items-center gap-1 mb-0.5">
+                      <MessageSquare size={10} className="text-green-500 flex-shrink-0"/>
+                      <p className="text-[10px] font-semibold text-green-600">{n.name}</p>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-0.5 leading-snug">{n.body}</p>
+                    <p className="text-[10px] text-gray-300 mt-1">{new Date(n.ts).toLocaleTimeString('en-GB', { timeZone: 'Asia/Colombo', hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                ))}
+                {notifs.map(n => (
+                  <div key={n.id}
+                    className={`px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 ${n.type === 'conflict' ? 'border-l-4 border-l-orange-400' : ''}`}
+                    onClick={() => { if (n.link_href) router.push(n.link_href); setOpen(false) }}>
+                    <p className="text-xs font-semibold text-gray-800">{n.title}</p>
+                    <p className="text-xs text-gray-500 mt-0.5 leading-snug">{n.body}</p>
+                    <p className="text-[10px] text-gray-300 mt-1">{new Date(n.created_at).toLocaleString('en-GB', { timeZone: 'Asia/Colombo' })}</p>
+                  </div>
+                ))}
+              </>
             )}
           </div>
         </div>
