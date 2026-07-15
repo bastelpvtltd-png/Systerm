@@ -7,7 +7,7 @@ import {
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
   Database, Loader, MessageSquare, CheckCircle, FileStack, Zap, Clock, Sun, Moon,
-  Send, X, Bell, Anchor as AnchorIcon,
+  Send, X, Bell, Anchor as AnchorIcon, Trash2,
 } from 'lucide-react'
 import { formatSLDateTime } from '@/lib/slTime'
 
@@ -86,11 +86,12 @@ function TriggerTimestamps({ collapsed }: { collapsed: boolean }) {
           <div className="bg-white/5 rounded-lg px-2 py-1.5">
             <p className="text-gray-400">Boat Note</p>
             <p className="text-green-400 font-medium tabular-nums">{fmt(data?.boatNote?.time)}</p>
-            {data?.boatNote?.cusdec && <p className="text-gray-500">E {data.boatNote.cusdec}</p>}
+            {data?.boatNote?.container && <p className="text-gray-500 font-mono">{data.boatNote.container}</p>}
           </div>
           <div className="bg-white/5 rounded-lg px-2 py-1.5">
             <p className="text-gray-400">Export Release</p>
             <p className="text-blue-400 font-medium tabular-nums">{fmt(data?.exportRelease?.time)}</p>
+            {data?.exportRelease?.cusdec && <p className="text-gray-500 font-mono">E {data.exportRelease.cusdec}</p>}
           </div>
           <div className="bg-white/5 rounded-lg px-2 py-1.5">
             <p className="text-gray-400">Next Vessel ETB</p>
@@ -104,7 +105,13 @@ function TriggerTimestamps({ collapsed }: { collapsed: boolean }) {
 }
 
 // ─── Floating Chat Widget ────────────────────────────────────────────────────
-interface Msg { id: string; sender_id: string; body: string; created_at: string; profiles?: { full_name: string; username: string } | null }
+interface Msg {
+  id: string; sender_id: string; body: string; created_at: string
+  recipient_id?: string | null
+  profiles?: { full_name: string; username: string } | null
+  reads?: { user_id: string }[]
+}
+interface ChatUser { id: string; full_name: string; username: string; last_active_at?: string | null }
 
 function FloatingChat() {
   const [open, setOpen] = useState(false)
@@ -112,37 +119,86 @@ function FloatingChat() {
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [users, setUsers] = useState<ChatUser[]>([])
+  const [recipientId, setRecipientId] = useState<string>('') // '' = all
   const [unread, setUnread] = useState(0)
   const [lastSeen, setLastSeen] = useState<string>(() =>
     typeof window !== 'undefined' ? localStorage.getItem('chat_last_seen') || '' : '')
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  async function load() {
-    const { data } = await supabase
-      .from('messages')
-      .select('id, sender_id, body, created_at, profiles(full_name, username)')
-      .order('created_at', { ascending: true })
-      .limit(100)
-    setMsgs((data as any) || [])
-    const { data: { user } } = await supabase.auth.getUser()
-    setUserId(user?.id || null)
+  const ONLINE_THRESHOLD = 3 * 60 * 1000 // 3 minutes
+
+  function isOnline(u: ChatUser) {
+    if (!u.last_active_at) return false
+    return Date.now() - new Date(u.last_active_at).getTime() < ONLINE_THRESHOLD
+  }
+
+  async function pingActive() {
+    if (!userId) return
+    await supabase.from('profiles').update({ last_active_at: new Date().toISOString() }).eq('id', userId)
+  }
+
+  async function loadAll() {
+    const [{ data: { user } }, { data: uRows }, { data: mRows }] = await Promise.all([
+      supabase.auth.getUser(),
+      supabase.from('profiles').select('id, full_name, username, last_active_at').order('full_name'),
+      supabase.from('messages')
+        .select('id, sender_id, body, created_at, recipient_id, profiles(full_name, username), reads:message_reads(user_id)')
+        .order('created_at', { ascending: true })
+        .limit(120),
+    ])
+    const me = user?.id || null
+    setUserId(me)
+    setUsers((uRows || []) as ChatUser[])
+    // Filter: show only messages that are broadcast OR sent/received by me
+    const all = ((mRows || []) as Msg[]).filter(m =>
+      m.recipient_id === null || m.recipient_id === undefined ||
+      m.sender_id === me || m.recipient_id === me
+    )
+    setMsgs(all)
+    // Check admin status
+    if (me) {
+      const { data: prof } = await supabase.from('profiles').select('is_admin').eq('id', me).single()
+      setIsAdmin(!!prof?.is_admin)
+    }
   }
 
   useEffect(() => {
-    load()
-    const ch = supabase.channel('float-chat')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => load())
+    loadAll()
+    const ch = supabase.channel('float-chat-v2')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => loadAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reads' }, () => loadAll())
       .subscribe()
-    return () => { supabase.removeChannel(ch) }
+    // Ping active every 60s
+    const pingId = setInterval(() => pingActive(), 60000)
+    // Poll users list every 30s to keep online indicators fresh
+    const pollId = setInterval(() => {
+      supabase.from('profiles').select('id, full_name, username, last_active_at').order('full_name')
+        .then(({ data }) => { if (data) setUsers(data as ChatUser[]) })
+    }, 30000)
+    return () => { supabase.removeChannel(ch); clearInterval(pingId); clearInterval(pollId) }
   }, [])
 
-  // Count unread when closed
+  // Ping immediately when userId resolves
+  useEffect(() => { if (userId) pingActive() }, [userId])
+
+  // Count unread broadcast + DMs to me
   useEffect(() => {
     if (open) {
       const latest = msgs[msgs.length - 1]?.created_at || ''
       localStorage.setItem('chat_last_seen', latest)
       setLastSeen(latest)
       setUnread(0)
+      // Mark all visible as read
+      msgs.forEach(m => {
+        if (userId && m.sender_id !== userId) {
+          const alreadyRead = (m.reads || []).some(r => r.user_id === userId)
+          if (!alreadyRead) {
+            supabase.from('message_reads').insert({ message_id: m.id, user_id: userId }).then(() => {})
+          }
+        }
+      })
     } else {
       setUnread(msgs.filter(m => m.created_at > lastSeen && m.sender_id !== userId).length)
     }
@@ -155,15 +211,30 @@ function FloatingChat() {
   async function send() {
     if (!body.trim()) return
     setSending(true)
-    await supabase.from('messages').insert({ body: body.trim() })
+    await supabase.from('messages').insert({
+      body: body.trim(),
+      recipient_id: recipientId || null,
+    })
     setBody('')
     setSending(false)
+  }
+
+  async function deleteMsg(id: string) {
+    await supabase.from('messages').delete().eq('id', id)
   }
 
   function fmt(iso: string) {
     try { return new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Asia/Colombo', hour: '2-digit', minute: '2-digit' }) }
     catch { return '' }
   }
+
+  const onlineUsers = users.filter(u => u.id !== userId && isOnline(u))
+  const selectedRecipient = users.find(u => u.id === recipientId)
+
+  // Visible messages filtered by chosen recipient tab
+  const visibleMsgs = recipientId
+    ? msgs.filter(m => (m.sender_id === userId && m.recipient_id === recipientId) || (m.sender_id === recipientId && m.recipient_id === userId))
+    : msgs.filter(m => !m.recipient_id)
 
   return (
     <>
@@ -189,34 +260,91 @@ function FloatingChat() {
       {/* Chat panel */}
       {open && (
         <div className="fixed bottom-20 right-5 z-50 w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden"
-          style={{ height: '420px' }}>
+          style={{ height: '480px' }}>
+
           {/* Header */}
-          <div className="px-4 py-3 flex items-center gap-2 border-b" style={{ background: '#22A87A' }}>
+          <div className="px-4 py-3 flex items-center gap-2 border-b flex-shrink-0" style={{ background: '#22A87A' }}>
             <MessageSquare size={15} color="white"/>
-            <span className="text-white font-semibold text-sm flex-1">Company Chat</span>
+            <span className="text-white font-semibold text-sm flex-1">
+              {selectedRecipient ? `Chat · ${selectedRecipient.full_name || selectedRecipient.username}` : 'Company Chat'}
+            </span>
             <button onClick={() => setOpen(false)} className="text-white/70 hover:text-white">
               <X size={16}/>
             </button>
           </div>
 
+          {/* Online users strip */}
+          {onlineUsers.length > 0 && (
+            <div className="px-3 py-1.5 bg-green-50 border-b border-green-100 flex items-center gap-1.5 flex-shrink-0 overflow-x-auto">
+              <span className="text-[10px] text-green-600 font-medium flex-shrink-0">Online:</span>
+              {onlineUsers.map(u => (
+                <span key={u.id} className="text-[10px] bg-green-100 text-green-700 rounded-full px-2 py-0.5 flex-shrink-0 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block"/>
+                  {u.full_name || u.username}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Recipient tabs */}
+          <div className="px-2 py-1.5 border-b bg-gray-50 flex gap-1 overflow-x-auto flex-shrink-0">
+            <button onClick={() => setRecipientId('')}
+              className={`text-[11px] px-2.5 py-1 rounded-lg flex-shrink-0 font-medium transition-colors ${
+                recipientId === '' ? 'bg-green-600 text-white' : 'text-gray-500 hover:bg-gray-200'}`}>
+              All
+            </button>
+            {users.filter(u => u.id !== userId).map(u => (
+              <button key={u.id} onClick={() => setRecipientId(u.id)}
+                className={`text-[11px] px-2.5 py-1 rounded-lg flex-shrink-0 font-medium transition-colors flex items-center gap-1 ${
+                  recipientId === u.id ? 'bg-green-600 text-white' : 'text-gray-500 hover:bg-gray-200'}`}>
+                {isOnline(u) && <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"/>}
+                {(u.full_name || u.username).split(' ')[0]}
+              </button>
+            ))}
+          </div>
+
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2 bg-gray-50">
-            {msgs.length === 0 && (
-              <p className="text-center text-gray-400 text-xs py-4">No messages yet</p>
+            {visibleMsgs.length === 0 && (
+              <p className="text-center text-gray-400 text-xs py-4">No messages{recipientId ? ' with this person' : ' yet'}</p>
             )}
-            {msgs.map(m => {
+            {visibleMsgs.map(m => {
               const isMe = m.sender_id === userId
               const name = m.profiles?.full_name || m.profiles?.username || 'User'
+              const readBy = (m.reads || []).filter(r => r.user_id !== m.sender_id)
+              const seenNames = readBy.map(r => {
+                const u = users.find(x => x.id === r.user_id)
+                return u ? (u.full_name || u.username).split(' ')[0] : null
+              }).filter(Boolean)
               return (
-                <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                <div key={m.id} className={`flex flex-col group ${isMe ? 'items-end' : 'items-start'}`}>
                   {!isMe && <span className="text-[10px] text-gray-400 mb-0.5 px-1">{name}</span>}
-                  <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm break-words ${
-                    isMe ? 'text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
-                  }`}
-                  style={isMe ? { background: '#22A87A' } : {}}>
-                    {m.body}
+                  <div className="flex items-end gap-1">
+                    {isMe && isAdmin && (
+                      <button onClick={() => deleteMsg(m.id)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-red-300 hover:text-red-500 mb-1">
+                        <Trash2 size={11}/>
+                      </button>
+                    )}
+                    <div className={`max-w-[75%] px-3 py-2 rounded-2xl text-sm break-words ${
+                      isMe ? 'text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
+                    }`}
+                    style={isMe ? { background: '#22A87A' } : {}}>
+                      {m.body}
+                    </div>
+                    {!isMe && isAdmin && (
+                      <button onClick={() => deleteMsg(m.id)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-red-300 hover:text-red-500 mb-1">
+                        <Trash2 size={11}/>
+                      </button>
+                    )}
                   </div>
-                  <span className="text-[9px] text-gray-300 mt-0.5 px-1">{fmt(m.created_at)}</span>
+                  <div className="flex items-center gap-1 px-1 mt-0.5">
+                    <span className="text-[9px] text-gray-300">{fmt(m.created_at)}</span>
+                    {isMe && seenNames.length > 0 && (
+                      <span className="text-[9px] text-green-400">· Seen {seenNames.join(', ')}</span>
+                    )}
+                  </div>
                 </div>
               )
             })}
@@ -224,12 +352,12 @@ function FloatingChat() {
           </div>
 
           {/* Input */}
-          <div className="p-3 border-t bg-white flex gap-2">
+          <div className="p-3 border-t bg-white flex gap-2 flex-shrink-0">
             <input
               value={body}
               onChange={e => setBody(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-              placeholder="Type a message..."
+              placeholder={recipientId ? `Message ${selectedRecipient?.full_name?.split(' ')[0] || ''}…` : 'Message everyone…'}
               className="flex-1 border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-green-400"
             />
             <button onClick={send} disabled={sending || !body.trim()}
@@ -342,7 +470,6 @@ export const TAB_ITEMS = [
   { href: '/admin/boat-note',        icon: FileStack,       label: 'Docs Create' },
   { href: '/admin/templates',        icon: FileStack,       label: 'Templates' },
   { href: '/admin/automation',       icon: Zap,             label: 'Automation' },
-  { href: '/admin/messages',         icon: MessageSquare,   label: 'Messages' },
   { href: '/admin/database',         icon: Database,        label: 'Database' },
   { href: '/admin/financials',       icon: DollarSign,      label: 'Financials' },
   { href: '/admin/reports',          icon: BarChart2,       label: 'Reports' },
