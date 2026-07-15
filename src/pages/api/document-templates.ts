@@ -26,13 +26,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
-      const { id, type_key, name, file_name, drive_url, mapping, confirmUpdate } = req.body
+      const { id, type_key, name, file_name, drive_url, mapping, print_range, confirmUpdate } = req.body
       if (!type_key) return res.status(400).json({ error: 'type_key required' })
 
       if (id) {
-        // Editing an existing template's mapping — no name-collision concern.
+        // Editing an existing template's mapping / print_range — no name-collision concern.
         const { data, error } = await supabaseAdmin.from('document_templates')
-          .update({ name, mapping: mapping || [], updated_at: new Date().toISOString() })
+          .update({ name, mapping: mapping || [], print_range: print_range ?? null, updated_at: new Date().toISOString() })
           .eq('id', id).select().single()
         if (error) throw error
         return res.json({ template: data })
@@ -52,14 +52,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (existing && confirmUpdate) {
         const { data, error } = await supabaseAdmin.from('document_templates')
-          .update({ file_name, drive_url, mapping: mapping || [], updated_at: new Date().toISOString() })
+          .update({ file_name, drive_url, mapping: mapping || [], print_range: print_range ?? null, updated_at: new Date().toISOString() })
           .eq('id', existing.id).select().single()
         if (error) throw error
         return res.json({ template: data, updated: true })
       }
 
       const { data, error } = await supabaseAdmin.from('document_templates')
-        .insert({ type_key, name: finalName, file_name, drive_url, mapping: mapping || [] })
+        .insert({ type_key, name: finalName, file_name, drive_url, mapping: mapping || [], print_range: print_range ?? null })
         .select().single()
       if (error) throw error
       return res.json({ template: data })

@@ -221,7 +221,7 @@ function TemplatesContent() {
 // ── Excel Templates: Type management + cell mapping + generate ───────────
 interface TemplateType { id: string; key: string; label: string; is_auto_capable: boolean }
 interface MappingEntry { key: string; label: string; source: 'cusdec' | 'cdn' | 'manual'; dbColumn?: string; isArray: boolean; cellRef?: string; cellRange?: string; sheetName?: string }
-interface ExcelTemplate { id: string; type_key: string; name: string; file_name: string; drive_url: string; mapping: MappingEntry[] }
+interface ExcelTemplate { id: string; type_key: string; name: string; file_name: string; drive_url: string; mapping: MappingEntry[]; print_range?: string | null }
 interface CusdecRec { id: string; code: string; number: string; exporter: string; cap: string }
 
 function ExcelTemplatesContent() {
@@ -240,6 +240,7 @@ function ExcelTemplatesContent() {
   const [status, setStatus] = useState('')
 
   const [mapping, setMapping] = useState<MappingEntry[]>([])
+  const [printRange, setPrintRange] = useState('')
   const [savingMapping, setSavingMapping] = useState(false)
 
   const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
@@ -302,6 +303,7 @@ function ExcelTemplatesContent() {
   const selectedType = types.find(t => t.key === typeKey) || null
   useEffect(() => {
     setMapping(selected?.mapping || [])
+    setPrintRange(selected?.print_range || '')
     setManualValues({})
   }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -382,7 +384,7 @@ function ExcelTemplatesContent() {
     try {
       const res = await fetch('/api/document-templates', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping }),
+        body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping, print_range: printRange.trim() || null }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
@@ -531,6 +533,16 @@ function ExcelTemplatesContent() {
                   </div>
                 ))}
               </div>
+              <div className="border border-dashed border-gray-200 rounded-lg p-2.5 mb-3 space-y-1">
+                <label className="block text-[11px] font-medium text-gray-600">PDF Print Range (optional)</label>
+                <input
+                  value={printRange}
+                  onChange={e => setPrintRange(e.target.value)}
+                  placeholder="e.g. A1:F50  — only this range prints to PDF"
+                  className="input text-xs font-mono"
+                />
+                <p className="text-[10px] text-gray-400">Leave blank to print the whole sheet. When set, only cells within this range appear in the generated PDF.</p>
+              </div>
               <div className="flex items-center gap-2 mb-4">
                 <button onClick={addMappingRow} className="flex items-center gap-1 text-xs text-blue-600 hover:underline"><Plus size={13}/>Add Field</button>
                 <button onClick={saveMapping} disabled={savingMapping} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
@@ -555,12 +567,15 @@ function ExcelTemplatesContent() {
                     <input value={manualValues[f.key] || ''} onChange={e => setManualValues(v => ({ ...v, [f.key]: e.target.value }))} className="input text-xs"/>
                   </div>
                 ))}
+                {selected?.print_range && (
+                  <p className="text-[10px] text-indigo-600 bg-indigo-50 rounded px-2 py-1 mb-2 font-mono">PDF range: {selected.print_range}</p>
+                )}
                 <div className="flex items-center gap-2 mt-2">
                   <button onClick={() => generate(undefined, 'xlsx')} disabled={generating} className="btn-primary text-xs px-3 py-2 flex items-center gap-1.5">
                     {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate Excel
                   </button>
                   <button onClick={() => generate(undefined, 'pdf')} disabled={generating} className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg text-white disabled:opacity-50" style={{ background: '#dc2626' }}>
-                    {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate PDF
+                    {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}{selected?.print_range ? `PDF (${selected.print_range})` : 'Generate PDF'}
                   </button>
                   {selectedType?.is_auto_capable && (
                     <button onClick={() => setAutoModal(true)} className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg text-white" style={{ background: '#8b5cf6' }}>

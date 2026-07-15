@@ -69,6 +69,8 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   // ── other work admin ──────────────────────────────────────────────────────
   const [owTargetUser, setOwTargetUser] = useState('')
   const [owDesc,       setOwDesc]       = useState('')
+  const [owItem,       setOwItem]       = useState('')
+  const [owCost,       setOwCost]       = useState('')
   const [owAmount,     setOwAmount]     = useState('')
   const [owSaving,     setOwSaving]     = useState(false)
   const [approvingId,  setApprovingId]  = useState<string | null>(null)
@@ -157,17 +159,21 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   }
 
   async function addOtherWork() {
-    if (!owTargetUser || !owDesc.trim() || !owAmount) { setError('Fill all fields for Other Work'); return }
+    const computedAmount = Number(owAmount) || (Number(owItem) * Number(owCost))
+    if (!owTargetUser || !owDesc.trim() || !computedAmount) { setError('Fill user, description and amount (or item × cost)'); return }
     setOwSaving(true); setError('')
     try {
       const targetUser = users.find(u => u.id === owTargetUser)
+      const descWithCalc = (owItem && owCost)
+        ? `${owDesc.trim()} (${owItem} × Rs.${fmtLKR(Number(owCost))})`
+        : owDesc.trim()
       const res = await fetch('/api/other-work', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ user_id: owTargetUser, user_name: targetUser?.full_name || targetUser?.username, description: owDesc.trim(), amount: Number(owAmount) }),
+        body: JSON.stringify({ user_id: owTargetUser, user_name: targetUser?.full_name || targetUser?.username, description: descWithCalc, amount: computedAmount }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setOwTargetUser(''); setOwDesc(''); setOwAmount('')
+      setOwTargetUser(''); setOwDesc(''); setOwItem(''); setOwCost(''); setOwAmount('')
       await loadAllWork()
     } catch (e: any) { setError(e.message) }
     finally { setOwSaving(false) }
@@ -226,7 +232,7 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   const myEarned = myCountWorkEarned + myOtherWorkEarned
   const myReceivedPayments = payments.filter(p => p.to_user_id === userId && p.status === 'confirmed')
   const myReceived = myReceivedPayments.reduce((s, p) => s + Number(p.amount), 0)
-  const myBalance = myEarned - myReceived
+  const myBalance = myReceived - myEarned
   const myPendingOtherWork = myOtherWork.filter(x => x.status === 'pending')
 
   // Admin: per-user work earned from allWorkRows
@@ -436,18 +442,28 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
                 {/* Add Other Work */}
                 <div className="bg-indigo-50 rounded-xl p-3">
                   <p className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wide mb-2 flex items-center gap-1"><Briefcase size={12}/>Add Other Work</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
                     <select value={owTargetUser} onChange={e => setOwTargetUser(e.target.value)} className="input text-sm">
                       <option value="">— Select user —</option>
                       {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
                     </select>
-                    <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder="Description" className="input text-sm sm:col-span-1"/>
-                    <input type="number" value={owAmount} onChange={e => setOwAmount(e.target.value)} placeholder="Amount (Rs.)" className="input text-sm"/>
-                    <button onClick={addOtherWork} disabled={owSaving} className="btn-primary flex items-center justify-center gap-1.5 text-sm">
+                    <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder="Description" className="input text-sm"/>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input type="number" value={owItem} onChange={e => { setOwItem(e.target.value); setOwAmount(String(Number(e.target.value) * Number(owCost))) }}
+                      placeholder="Qty" className="input text-sm w-20"/>
+                    <span className="text-gray-400 text-sm">×</span>
+                    <input type="number" value={owCost} onChange={e => { setOwCost(e.target.value); setOwAmount(String(Number(owItem) * Number(e.target.value))) }}
+                      placeholder="Unit cost" className="input text-sm w-28"/>
+                    <span className="text-gray-400 text-sm">=</span>
+                    <input type="number" value={owAmount}
+                      onChange={e => { setOwAmount(e.target.value); setOwItem(''); setOwCost('') }}
+                      placeholder="Total (Rs.)" className="input text-sm w-28 bg-white font-semibold"/>
+                    <button onClick={addOtherWork} disabled={owSaving} className="btn-primary flex items-center justify-center gap-1.5 text-sm ml-auto">
                       {owSaving ? <Loader size={13} className="animate-spin"/> : <Plus size={13}/>}Add
                     </button>
                   </div>
-                  <p className="text-[10px] text-indigo-500 mt-1.5">Needs approval before counting in balance — approve below.</p>
+                  <p className="text-[10px] text-indigo-500 mt-1.5">Item × cost = auto-total. Needs approval before counting in balance.</p>
                 </div>
 
                 {/* Pending Other Work approvals */}
@@ -490,7 +506,7 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
                   const totalCost = countCost + owData.approved
                   const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
                   const received = userConfirmedPayments.reduce((s, p) => s + Number(p.amount), 0)
-                  const bal = totalCost - received
+                  const bal = received - totalCost
                   const isExpanded = expandedUser === u.id
                   return (
                     <div key={u.id} className="border border-gray-200 rounded-xl overflow-hidden">
@@ -998,62 +1014,6 @@ function MyTasksContent() {
         </div>
       )}
 
-      {isAdmin && (canAddCost || canDeposit) && (
-        <div className="card mb-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-900 text-sm">Balance</h2>
-            <span className={`text-lg font-bold ${balance < 0 ? 'text-red-600' : 'text-green-700'}`}>
-              {balance.toLocaleString('en-LK', { minimumFractionDigits: 2 })}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {canAddCost && (
-              <div>
-                <p className="text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-1"><TrendingDown size={12} className="text-red-500"/>Add today's cost</p>
-                <div className="flex gap-2">
-                  <input type="number" value={costAmount} onChange={e => setCostAmount(e.target.value)} placeholder="Amount"
-                    className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-                  <input value={costNote} onChange={e => setCostNote(e.target.value)} placeholder="Note (optional)"
-                    className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-                  <button onClick={() => addEntry('cost')} disabled={adding || !costAmount}
-                    className="px-3 rounded-lg text-white disabled:opacity-40" style={{background:'#ef4444'}}>
-                    {adding ? <Loader size={14} className="animate-spin"/> : <Plus size={14}/>}
-                  </button>
-                </div>
-              </div>
-            )}
-            {canDeposit && (
-              <div>
-                <p className="text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-1"><TrendingUp size={12} className="text-green-600"/>Add deposit (accountant/owner)</p>
-                <div className="flex gap-2">
-                  <input type="number" value={depositAmount} onChange={e => setDepositAmount(e.target.value)} placeholder="Amount"
-                    className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-                  <input value={depositNote} onChange={e => setDepositNote(e.target.value)} placeholder="Note (optional)"
-                    className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-                  <button onClick={() => addEntry('deposit')} disabled={adding || !depositAmount}
-                    className="px-3 rounded-lg text-white disabled:opacity-40" style={{background:'#22A87A'}}>
-                    {adding ? <Loader size={14} className="animate-spin"/> : <Plus size={14}/>}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {entries.length > 0 && (
-            <div className="mt-4 space-y-1 max-h-40 overflow-y-auto">
-              {entries.map(e => (
-                <div key={e.id} className="flex items-center justify-between text-xs py-1 border-t border-gray-50">
-                  <span className="text-gray-500">{new Date(e.entry_date).toLocaleDateString('en-GB')} {e.note ? `· ${e.note}` : ''}</span>
-                  <span className={e.entry_type === 'deposit' ? 'text-green-700 font-medium' : 'text-red-600 font-medium'}>
-                    {e.entry_type === 'deposit' ? '+' : '-'}{Number(e.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       <SalaryPayments userId={userId} isAdmin={isAdmin}/>
 

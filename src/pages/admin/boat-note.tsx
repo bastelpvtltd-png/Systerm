@@ -102,7 +102,6 @@ function BoatNoteContent() {
     ['invoice',       Receipt,       'Invoice',       canInvoice],
     ['packing-list',  Package,       'Packing List',  canPackingList],
     ['boat-note',     Anchor,        'Boat Note',     canBoatNote],
-    ['done-boat-note',ClipboardCheck,'Done Boat Note',canDoneBoatNote],
     ['cusdec-xml',    FileCode,      'Cusdec XML',    canCusdecXml],
     ['cdn-text',      ScanText,      'CDN Text',      canCdnText],
     ['parties-copy',  Copy,          "Party's Copy",  canPartiesCopy],
@@ -1103,68 +1102,9 @@ function BoatNoteContent() {
           <span className="font-semibold">PDF Format:</span> SHIPPING NOTE / BOAT NOTE – Exp 3a · Landscape A4 · All fields from Excel b2 sheet (Shipper, Consignee, Voyage, Vessel, Port of Loading/Discharge, Container, CDN No., Gross Weight, Cube, SLPA, Company, Declarant)
         </div>
 
-        {/* Quick Upload — CUSDEC XML + PDF, ephemeral, admin-only */}
-        {isAdmin && (
-          <div className="card mt-5">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Anchor size={15}/>Quick Upload (CUSDEC XML + PDF)</h2>
-              <button onClick={resetQuickUpload} className="text-xs text-gray-400 hover:text-gray-600">Reset</button>
-            </div>
-            <p className="text-xs text-gray-500 mb-3">Admin only · Temporary — nothing uploaded here is saved to the database or Drive. Upload a CUSDEC XML to auto-fill what it has, fill in the rest, then Generate & Download. Refresh the page and it's all gone.</p>
-
-            {quickStatus && (
-              <p className={`text-xs mb-3 font-medium ${quickStatus.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{quickStatus}</p>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">CUSDEC XML</label>
-                <div className="flex items-center gap-2">
-                  <input type="file" accept=".xml" onChange={e => setQuickXmlFile(e.target.files?.[0] || null)} className="text-xs flex-1"/>
-                  <button onClick={parseQuickXml} disabled={!quickXmlFile || quickParsing} className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 flex-shrink-0">
-                    {quickParsing ? <Loader size={12} className="animate-spin"/> : null}Parse
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Supporting PDF (kept on this page only, not uploaded anywhere)</label>
-                <input type="file" accept=".pdf" onChange={e => setQuickPdfFile(e.target.files?.[0] || null)} className="text-xs"/>
-                {quickPdfFile && <p className="text-[11px] text-gray-400 mt-1">{quickPdfFile.name}</p>}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-3">
-              <Field label="Shipper"><input value={quickFields.shipper} onChange={e => setQuickField('shipper', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Consignee"><input value={quickFields.consignee} onChange={e => setQuickField('consignee', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Entry No."><input value={quickFields.entry_no} onChange={e => setQuickField('entry_no', e.target.value)} className="input text-xs"/></Field>
-              <Field label="B/L No."><input value={quickFields.bl_no} onChange={e => setQuickField('bl_no', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Vessel"><input value={quickFields.vessel} onChange={e => setQuickField('vessel', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Voyage / Date"><input value={quickFields.voyage} onChange={e => setQuickField('voyage', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Gross Weight (Kg)"><input value={quickFields.gross_mass} onChange={e => setQuickField('gross_mass', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Goods Description"><input value={quickFields.goods} onChange={e => setQuickField('goods', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Container No."><input value={quickFields.container_no} onChange={e => setQuickField('container_no', e.target.value)} className="input text-xs"/></Field>
-              <Field label="CDN No."><input value={quickFields.cdn_no} onChange={e => setQuickField('cdn_no', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Seal No."><input value={quickFields.seal_no} onChange={e => setQuickField('seal_no', e.target.value)} className="input text-xs"/></Field>
-              <Field label="SLPA No."><input value={quickFields.slpa_no} onChange={e => setQuickField('slpa_no', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Terminal"><input value={quickFields.terminal} onChange={e => setQuickField('terminal', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Loading Port"><input value={quickFields.loading_port} onChange={e => setQuickField('loading_port', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Discharge Port"><input value={quickFields.discharge_port} onChange={e => setQuickField('discharge_port', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Lorry / Trailer"><input value={quickFields.lorry_no} onChange={e => setQuickField('lorry_no', e.target.value)} className="input text-xs"/></Field>
-              <Field label="Driver"><input value={quickFields.driver_name} onChange={e => setQuickField('driver_name', e.target.value)} className="input text-xs"/></Field>
-            </div>
-
-            <button onClick={generateQuickBoatNote} disabled={quickGenerating}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-              style={{ background: '#1B3A5C' }}>
-              {quickGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-              Generate & Download PDF
-            </button>
-          </div>
-        )}
         </>
         )}
 
-        {subTab === 'done-boat-note' && canDoneBoatNote && <DoneBoatNotePanel/>}
         {subTab === 'cusdec-xml' && canCusdecXml && <CusdecXmlPanel/>}
         {subTab === 'cdn-text' && canCdnText && <CdnTextPanel/>}
         {subTab === 'parties-copy' && canPartiesCopy && <PartiesCopyPanel/>}

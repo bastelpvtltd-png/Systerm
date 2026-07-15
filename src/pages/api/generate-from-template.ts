@@ -49,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const dateStamp = new Date().toISOString().slice(0, 10)
 
     if (format === 'pdf') {
-      const pdfBuffer = workbookSheetToPdf(workbook.worksheets[0], template.name)
+      const pdfBuffer = workbookSheetToPdf(workbook.worksheets[0], template.name, template.print_range || null)
       return res.json({ fileName: `${template.name}_${dateStamp}.pdf`, base64: pdfBuffer.toString('base64') })
     }
 

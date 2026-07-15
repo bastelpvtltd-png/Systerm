@@ -50,7 +50,7 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
   const [useReference, setUseReference] = useState(false)
   const [reference, setReference] = useState('')
   const [shipments, setShipments] = useState<{ id: string; reference: string; shipper: string; invoice_number: string }[]>([])
-  const isTemporaryReason = reason === 'CUSDEC Passed'
+  const isCusdecPassed = reason === 'CUSDEC Passed'
 
   useEffect(() => {
     if (!useReference) return
@@ -60,23 +60,13 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
       .catch(() => {})
   }, [useReference])
 
-  // Notify requires Save (you can't let people Pick something that was never
-  // actually persisted) — Mail has no such requirement. Ticking Notify forces
-  // Save on and locks it; unticking Notify frees Save again. Doesn't apply
-  // when reason is CUSDEC Passed — Notify there is already forced on by the
-  // reason itself, independent of whatever Save is set to.
   function setNotifyChecked(checked: boolean) {
     setNotify(checked)
-    if (checked && !isTemporaryReason) setSave(true)
+    if (checked) setSave(true)
   }
-  // Save has its own default (ticked) that carries over from whatever it was
-  // before — but "CUSDEC Passed" specifically means "temporary unless I say
-  // otherwise", so picking that reason resets Save to unticked instead of
-  // leaving it on from the default. The user still has full control to tick
-  // it back on right after; this only changes what it starts as.
   function setReasonChecked(value: string) {
     setReason(value)
-    if (value === 'CUSDEC Passed') setSave(false)
+    if (value === 'CUSDEC Passed') setSave(true)
     else { setUseReference(false); setReference('') }
   }
   const [error, setError] = useState('')
@@ -87,13 +77,12 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
     setBusy(true); setError('')
     try {
       let files: SendResultFile[] = []
-      const effectiveSave = save
-      const effectiveNotify = notify || isTemporaryReason
-      // Reference only matters when a real save is actually happening — it
-      // never overrides the Save tick itself, only decides whether this
-      // save also attaches to a matching Shipment Entry.
+      // CUSDEC Passed always saves — is_saved_to_db must be true so the
+      // document is never treated as temporary and never gets deleted on pick.
+      const effectiveSave = save || isCusdecPassed
+      const effectiveNotify = notify || isCusdecPassed
       let matchedReference: string | undefined
-      if (effectiveSave && isTemporaryReason && reference.trim()) {
+      if (effectiveSave && isCusdecPassed && reference.trim()) {
         try {
           const r = await fetch(`/api/temp-shipments?reference=${encodeURIComponent(reference.trim())}`, { headers: await authHeader() })
           const d = await r.json()
@@ -157,8 +146,8 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
         </div>
         <div className="p-5 space-y-3">
           <p className="text-xs text-gray-500 truncate">{label}</p>
-          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
-            <input type="checkbox" checked={save} disabled={notify && !isTemporaryReason} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
+          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify || isCusdecPassed ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
+            <input type="checkbox" checked={save || isCusdecPassed} disabled={notify || isCusdecPassed} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
             <Save size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Save (to Drive + Database)</span>
           </label>
@@ -167,13 +156,13 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
             <Mail size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Mail</span>
           </label>
-          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${isTemporaryReason ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
-            <input type="checkbox" checked={notify || isTemporaryReason} disabled={isTemporaryReason} onChange={e => setNotifyChecked(e.target.checked)} className="w-4 h-4"/>
+          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${isCusdecPassed ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
+            <input type="checkbox" checked={notify || isCusdecPassed} disabled={isCusdecPassed} onChange={e => setNotifyChecked(e.target.checked)} className="w-4 h-4"/>
             <Bell size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Notify (everyone's Dashboard)</span>
           </label>
-          {notify && !isTemporaryReason && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
-          {isTemporaryReason && <p className="text-[11px] text-gray-400 -mt-1">Notify is always on for "CUSDEC Passed".</p>}
+          {notify && !isCusdecPassed && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
+          {isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Save + Notify always on. Document saved permanently, won't be deleted after picking.</p>}
 
           <div className="pt-1">
             <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>
@@ -183,7 +172,7 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
             {reason === 'Other' && (
               <input value={reasonNote} onChange={e => setReasonNote(e.target.value)} placeholder="Type the reason..." className="input text-sm mt-1.5"/>
             )}
-            {isTemporaryReason && (
+            {isCusdecPassed && (
               <>
                 <button type="button" onClick={() => { setUseReference(x => !x); setReference('') }}
                   className={`w-full flex items-center gap-2 mt-1.5 px-3 py-2 rounded-lg text-xs font-medium border ${
@@ -199,14 +188,7 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
                     ))}
                   </select>
                 )}
-                {save ? (
-                  <p className="text-[11px] text-gray-500 mt-1.5">
-                    Save is ticked — this will be saved to Drive + the database like a normal document, and won't be deleted after Mail/Download.
-                    {reference && ` It'll also be attached to "${reference}".`}
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-amber-600 mt-1.5">"CUSDEC Passed" sends this to Drive + Notify only (tick Save above to also save it to the database) — it gets deleted the moment whoever picks it does Mail/Download.</p>
-                )}
+                {reference && <p className="text-[11px] text-gray-500 mt-1">{`Attached to "${reference}"`}</p>}
               </>
             )}
           </div>
@@ -215,7 +197,7 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
         </div>
         <div className="flex gap-3 p-5 border-t">
           <button onClick={onClose} disabled={busy} className="btn-secondary flex-1 disabled:opacity-50">Cancel</button>
-          <button onClick={handleDone} disabled={busy || (!save && !mail && !notify && !isTemporaryReason)} className="btn-primary flex-1 flex items-center justify-center gap-2">
+          <button onClick={handleDone} disabled={busy || (!save && !mail && !notify && !isCusdecPassed)} className="btn-primary flex-1 flex items-center justify-center gap-2">
             {busy ? <Loader size={14} className="animate-spin"/> : null}Done
           </button>
         </div>

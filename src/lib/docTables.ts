@@ -185,10 +185,11 @@ export async function insertExtractedData(
 // entry is deleted — the CUSDEC row is now the single source of truth.
 // Extracted CUSDEC data always wins: only columns that are still empty on
 // the CUSDEC row get filled in from the shipment, nothing is overwritten.
-function generateReference(): string {
+function generateReference(exporter?: string): string {
+  const code = (exporter || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4) || 'REF'
   const y = new Date().getFullYear()
   const rand = Math.floor(100000 + Math.random() * 900000)
-  return `REF-${y}-${rand}`
+  return `${code}-${y}-${rand}`
 }
 
 export async function matchAndMergeShipment(cusdecRow: any): Promise<{ matched: boolean; shipmentId?: string }> {
@@ -227,10 +228,10 @@ export async function matchAndMergeShipment(cusdecRow: any): Promise<{ matched: 
     }
   }
 
-  // No matching shipment — this CUSDEC stands alone; give it its own
-  // reference if it doesn't already have one (e.g. from a prior merge attempt).
+    // No matching shipment — give this CUSDEC its own reference using the same
+  // shipper-code format as temporary_shipments so references look consistent.
   if (!cusdecRow.reference) {
-    await supabaseAdmin.from('cusdec').update({ reference: generateReference() }).eq('id', cusdecRow.id)
+    await supabaseAdmin.from('cusdec').update({ reference: generateReference(cusdecRow.exporter) }).eq('id', cusdecRow.id)
   }
   return { matched: false }
 }
@@ -241,7 +242,7 @@ export async function mergeShipmentIntoCusdec(cusdecRow: any, shipment: any): Pr
   if (!cusdecRow.packing_number && shipment.packing_number) fill.packing_number = shipment.packing_number
   if (!cusdecRow.consignee && shipment.consignee) fill.consignee = shipment.consignee
   if (!cusdecRow.exporter && shipment.shipper) fill.exporter = shipment.shipper
-  if (!cusdecRow.reference) fill.reference = fill.reference || generateReference()
+  if (!cusdecRow.reference) fill.reference = fill.reference || generateReference(cusdecRow.exporter || shipment.shipper)
 
   if (Object.keys(fill).length) {
     const { error } = await supabaseAdmin.from('cusdec').update(fill).eq('id', cusdecRow.id)
