@@ -120,6 +120,9 @@ function BoatNoteContent() {
   const [emailTo, setEmailTo]   = useState('bathiyapradeep7788@gmail.com')
   const [sending, setSending]   = useState(false)
   const [status, setStatus]     = useState('')
+  const [excelTemplates, setExcelTemplates] = useState<{id: string; name: string}[]>([])
+  const [excelTemplateId, setExcelTemplateId] = useState('')
+  const [generatingExcel, setGeneratingExcel] = useState(false)
 
   // ── Boat Note: Quick Upload (CUSDEC XML + PDF, ephemeral) ─────────────
   // Admin-only per spec. Nothing here ever reaches Supabase/Drive — the
@@ -201,6 +204,10 @@ function BoatNoteContent() {
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   useEffect(() => {
     fetch('/api/list-templates').then(r => r.json()).then(d => setTemplates(d.templates || [])).catch(() => {})
+  }, [])
+  useEffect(() => {
+    authHeader().then(h => fetch('/api/document-templates', { headers: h }))
+      .then(r => r.json()).then(d => setExcelTemplates(d.templates || [])).catch(() => {})
   }, [])
   const templateKeyword = subTab === 'invoice' ? 'inv' : 'pl'
   const matchingTemplates = templates.filter(t => t.name.toLowerCase().includes(templateKeyword))
@@ -535,6 +542,24 @@ function BoatNoteContent() {
       setStatus(`✓ ${d.boat_notes.length} boat note(s) ready`)
     } catch (e: any) { setStatus(`✗ ${e.message}`) }
     finally { setGen(false) }
+  }
+
+  async function generateExcelTemplate() {
+    if (!excelTemplateId || !selCusdec) return
+    setGeneratingExcel(true)
+    try {
+      const r = await fetch('/api/generate-from-template', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ template_id: excelTemplateId, cusdec_id: selCusdec, format: 'xlsx' }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a'); a.href = url; a.download = d.fileName; a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) { setStatus(`✗ Excel: ${e.message}`) }
+    finally { setGeneratingExcel(false) }
   }
 
   // Shared by both the CUSDEC-record flow (below) and the Quick Upload
@@ -1086,6 +1111,23 @@ function BoatNoteContent() {
                     Send Email
                   </button>
                 </div>
+
+                {excelTemplates.length > 0 && (
+                  <div className="border-t border-gray-100 pt-3 space-y-2">
+                    <p className="text-xs font-medium text-gray-600">Excel Template</p>
+                    <select value={excelTemplateId} onChange={e => setExcelTemplateId(e.target.value)}
+                      className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400">
+                      <option value="">— pick template —</option>
+                      {excelTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                    <button onClick={generateExcelTemplate} disabled={generatingExcel || !excelTemplateId || !selCusdec}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+                      style={{ background: '#1B3A5C' }}>
+                      {generatingExcel ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                      Generate Excel
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">

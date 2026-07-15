@@ -556,8 +556,8 @@ function ExcelTemplatesContent() {
                     <div className="flex items-center gap-1.5">
                       <select value={m.source} onChange={e => updateMappingRow(i, { source: e.target.value as MappingEntry['source'], isArray: e.target.value !== 'cdn' ? false : m.isArray, dbColumn: undefined })} className="input text-xs">
                         <option value="manual">Manual Input</option>
-                        <option value="cusdec">CUSDEC column</option>
-                        <option value="cdn">CDN column</option>
+                        <option value="cusdec">CUSDEC field (1 value)</option>
+                        <option value="cdn">CDN per-container (array)</option>
                       </select>
                       {m.source !== 'manual' && (
                         <select value={m.dbColumn || ''} onChange={e => updateMappingRow(i, { dbColumn: e.target.value })} className="input text-xs flex-1">
@@ -577,8 +577,14 @@ function ExcelTemplatesContent() {
                     {m.source === 'cdn' && (
                       <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
                         <input type="checkbox" checked={m.isArray} onChange={e => updateMappingRow(i, { isArray: e.target.checked })}/>
-                        Array data (repeats once per container)
+                        Repeat per container (fill one row per CDN)
                       </label>
+                    )}
+                    {m.source === 'cdn' && m.isArray && !m.dbColumn && (
+                      <p className="text-[10px] text-amber-600 bg-amber-50 rounded px-2 py-1">⚠ Pick a CDN column above — without it nothing fills</p>
+                    )}
+                    {m.source === 'cusdec' && m.isArray && (
+                      <p className="text-[10px] text-red-600 bg-red-50 rounded px-2 py-1">⚠ "CUSDEC field" is a single value. Switch to "CDN per-container" for array fill.</p>
                     )}
                     {m.isArray ? (
                       <div className="space-y-1">
@@ -630,7 +636,7 @@ function ExcelTemplatesContent() {
                   <input
                     value={printRange}
                     onChange={e => setPrintRange(e.target.value)}
-                    placeholder="e.g. A1:F50  — leave blank for whole sheet"
+                    placeholder="e.g. A1:AA80  — format: StartCell:EndCell"
                     className="input text-xs font-mono"
                   />
                 </div>
