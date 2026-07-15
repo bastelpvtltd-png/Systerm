@@ -7,7 +7,7 @@ import {
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
   Database, Loader, MessageSquare, CheckCircle, FileStack, Zap, Clock, Sun, Moon,
-  Send, X, Bell, Anchor as AnchorIcon, Trash2,
+  Send, X, Bell, Anchor as AnchorIcon, Trash2, Pencil,
 } from 'lucide-react'
 import { formatSLDateTime } from '@/lib/slTime'
 
@@ -127,6 +127,11 @@ function FloatingChat() {
   const [lastSeen, setLastSeen] = useState<string>(() =>
     typeof window !== 'undefined' ? localStorage.getItem('chat_last_seen') || '' : '')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
+  const [seenPopup, setSeenPopup] = useState<string | null>(null)
+  const [msgToast, setMsgToast] = useState<{name: string; body: string} | null>(null)
+  const toastMsgId = useRef('')
 
   const ONLINE_THRESHOLD = 3 * 60 * 1000 // 3 minutes
 
@@ -173,27 +178,26 @@ function FloatingChat() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => loadAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reads' }, () => loadAll())
       .subscribe()
-    // Ping active every 60s
     const pingId = setInterval(() => pingActive(), 60000)
-    // Poll users list every 30s to keep online indicators fresh
+    // Fallback poll every 10s in case realtime misses an event
+    const msgPollId = setInterval(() => loadAll(), 10000)
     const pollId = setInterval(() => {
       supabase.from('profiles').select('id, full_name, username, last_active_at').order('full_name')
         .then(({ data }) => { if (data) setUsers(data as ChatUser[]) })
     }, 30000)
-    return () => { supabase.removeChannel(ch); clearInterval(pingId); clearInterval(pollId) }
+    return () => { supabase.removeChannel(ch); clearInterval(pingId); clearInterval(msgPollId); clearInterval(pollId) }
   }, [])
 
   // Ping immediately when userId resolves
   useEffect(() => { if (userId) pingActive() }, [userId])
 
-  // Count unread broadcast + DMs to me
+  // Count unread + toast preview when a new message arrives while chat is closed
   useEffect(() => {
     if (open) {
       const latest = msgs[msgs.length - 1]?.created_at || ''
       localStorage.setItem('chat_last_seen', latest)
       setLastSeen(latest)
       setUnread(0)
-      // Mark all visible as read
       msgs.forEach(m => {
         if (userId && m.sender_id !== userId) {
           const alreadyRead = (m.reads || []).some(r => r.user_id === userId)
@@ -203,7 +207,17 @@ function FloatingChat() {
         }
       })
     } else {
-      setUnread(msgs.filter(m => m.created_at > lastSeen && m.sender_id !== userId).length)
+      const unreadMsgs = msgs.filter(m => m.created_at > lastSeen && m.sender_id !== userId)
+      setUnread(unreadMsgs.length)
+      if (unreadMsgs.length > 0) {
+        const latest = unreadMsgs[unreadMsgs.length - 1]
+        if (latest.id !== toastMsgId.current) {
+          toastMsgId.current = latest.id
+          const sp = Array.isArray(latest.profiles) ? latest.profiles[0] : latest.profiles
+          setMsgToast({ name: sp?.full_name || sp?.username || 'Someone', body: latest.body.slice(0, 50) })
+          setTimeout(() => setMsgToast(null), 4000)
+        }
+      }
     }
   }, [msgs, open])
 
@@ -224,7 +238,24 @@ function FloatingChat() {
   }
 
   async function deleteMsg(id: string) {
-    await supabase.from('messages').delete().eq('id', id)
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+    await fetch(`/api/messages?id=${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session.access_token}` } })
+    loadAll()
+  }
+
+  async function saveEdit() {
+    if (!editId || !editText.trim()) return
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+    await fetch('/api/messages', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ id: editId, body: editText.trim() }),
+    })
+    setEditId(null)
+    setEditText('')
+    loadAll()
   }
 
   function fmt(iso: string) {
@@ -263,6 +294,18 @@ function FloatingChat() {
             </>
         }
       </button>
+
+      {/* New message toast — shows 4s when chat is closed */}
+      {msgToast && !open && (
+        <div
+          className="fixed bottom-20 right-20 z-[52] rounded-xl shadow-2xl px-3 py-2.5 max-w-[200px] cursor-pointer border border-gray-700"
+          style={{ background: '#1a1a2e' }}
+          onClick={() => { setOpen(true); setMsgToast(null) }}
+        >
+          <p className="text-[10px] font-semibold" style={{ color: '#22A87A' }}>{msgToast.name}</p>
+          <p className="text-xs text-gray-300 mt-0.5 leading-snug">{msgToast.body}</p>
+        </div>
+      )}
 
       {/* Chat panel */}
       {open && (
@@ -327,51 +370,91 @@ function FloatingChat() {
               const isMe = m.sender_id === userId
               const senderProfile = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles
               const name = senderProfile?.full_name || senderProfile?.username || 'User'
-              const readBy = (m.reads || []).filter(r => r.user_id !== m.sender_id)
-              const seenNames = readBy.map(r => {
+              // Exclude sender and current viewer from "seen by" list
+              const seenByReads = (m.reads || []).filter(r => r.user_id !== m.sender_id && r.user_id !== userId)
+              const seenByOthers = (m.reads || []).some(r => r.user_id !== userId)
+              const seenNames = seenByReads.map(r => {
                 const u = users.find(x => x.id === r.user_id)
                 return u ? (u.full_name || u.username).split(' ')[0] : null
-              }).filter(Boolean)
+              }).filter(Boolean) as string[]
+              const canDelete = isAdmin || (isMe && !seenByOthers)
+              const canEdit = isAdmin || (isMe && !seenByOthers)
+              const isEditing = editId === m.id
               return (
                 <div key={m.id} className={`flex flex-col group ${isMe ? 'items-end' : 'items-start'}`}>
                   {!isMe && (
                     <div className="flex items-center gap-1.5 mb-0.5 px-1">
                       <span className="text-[10px] text-gray-400">{name}</span>
-                      {isAdminView && !isMe && m.sender_id && (
+                      {isAdminView && m.sender_id && (
                         <button onClick={() => setRecipientId(m.sender_id!)}
                           className="text-[9px] text-blue-400 hover:text-blue-600 underline">Reply →</button>
                       )}
                     </div>
                   )}
                   <div className="flex items-end gap-1">
-                    {isMe && isAdmin && (
-                      <button onClick={() => deleteMsg(m.id)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-red-300 hover:text-red-500 mb-1">
-                        <Trash2 size={11}/>
-                      </button>
+                    {isMe && (
+                      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5">
+                        {canEdit && (
+                          <button onClick={() => { setEditId(m.id); setEditText(m.body) }}
+                            className="text-blue-300 hover:text-blue-500 mb-1">
+                            <Pencil size={10}/>
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button onClick={() => deleteMsg(m.id)}
+                            className="text-red-300 hover:text-red-500 mb-1">
+                            <Trash2 size={10}/>
+                          </button>
+                        )}
+                      </div>
                     )}
-                    <div className={`max-w-[75%] px-3 py-2 rounded-2xl text-sm break-words ${
-                      isMe ? 'text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
-                    }`}
-                    style={isMe ? { background: '#22A87A' } : {}}>
-                      {isAdminView && !isMe && m.recipient_id && m.recipient_id !== userId && (
-                        <span className="block text-[9px] text-gray-400 mb-0.5">
-                          → {users.find(u => u.id === m.recipient_id)?.full_name?.split(' ')[0] || 'DM'}
-                        </span>
+                    <div className="relative max-w-[75%]">
+                      <div
+                        onClick={() => seenNames.length > 0 && setSeenPopup(p => p === m.id ? null : m.id)}
+                        className={`px-3 py-2 rounded-2xl text-sm break-words ${seenNames.length > 0 ? 'cursor-pointer' : ''} ${
+                          isMe ? 'text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
+                        }`}
+                        style={isMe ? { background: '#22A87A' } : {}}
+                      >
+                        {isAdminView && !isMe && m.recipient_id && m.recipient_id !== userId && (
+                          <span className="block text-[9px] text-gray-400 mb-0.5">
+                            → {users.find(u => u.id === m.recipient_id)?.full_name?.split(' ')[0] || 'DM'}
+                          </span>
+                        )}
+                        {isEditing ? (
+                          <div onClick={e => e.stopPropagation()} className="flex gap-1 items-center">
+                            <input
+                              value={editText}
+                              onChange={e => setEditText(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') { setEditId(null); setEditText('') } }}
+                              className="flex-1 text-gray-800 bg-white/90 rounded px-1 py-0.5 text-xs outline-none min-w-0"
+                              autoFocus
+                            />
+                            <button onClick={saveEdit} className="text-green-400 text-xs flex-shrink-0">✓</button>
+                            <button onClick={() => { setEditId(null); setEditText('') }} className="text-gray-300 text-xs flex-shrink-0">✗</button>
+                          </div>
+                        ) : m.body}
+                      </div>
+                      {seenPopup === m.id && seenNames.length > 0 && (
+                        <div className={`absolute ${isMe ? 'right-0' : 'left-0'} -top-7 bg-gray-800/90 text-white text-[9px] rounded-lg px-2 py-1 whitespace-nowrap z-10 shadow-lg`}>
+                          Seen: {seenNames.join(', ')}
+                        </div>
                       )}
-                      {m.body}
                     </div>
-                    {!isMe && isAdmin && (
+                    {!isMe && canDelete && (
                       <button onClick={() => deleteMsg(m.id)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity text-red-300 hover:text-red-500 mb-1">
-                        <Trash2 size={11}/>
+                        <Trash2 size={10}/>
                       </button>
                     )}
                   </div>
                   <div className="flex items-center gap-1 px-1 mt-0.5">
                     <span className="text-[9px] text-gray-300">{fmt(m.created_at)}</span>
-                    {isMe && seenNames.length > 0 && (
-                      <span className="text-[9px] text-green-400">· Seen {seenNames.join(', ')}</span>
+                    {seenNames.length > 0 && (
+                      <span onClick={() => setSeenPopup(p => p === m.id ? null : m.id)}
+                        className="text-[9px] text-green-400 cursor-pointer">
+                        · Seen {seenNames.join(', ')}
+                      </span>
                     )}
                   </div>
                 </div>

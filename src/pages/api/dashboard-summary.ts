@@ -130,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     res.json({
       shipmentsPending: { count: (shipments || []).length, items: shipments || [] },
-      cdnPending: { count: cdnPending.length, items: cdnPending },
+      cdnPending: { count: cdnPending.reduce((s, c) => s + (c.cap - c.cdnCount), 0), items: cdnPending },
       boatNotePending: { count: boatNotePending.length, items: boatNotePending },
       releasePending: { count: releasePending.length, items: releasePending },
       pendingCusdecPassed: { count: (reasonDocs || []).length, items: reasonDocs || [] },
