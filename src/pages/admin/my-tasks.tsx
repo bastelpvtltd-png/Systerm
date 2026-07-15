@@ -42,7 +42,7 @@ interface OtherWorkItem {
 }
 type CostFilter = 'cdn' | 'cap' | null
 
-function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
+function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId: string | null; isAdmin: boolean; showBalance: boolean; showPayments: boolean }) {
   // ── data ──────────────────────────────────────────────────────────────────
   const [payments,    setPayments]    = useState<SalaryPayment[]>([])
   const [users,       setUsers]       = useState<Profile[]>([])
@@ -235,7 +235,7 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   return (
     <>
       {/* ═══ Panel 1 — Balance ═══ */}
-      <div className="card mb-5">
+      {showBalance && <div className="card mb-5">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Balance</h2>
 
         {/* Cost | Received | Balance row */}
@@ -468,8 +468,10 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
         )}
       </div>
 
+      }
+
       {/* ═══ Panel 2 — Payments (unchanged below) ═══ */}
-      <div className="card mb-5">
+      {showPayments && <div className="card mb-5">
         <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2 mb-3"><Send size={15}/>Payments</h2>
 
         {/* Record a payment */}
@@ -532,7 +534,7 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
             </div>
           </div>
         )}
-      </div>
+      </div>}
     </>
   )
 }
@@ -1113,11 +1115,12 @@ function MyTasksContent() {
       )}
 
 
-      <SalaryPayments userId={userId} isAdmin={isAdmin}/>
+      <SalaryPayments userId={userId} isAdmin={isAdmin}
+        showBalance={isAdmin || has('section:my-tasks.balance')}
+        showPayments={isAdmin || has('section:my-tasks.payments')}
+      />
 
-      {has('section:my-tasks.other-work') && (
-        <OtherWorkPanel userId={userId} isAdmin={isAdmin}/>
-      )}
+      <OtherWorkPanel userId={userId} isAdmin={isAdmin}/>
 
       <div className="flex gap-2 mb-4">
         {(['pending','done'] as const).map(t => (

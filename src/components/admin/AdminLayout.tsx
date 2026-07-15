@@ -506,6 +506,8 @@ export const SECTION_ITEMS = [
   { key: 'section:pick-history.delete',        tabHref: '/admin', label: 'Pick History: delete entries' },
   { key: 'section:shipment-entry.form',        tabHref: '/admin/shipment-entry', label: 'Shipment entry form' },
   { key: 'section:templates.manage',           tabHref: '/admin/templates', label: 'Template upload & fill' },
+  { key: 'section:my-tasks.balance',           tabHref: '/admin/my-tasks', label: 'Balance panel' },
+  { key: 'section:my-tasks.payments',          tabHref: '/admin/my-tasks', label: 'Payments panel' },
   { key: 'section:my-tasks.daily-cost',        tabHref: '/admin/my-tasks', label: 'Daily Cost entry' },
   { key: 'section:my-tasks.balance-update',    tabHref: '/admin/my-tasks', label: 'Balance deposit/top-up' },
   { key: 'section:documents-upload.upload',    tabHref: '/admin/documents-upload', label: 'Upload PDFs card' },
