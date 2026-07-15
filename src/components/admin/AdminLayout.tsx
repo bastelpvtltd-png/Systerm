@@ -145,7 +145,7 @@ function FloatingChat() {
       supabase.auth.getUser(),
       supabase.from('profiles').select('id, full_name, username, last_active_at').order('full_name'),
       supabase.from('messages')
-        .select('id, sender_id, body, created_at, recipient_id, profiles(full_name, username), reads:message_reads(user_id)')
+        .select('id, sender_id, body, created_at, recipient_id, profiles:profiles!messages_sender_id_fkey(full_name, username), reads:message_reads(user_id)')
         .order('created_at', { ascending: true })
         .limit(120),
     ])
