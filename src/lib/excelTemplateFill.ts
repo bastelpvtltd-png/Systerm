@@ -18,7 +18,7 @@ export interface TemplateMappingEntry {
 function parseRange(range: string): { col: string; startRow: number; endRow: number } {
   const m = range.replace(/\s/g, '').match(/^([A-Za-z]+)(\d+):[A-Za-z]+(\d+)$/)
   if (!m) throw new Error(`Invalid cell range "${range}" — expected something like A10:A20`)
-  return { col: m[1], startRow: Number(m[2]), endRow: Number(m[3]) }
+  return { col: m[1].toUpperCase(), startRow: Number(m[2]), endRow: Number(m[3]) }
 }
 
 // Returns the workbook itself (already filled) rather than serialized bytes —
@@ -61,7 +61,7 @@ export async function fillExcelTemplateWorkbook(
     if (field.source === 'manual') value = manualValues[field.key] ?? ''
     else if (field.source === 'cusdec') value = cusdecRow ? (cusdecRow[field.dbColumn || ''] ?? '') : ''
     else if (field.source === 'cdn') value = cdnRows[0] ? (cdnRows[0][field.dbColumn || ''] ?? '') : ''
-    sheet.getCell(field.cellRef).value = value
+    sheet.getCell(field.cellRef.toUpperCase()).value = value
   }
 
   return workbook
