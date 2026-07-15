@@ -14,7 +14,7 @@ interface PendingGroup<T> { count: number; items: T[] }
 interface VesselContainer { containerNo: string; vessel: string; voyage: string; trigger: { openingTime: string; closingTime: string; etb: string } | null }
 interface Summary {
   pendingCusdecPassed: PendingGroup<{ id: string; file_name: string; reason: string; reason_note: string | null; created_at: string }>
-  shipmentsPending: PendingGroup<{ id: string; reference: string; shipper: string; invoice_number: string; packing_number: string; invoice_drive_url: string | null; packing_drive_url: string | null; license_drive_url: string | null; created_at: string }>
+  shipmentsPending: PendingGroup<{ id: string; reference: string | null; shipper: string; invoice_number: string; packing_number: string | null; new_invoice: string | null; new_packing: string | null; cap: string | null; invoice_drive_url: string | null; packing_drive_url: string | null; license_drive_url: string | null; created_at: string }>
   cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number; containers: VesselContainer[] }>
   boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number; containers: VesselContainer[] }>
   releasePending: PendingGroup<{ cusdecId: string; number: string; exporter: string }>
@@ -168,7 +168,14 @@ function DashboardContent() {
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="font-medium text-gray-800">{s.shipper} · Inv: {s.invoice_number}</p>
-                          <p className="text-gray-400">Ref: {s.reference || '—'} · Packing: {s.packing_number || '—'}</p>
+                          <p className="text-gray-400">Ref: <b className="text-gray-600">{s.reference || '—'}</b> · Packing: {s.packing_number || '—'}</p>
+                          {(s.new_invoice || s.new_packing || s.cap) && (
+                            <p className="text-[11px] text-blue-600 mt-0.5">
+                              {s.new_invoice && `New Inv: ${s.new_invoice}`}{s.new_invoice && s.new_packing ? ' · ' : ''}
+                              {s.new_packing && `New Packing: ${s.new_packing}`}{(s.new_invoice || s.new_packing) && s.cap ? ' · ' : ''}
+                              {s.cap && `CAP: ${s.cap}`}
+                            </p>
+                          )}
                         </div>
                         <a href={`/admin/drive-files?invoiceNumber=${encodeURIComponent(s.invoice_number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                       </div>
@@ -201,7 +208,7 @@ function DashboardContent() {
                         <p className="font-medium text-gray-800">E {c.number}</p>
                         <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                       </div>
-                      <span className="font-medium text-purple-700">{c.cdnCount}/{c.cap} CDN</span>
+                      <span className="font-medium text-purple-700">{c.cdnCount}/{c.cap} CDN <span className="text-red-500">({c.cap - c.cdnCount} remaining)</span></span>
                       <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                     </div>
                     <VesselContainerList containers={c.containers}/>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { supabase, authHeader } from '@/lib/supabase'
-import { Plus, Trash2, Ship, AlertTriangle, Copy, FileText, X } from 'lucide-react'
+import { Plus, Trash2, Ship, AlertTriangle, Copy, FileText, X, Edit2, Save } from 'lucide-react'
 
 interface TempShipment {
   id: string
@@ -73,7 +73,11 @@ function ShipmentEntryContent() {
   const [error, setError] = useState('')
   const [duplicateRow, setDuplicateRow] = useState<TempShipment | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [profileMap, setProfileMap] = useState<Record<string, string>>({})
+  const [editRow, setEditRow] = useState<TempShipment | null>(null)
+  const [editForm, setEditForm] = useState(emptyForm)
+  const [editSaving, setEditSaving] = useState(false)
 
   // Drive file state for the current form
   const [invoiceFile, setInvoiceFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
@@ -96,6 +100,7 @@ function ShipmentEntryContent() {
     fetch('/api/temp-shipment-options').then(r => r.json()).then(d => setOptions({ shippers: d.shippers || [], consignees: d.consignees || [] })).catch(() => {})
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return
+      setCurrentUserId(user.id)
       supabase.from('profiles').select('id, full_name, username, is_admin').then(({ data }) => {
         if (!data) return
         const me = data.find(p => p.id === user.id)
@@ -195,8 +200,36 @@ function ShipmentEntryContent() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Delete failed')
       setRows(prev => prev.filter(r => r.id !== id))
+      if (duplicateRow?.id === id) setDuplicateRow(null)
     } catch (e: any) {
       setError(e.message)
+    }
+  }
+
+  function openEdit(r: TempShipment) {
+    setEditRow(r)
+    setEditForm({
+      shipper: r.shipper, invoice_number: r.invoice_number, packing_number: r.packing_number || '',
+      consignee: r.consignee || '', cap: r.cap || '', new_invoice: r.new_invoice || '', new_packing: r.new_packing || '',
+    })
+  }
+
+  async function saveEdit() {
+    if (!editRow) return
+    setEditSaving(true)
+    try {
+      const res = await fetch('/api/temp-shipments', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ id: editRow.id, ...editForm }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Save failed')
+      setRows(prev => prev.map(r => r.id === editRow.id ? { ...r, ...editForm } : r))
+      setEditRow(null)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setEditSaving(false)
     }
   }
 
@@ -326,7 +359,11 @@ function ShipmentEntryContent() {
                           <button onClick={() => handleAddSame(r)} title="Add Same (copy this row)"
                             className="p-1.5 rounded hover:bg-blue-50 text-blue-500"><Copy size={13}/></button>
                         )}
-                        {isAdmin && (
+                        {(isAdmin || r.created_by === currentUserId) && (
+                          <button onClick={() => openEdit(r)} title="Edit"
+                            className="p-1.5 rounded hover:bg-green-50 text-green-600"><Edit2 size={13}/></button>
+                        )}
+                        {(isAdmin || r.created_by === currentUserId) && (
                           <button onClick={() => handleDelete(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-500"><Trash2 size={13}/></button>
                         )}
                       </div>
@@ -344,6 +381,37 @@ function ShipmentEntryContent() {
           )}
         </div>
       </div>
+
+      {/* Edit modal */}
+      {editRow && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b flex-shrink-0">
+              <h2 className="font-bold text-gray-900">Edit Shipment Entry</h2>
+              <button onClick={() => setEditRow(null)}><X size={18}/></button>
+            </div>
+            <div className="p-5 space-y-3 overflow-y-auto">
+              {[
+                ['Shipper', 'shipper'], ['Invoice Number', 'invoice_number'],
+                ['Packing Number', 'packing_number'], ['Consignee', 'consignee'],
+                ['New Invoice No.', 'new_invoice'], ['New Packing No.', 'new_packing'], ['CAP', 'cap'],
+              ].map(([label, key]) => (
+                <div key={key}>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+                  <input value={(editForm as any)[key]} onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3 p-5 border-t flex-shrink-0">
+              <button onClick={() => setEditRow(null)} className="btn-secondary flex-1">Cancel</button>
+              <button onClick={saveEdit} disabled={editSaving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+                <Save size={14}/>{editSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

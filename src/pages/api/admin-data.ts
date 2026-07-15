@@ -10,7 +10,9 @@ const supabaseAdmin = createClient(
 )
 
 // Whitelisted so this endpoint can't be pointed at arbitrary/system tables.
-const ALLOWED_TABLES = ['cusdec', 'cdn', 'barcode', 'boat_notes', 'uploaded_documents', 'pdf_templates', 'messages', 'profiles']
+const ALLOWED_TABLES = ['cusdec', 'cdn', 'barcode', 'boat_notes', 'uploaded_documents', 'pdf_templates', 'messages', 'profiles', 'temporary_shipments']
+// Tables that have an updated_at column (to avoid writing it to tables that don't)
+const HAS_UPDATED_AT = new Set(['cusdec', 'cdn', 'barcode', 'boat_notes', 'uploaded_documents', 'pdf_templates', 'messages', 'profiles'])
 // Tables whose rows reference an uploaded PDF — deleting the row here also
 // deletes that Drive file, same as every other delete path in the app.
 const DRIVE_URL_COLUMN: Record<string, string> = {
@@ -42,7 +44,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'PATCH') {
       const { id, updates } = req.body
       if (!id || !updates) return res.status(400).json({ error: 'id and updates required' })
-      const { error } = await supabaseAdmin.from(table).update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id)
+      const patch = HAS_UPDATED_AT.has(table) ? { ...updates, updated_at: new Date().toISOString() } : updates
+      const { error } = await supabaseAdmin.from(table).update(patch).eq('id', id)
       if (error) return res.status(400).json({ error: error.message })
       return res.json({ ok: true })
     }

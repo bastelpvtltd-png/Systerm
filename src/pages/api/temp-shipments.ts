@@ -70,6 +70,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json({ shipment: data })
     }
 
+    if (req.method === 'PATCH') {
+      const id = String(req.body.id || '')
+      if (!id) return res.status(400).json({ error: 'id required' })
+      // Only allow editing own entry or if admin
+      const { data: row } = await supabaseAdmin.from('temporary_shipments').select('created_by').eq('id', id).single()
+      const { data: prof } = await supabaseAdmin.from('profiles').select('is_admin').eq('id', authed.userId).single()
+      if (!prof?.is_admin && row?.created_by !== authed.userId) {
+        return res.status(403).json({ error: 'You can only edit your own entries' })
+      }
+      const { id: _id, created_at: _ca, created_by: _cb, reference: _ref, ...updates } = req.body
+      const { data, error } = await supabaseAdmin.from('temporary_shipments').update(updates).eq('id', id).select().single()
+      if (error) return res.status(400).json({ error: error.message })
+      return res.json({ shipment: data })
+    }
+
     if (req.method === 'DELETE') {
       const id = String(req.query.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })

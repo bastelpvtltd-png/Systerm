@@ -28,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
 
     const [{ data: shipments }, { data: cusdecs }, { data: cdns }, { data: reasonDocsRaw }, { data: vesselTriggers }] = await Promise.all([
-      supabaseAdmin.from('temporary_shipments').select('id, reference, shipper, invoice_number, packing_number, invoice_drive_url, packing_drive_url, license_drive_url, created_at').order('created_at', { ascending: false }),
+      supabaseAdmin.from('temporary_shipments').select('id, reference, shipper, invoice_number, packing_number, new_invoice, new_packing, cap, invoice_drive_url, packing_drive_url, license_drive_url, created_at').order('created_at', { ascending: false }),
       supabaseAdmin.from('cusdec').select('id, code, number, exporter, cap, export_release_passed'),
       supabaseAdmin.from('cdn').select('id, code, cusdec_number, container_no, vessel, voyage, boat_note_passed, export_release_passed'),
       // Reason-tagged Quick Upload queue — a document tagged reason:'CUSDEC

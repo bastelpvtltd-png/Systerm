@@ -1,11 +1,16 @@
 import type ExcelJS from 'exceljs'
 import { jsPDF } from 'jspdf'
 
-// Parse "A1:F50" into { minCol, minRow, maxCol, maxRow } (1-based).
-// Returns null if the range string is empty/invalid — caller treats null as "full sheet".
+// Parse range into { minCol, minRow, maxCol, maxRow } (1-based).
+// Accepts: standard "A1:F50"  OR  compact "27Rx18C" (27 rows × 18 cols from A1).
 function parseRange(range: string | null | undefined): { minCol: number; minRow: number; maxCol: number; maxRow: number } | null {
   if (!range) return null
-  const m = range.trim().toUpperCase().match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/)
+  const s = range.trim().toUpperCase()
+  // Compact form: NRxMC  e.g. "27Rx18C"
+  const compact = s.match(/^(\d+)R[Xx](\d+)C$/)
+  if (compact) return { minCol: 1, minRow: 1, maxRow: parseInt(compact[1]), maxCol: parseInt(compact[2]) }
+  // Standard form: A1:F50
+  const m = s.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/)
   if (!m) return null
   function colNum(letters: string): number {
     let n = 0
@@ -46,17 +51,24 @@ export function workbookSheetToPdf(sheet: ExcelJS.Worksheet, fileTitle: string, 
   const colX: number[] = [margin]
   for (const w of colWidthsMm) colX.push(colX[colX.length - 1] + w)
 
-  doc.setFont('helvetica', 'normal').setFontSize(7)
+  // Pass 1 — measure total row height so we can scale to fit 1 page.
+  let totalH = 0
+  sheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    if (rowNumber < minRow) return
+    if (maxRow !== undefined && rowNumber > maxRow) return
+    totalH += Math.max((row.height || 15) * 0.3528, 4)
+  })
+  const usableHeight = pageHeight - margin * 2
+  const scale = totalH > usableHeight ? usableHeight / totalH : 1
+  const baseFontSize = Math.max(4, Math.round(7 * scale))
+
+  doc.setFont('helvetica', 'normal').setFontSize(baseFontSize)
   let y = margin
 
   sheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
     if (rowNumber < minRow) return
     if (maxRow !== undefined && rowNumber > maxRow) return
-    const rowHeightMm = ((row.height || 15) * 0.3528) // points -> mm
-    if (y + rowHeightMm > pageHeight - margin) {
-      doc.addPage()
-      y = margin
-    }
+    const rowHeightMm = Math.max((row.height || 15) * 0.3528, 4) * scale
     for (let c = minCol; c <= maxCol; c++) {
       const cell = row.getCell(c)
       const raw = cell.value
@@ -70,10 +82,10 @@ export function workbookSheetToPdf(sheet: ExcelJS.Worksheet, fileTitle: string, 
       const maxW = (colX[colIdx + 1] - colX[colIdx]) - 2
       if (cell.font?.bold) doc.setFont('helvetica', 'bold')
       const lines = doc.splitTextToSize(text, Math.max(maxW, 5))
-      doc.text(lines, x, y + 3)
+      doc.text(lines, x, y + baseFontSize * 0.35)
       if (cell.font?.bold) doc.setFont('helvetica', 'normal')
     }
-    y += Math.max(rowHeightMm, 4)
+    y += rowHeightMm
   })
 
   return Buffer.from(doc.output('arraybuffer'))

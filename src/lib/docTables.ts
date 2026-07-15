@@ -228,11 +228,8 @@ export async function matchAndMergeShipment(cusdecRow: any): Promise<{ matched: 
     }
   }
 
-    // No matching shipment — give this CUSDEC its own reference using the same
-  // shipper-code format as temporary_shipments so references look consistent.
-  if (!cusdecRow.reference) {
-    await supabaseAdmin.from('cusdec').update({ reference: generateReference(cusdecRow.exporter) }).eq('id', cusdecRow.id)
-  }
+  // No matching shipment — leave reference blank; it only gets set when a
+  // shipment entry existed before the CUSDEC upload (see mergeShipmentIntoCusdec).
   return { matched: false }
 }
 

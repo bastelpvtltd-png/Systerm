@@ -212,13 +212,14 @@ function FloatingChat() {
   }, [msgs, open])
 
   async function send() {
-    if (!body.trim()) return
+    if (!body.trim() || !userId) return
     setSending(true)
-    await supabase.from('messages').insert({
+    const { error } = await supabase.from('messages').insert({
+      sender_id: userId,
       body: body.trim(),
       recipient_id: recipientId || null,
     })
-    setBody('')
+    if (!error) setBody('')
     setSending(false)
   }
 
