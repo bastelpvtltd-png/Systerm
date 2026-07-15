@@ -15,6 +15,7 @@ const TABLES = [
   { key: 'pdf_templates', label: 'PDF Templates' },
   { key: 'messages', label: 'Messages' },
   { key: 'profiles', label: 'Users (Profiles)' },
+  { key: 'temporary_shipments', label: 'Shipment Entry' },
 ]
 
 type Row = Record<string, any>

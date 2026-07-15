@@ -22,7 +22,7 @@ interface Profile {
 const emptyForm = {
   username: '', full_name: '', position: '', designation: '',
   personal_email: '', official_email: '', whatsapp_number: '', contact_number: '',
-  password: '', is_admin: false, allowed_tabs: [] as string[], assigned_shippers: '',
+  password: '', is_admin: false, allowed_tabs: [] as string[], assigned_shippers: [] as string[],
 }
 
 export default function UsersPage() {
@@ -32,12 +32,11 @@ export default function UsersPage() {
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [shipperList, setShipperList] = useState<string[]>([])
 
   useEffect(() => {
     fetchUsers()
-    // Live — the user list stays current without a refresh; an open
-    // add/edit modal (`form` below) is separate state, only synced when
-    // editing starts, so this doesn't disturb it.
+    fetchShippers()
     const t = setInterval(fetchUsers, 20000)
     return () => clearInterval(t)
   }, [])
@@ -47,10 +46,30 @@ export default function UsersPage() {
     setUsers((data as any) ?? [])
   }
 
+  async function fetchShippers() {
+    const { data } = await supabase.from('cusdec').select('exporter').not('exporter', 'is', null)
+    const names: string[] = Array.from(new Set((data ?? []).map((r: any) => r.exporter).filter(Boolean))).sort() as string[]
+    setShipperList(names)
+  }
+
   function toggleTab(href: string) {
+    const sectionKeys = SECTION_ITEMS.filter(s => s.tabHref === href).map(s => s.key)
+    setForm(f => {
+      const isAdding = !f.allowed_tabs.includes(href)
+      if (isAdding) {
+        return { ...f, allowed_tabs: [...f.allowed_tabs, href, ...sectionKeys.filter(k => !f.allowed_tabs.includes(k))] }
+      } else {
+        return { ...f, allowed_tabs: f.allowed_tabs.filter(h => h !== href && !sectionKeys.includes(h)) }
+      }
+    })
+  }
+
+  function toggleShipper(name: string) {
     setForm(f => ({
       ...f,
-      allowed_tabs: f.allowed_tabs.includes(href) ? f.allowed_tabs.filter(h => h !== href) : [...f.allowed_tabs, href],
+      assigned_shippers: f.assigned_shippers.includes(name)
+        ? f.assigned_shippers.filter(s => s !== name)
+        : [...f.assigned_shippers, name],
     }))
   }
 
@@ -62,7 +81,7 @@ export default function UsersPage() {
       personal_email: form.personal_email, official_email: form.official_email,
       whatsapp_number: form.whatsapp_number, contact_number: form.contact_number,
       is_admin: form.is_admin, allowed_tabs: form.allowed_tabs,
-      assigned_shippers: form.assigned_shippers.split(',').map(s => s.trim()).filter(Boolean),
+      assigned_shippers: form.assigned_shippers,
     }
     try {
       if (editId) {
@@ -126,7 +145,7 @@ export default function UsersPage() {
                         personal_email: u.personal_email || '', official_email: u.official_email || '',
                         whatsapp_number: u.whatsapp_number || '', contact_number: u.contact_number || '',
                         password: '', is_admin: !!u.is_admin, allowed_tabs: u.allowed_tabs || [],
-                        assigned_shippers: (u.assigned_shippers || []).join(', '),
+                        assigned_shippers: u.assigned_shippers || [],
                       })
                       setEditId(u.id); setSaveError(''); setModal(true)
                     }}
@@ -168,11 +187,20 @@ export default function UsersPage() {
 
               {!form.is_admin && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Assigned Shippers (Shipment Overview)</label>
-                  <input value={form.assigned_shippers} onChange={e => setForm({...form, assigned_shippers: e.target.value})}
-                    placeholder="Comma-separated shipper names — leave empty to see none"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-                  <p className="text-[11px] text-gray-400 mt-1">Only these shippers' data will show in Shipment Overview for this user. Admins always see all.</p>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Assigned Shippers — {form.assigned_shippers.length === 0 ? 'none selected (sees none)' : `${form.assigned_shippers.length} selected`}
+                  </label>
+                  <div className="space-y-1 max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                    {shipperList.length === 0
+                      ? <p className="text-xs text-gray-400 px-1 py-1">No exporters found in CUSDEC records yet.</p>
+                      : shipperList.map(name => (
+                        <label key={name} className="flex items-center gap-2 text-sm py-1 px-1 rounded hover:bg-gray-50 cursor-pointer">
+                          <input type="checkbox" checked={form.assigned_shippers.includes(name)} onChange={() => toggleShipper(name)}/>
+                          <span className="truncate">{name}</span>
+                        </label>
+                      ))}
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-1">Only these shippers' data shows in Shipment Overview. Admins always see all.</p>
                 </div>
               )}
 

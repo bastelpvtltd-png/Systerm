@@ -14,7 +14,7 @@ interface PendingGroup<T> { count: number; items: T[] }
 interface VesselContainer { containerNo: string; vessel: string; voyage: string; trigger: { openingTime: string; closingTime: string; etb: string } | null }
 interface Summary {
   pendingCusdecPassed: PendingGroup<{ id: string; file_name: string; reason: string; reason_note: string | null; created_at: string }>
-  shipmentsPending: PendingGroup<{ id: string; reference: string; shipper: string; invoice_number: string; packing_number: string; created_at: string }>
+  shipmentsPending: PendingGroup<{ id: string; reference: string; shipper: string; invoice_number: string; packing_number: string; invoice_drive_url: string | null; packing_drive_url: string | null; license_drive_url: string | null; created_at: string }>
   cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number; containers: VesselContainer[] }>
   boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number; containers: VesselContainer[] }>
   releasePending: PendingGroup<{ cusdecId: string; number: string; exporter: string }>
@@ -157,15 +157,31 @@ function DashboardContent() {
               <p className="text-xs text-gray-400 py-4 text-center">None — every open Shipment has a matching CUSDEC</p>
             ) : (
               <div className="space-y-1.5 max-h-96 overflow-y-auto">
-                {summary.shipmentsPending.items.map(s => (
-                  <div key={s.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
-                    <div>
-                      <p className="font-medium text-gray-800">{s.shipper} · Inv: {s.invoice_number}</p>
-                      <p className="text-gray-400">Ref: {s.reference || '—'} · Packing: {s.packing_number || '—'}</p>
+                {summary.shipmentsPending.items.map(s => {
+                  const docs = [
+                    { label: 'Invoice', url: s.invoice_drive_url },
+                    { label: 'Packing', url: s.packing_drive_url },
+                    { label: 'License', url: s.license_drive_url },
+                  ].filter(d => d.url)
+                  return (
+                    <div key={s.id} className="text-xs border border-gray-100 rounded-lg p-2.5">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-800">{s.shipper} · Inv: {s.invoice_number}</p>
+                          <p className="text-gray-400">Ref: {s.reference || '—'} · Packing: {s.packing_number || '—'}</p>
+                        </div>
+                        <a href={`/admin/drive-files?invoiceNumber=${encodeURIComponent(s.invoice_number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                      </div>
+                      {docs.length > 0 && (
+                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                          {docs.map(d => (
+                            <a key={d.label} href={d.url!} target="_blank" rel="noreferrer" className="text-blue-500 underline text-[11px]">{d.label} PDF</a>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <a href={`/admin/drive-files?invoiceNumber=${encodeURIComponent(s.invoice_number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>

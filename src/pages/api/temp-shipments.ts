@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '@/lib/serverAuth'
+import { getDriveClient } from '@/lib/driveFolders'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -41,7 +42,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
-      const { shipper, invoice_number, packing_number, consignee } = req.body
+      const { shipper, invoice_number, packing_number, consignee,
+              invoice_drive_url, packing_drive_url, license_drive_url,
+              cap, new_invoice, new_packing } = req.body
       if (!shipper || !invoice_number) {
         return res.status(400).json({ error: 'Shipper and Shipment Invoice Number are required' })
       }
@@ -53,6 +56,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           invoice_number,
           packing_number: packing_number || null,
           consignee: consignee || null,
+          invoice_drive_url: invoice_drive_url || null,
+          packing_drive_url: packing_drive_url || null,
+          license_drive_url: license_drive_url || null,
+          cap: cap || null,
+          new_invoice: new_invoice || null,
+          new_packing: new_packing || null,
           created_by: authed.userId,
         })
         .select()
@@ -64,8 +73,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'DELETE') {
       const id = String(req.query.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })
+
+      const { data: row } = await supabaseAdmin
+        .from('temporary_shipments').select('invoice_drive_url, packing_drive_url, license_drive_url').eq('id', id).single()
+
       const { error } = await supabaseAdmin.from('temporary_shipments').delete().eq('id', id)
       if (error) return res.status(400).json({ error: error.message })
+
+      // Best-effort Drive file deletion — don't fail the response if it errors
+      const driveUrls = [row?.invoice_drive_url, row?.packing_drive_url, row?.license_drive_url].filter(Boolean)
+      if (driveUrls.length) {
+        try {
+          const drive = getDriveClient()
+          await Promise.all(driveUrls.map(async (url) => {
+            const match = (url as string).match(/\/d\/([^/]+)/)
+            if (match?.[1]) drive.files.delete({ fileId: match[1] }).catch(() => {})
+          }))
+        } catch {}
+      }
+
       return res.json({ ok: true })
     }
 

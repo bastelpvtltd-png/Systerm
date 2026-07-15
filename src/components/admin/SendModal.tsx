@@ -146,8 +146,8 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
         </div>
         <div className="p-5 space-y-3">
           <p className="text-xs text-gray-500 truncate">{label}</p>
-          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify || isCusdecPassed ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
-            <input type="checkbox" checked={save || isCusdecPassed} disabled={notify || isCusdecPassed} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
+          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
+            <input type="checkbox" checked={save} disabled={notify} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
             <Save size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Save (to Drive + Database)</span>
           </label>
@@ -162,7 +162,7 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
             <span className="text-sm text-gray-800">Notify (everyone's Dashboard)</span>
           </label>
           {notify && !isCusdecPassed && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
-          {isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Save + Notify always on. Document saved permanently, won't be deleted after picking.</p>}
+          {isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Notify always on. Save is ticked by default; untick only if you want Drive-only (temporary) upload.</p>}
 
           <div className="pt-1">
             <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>

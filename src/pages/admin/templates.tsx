@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { FileStack, Upload, Trash2, FileDown, AlertTriangle, Loader, Plus, X, Grid3x3, Zap, Save } from 'lucide-react'
+import { FileStack, Upload, Trash2, FileDown, AlertTriangle, Loader, Plus, X, Grid3x3, Zap, Save, ExternalLink } from 'lucide-react'
 
 // Word template upload with {{placeholder}} tags (e.g. {{invoice_number}},
 // {{consignee_name}}, {{total_value}}) — upload once, then any time a
@@ -486,7 +486,15 @@ function ExcelTemplatesContent() {
         </div>
 
         <div className="card">
-          <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2"><Grid3x3 size={15}/>Cell Mapping</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Grid3x3 size={15}/>Cell Mapping</h2>
+            {selected?.drive_url && (
+              <a href={selected.drive_url} target="_blank" rel="noreferrer"
+                className="flex items-center gap-1 text-xs text-blue-600 hover:underline flex-shrink-0">
+                <ExternalLink size={12}/>Open in Drive
+              </a>
+            )}
+          </div>
           {!selected ? (
             <p className="text-xs text-gray-400 text-center py-12">Select a template to map its cells</p>
           ) : (

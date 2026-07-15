@@ -108,7 +108,7 @@ function TriggerTimestamps({ collapsed }: { collapsed: boolean }) {
 interface Msg {
   id: string; sender_id: string; body: string; created_at: string
   recipient_id?: string | null
-  profiles?: { full_name: string; username: string } | null
+  profiles?: { full_name: string; username: string }[] | null
   reads?: { user_id: string }[]
 }
 interface ChatUser { id: string; full_name: string; username: string; last_active_at?: string | null }
@@ -116,12 +116,13 @@ interface ChatUser { id: string; full_name: string; username: string; last_activ
 function FloatingChat() {
   const [open, setOpen] = useState(false)
   const [msgs, setMsgs] = useState<Msg[]>([])
+  const [allMsgs, setAllMsgs] = useState<Msg[]>([]) // admin: all messages unfiltered
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [users, setUsers] = useState<ChatUser[]>([])
-  const [recipientId, setRecipientId] = useState<string>('') // '' = all
+  const [recipientId, setRecipientId] = useState<string>('') // '' = all, '__admin__' = admin overview
   const [unread, setUnread] = useState(0)
   const [lastSeen, setLastSeen] = useState<string>(() =>
     typeof window !== 'undefined' ? localStorage.getItem('chat_last_seen') || '' : '')
@@ -151,12 +152,14 @@ function FloatingChat() {
     const me = user?.id || null
     setUserId(me)
     setUsers((uRows || []) as ChatUser[])
+    const rawMsgs = (mRows || []) as Msg[]
+    setAllMsgs(rawMsgs) // admin overview: unfiltered
     // Filter: show only messages that are broadcast OR sent/received by me
-    const all = ((mRows || []) as Msg[]).filter(m =>
+    const filtered = rawMsgs.filter(m =>
       m.recipient_id === null || m.recipient_id === undefined ||
       m.sender_id === me || m.recipient_id === me
     )
-    setMsgs(all)
+    setMsgs(filtered)
     // Check admin status
     if (me) {
       const { data: prof } = await supabase.from('profiles').select('is_admin').eq('id', me).single()
@@ -230,18 +233,21 @@ function FloatingChat() {
 
   const onlineUsers = users.filter(u => u.id !== userId && isOnline(u))
   const selectedRecipient = users.find(u => u.id === recipientId)
+  const isAdminView = recipientId === '__admin__'
 
   // Visible messages filtered by chosen recipient tab
-  const visibleMsgs = recipientId
-    ? msgs.filter(m => (m.sender_id === userId && m.recipient_id === recipientId) || (m.sender_id === recipientId && m.recipient_id === userId))
-    : msgs.filter(m => !m.recipient_id)
+  const visibleMsgs = isAdminView
+    ? allMsgs // admin sees everything
+    : recipientId
+      ? msgs.filter(m => (m.sender_id === userId && m.recipient_id === recipientId) || (m.sender_id === recipientId && m.recipient_id === userId))
+      : msgs.filter(m => !m.recipient_id)
 
   return (
     <>
       {/* Floating button */}
       <button
         onClick={() => setOpen(o => !o)}
-        className="fixed bottom-5 right-5 z-50 w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all hover:scale-110"
+        className="fixed bottom-5 right-5 z-[51] w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all hover:scale-110"
         style={{ background: '#22A87A' }}
       >
         {open
@@ -301,6 +307,14 @@ function FloatingChat() {
                 {(u.full_name || u.username).split(' ')[0]}
               </button>
             ))}
+            {isAdmin && (
+              <button onClick={() => setRecipientId('__admin__')}
+                className={`text-[11px] px-2.5 py-1 rounded-lg flex-shrink-0 font-medium transition-colors ${
+                  isAdminView ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-200'}`}
+                title="Admin: view all conversations">
+                👁
+              </button>
+            )}
           </div>
 
           {/* Messages */}
@@ -310,7 +324,8 @@ function FloatingChat() {
             )}
             {visibleMsgs.map(m => {
               const isMe = m.sender_id === userId
-              const name = m.profiles?.full_name || m.profiles?.username || 'User'
+              const senderProfile = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles
+              const name = senderProfile?.full_name || senderProfile?.username || 'User'
               const readBy = (m.reads || []).filter(r => r.user_id !== m.sender_id)
               const seenNames = readBy.map(r => {
                 const u = users.find(x => x.id === r.user_id)
@@ -416,7 +431,7 @@ function InAppNotifications() {
     <>
       <button
         onClick={() => setOpen(o => !o)}
-        className="fixed bottom-20 right-5 z-50 w-10 h-10 rounded-full shadow-xl flex items-center justify-center transition-all hover:scale-110"
+        className="fixed bottom-5 right-[72px] z-[51] w-10 h-10 rounded-full shadow-xl flex items-center justify-center transition-all hover:scale-110"
         style={{ background: unread > 0 ? '#ef4444' : '#6b7280' }}
         title="In-App Notifications"
       >
@@ -429,7 +444,7 @@ function InAppNotifications() {
       </button>
 
       {open && (
-        <div className="fixed bottom-32 right-5 z-50 w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
+        <div className="fixed bottom-20 right-[72px] z-[51] w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
           style={{ maxHeight: '360px' }}>
           <div className="px-4 py-3 flex items-center gap-2 border-b" style={{ background: '#1B3A5C' }}>
             <Bell size={14} color="white"/>
@@ -510,15 +525,17 @@ export const SECTION_ITEMS = [
   { key: 'section:boat-note.cusdec-xml',       tabHref: '/admin/boat-note', label: 'Docs Create: Cusdec XML tab' },
   { key: 'section:boat-note.cdn-text',         tabHref: '/admin/boat-note', label: 'Docs Create: CDN Text tab' },
   { key: 'section:boat-note.parties-copy',     tabHref: '/admin/boat-note', label: "Docs Create: Party's Copy tab" },
-  { key: 'section:database.cusdec',            tabHref: '/admin/database', label: 'CUSDEC table' },
-  { key: 'section:database.cdn',               tabHref: '/admin/database', label: 'CDN table' },
-  { key: 'section:database.barcode',           tabHref: '/admin/database', label: 'Barcode table' },
-  { key: 'section:database.boat_notes',        tabHref: '/admin/database', label: 'Boat Notes table' },
-  { key: 'section:database.uploaded_documents',tabHref: '/admin/database', label: 'Uploaded Documents table' },
-  { key: 'section:database.pdf_templates',     tabHref: '/admin/database', label: 'PDF Templates table' },
-  { key: 'section:database.messages',          tabHref: '/admin/database', label: 'Messages table' },
-  { key: 'section:database.profiles',          tabHref: '/admin/database', label: 'Users (Profiles) table' },
-  { key: 'section:database.delete',            tabHref: '/admin/database', label: 'Delete/Restore/Purge rows' },
+  { key: 'section:database.cusdec',              tabHref: '/admin/database', label: 'CUSDEC table' },
+  { key: 'section:database.cdn',                 tabHref: '/admin/database', label: 'CDN table' },
+  { key: 'section:database.barcode',             tabHref: '/admin/database', label: 'Barcode table' },
+  { key: 'section:database.boat_notes',          tabHref: '/admin/database', label: 'Boat Notes table' },
+  { key: 'section:database.temporary_shipments', tabHref: '/admin/database', label: 'Shipment Entry table' },
+  { key: 'section:database.uploaded_documents',  tabHref: '/admin/database', label: 'Uploaded Documents table' },
+  { key: 'section:database.pdf_templates',       tabHref: '/admin/database', label: 'PDF Templates table' },
+  { key: 'section:database.messages',            tabHref: '/admin/database', label: 'Messages table' },
+  { key: 'section:database.profiles',            tabHref: '/admin/database', label: 'Users (Profiles) table' },
+  { key: 'section:database.delete',              tabHref: '/admin/database', label: 'Delete/Restore/Purge rows' },
+  { key: 'section:my-tasks.other-work',          tabHref: '/admin/my-tasks', label: 'Other Work panel' },
   { key: 'section:automation.xml-generator',       tabHref: '/admin/automation', label: 'Cusdec XML Generator' },
   { key: 'section:automation.cdn-text',             tabHref: '/admin/automation', label: 'CDN Text Extractor & Database' },
   { key: 'section:automation.barcode-enter',        tabHref: '/admin/automation', label: 'Barcode Enter' },

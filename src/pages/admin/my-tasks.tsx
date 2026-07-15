@@ -67,12 +67,6 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
   const [returningId,  setReturningId]  = useState<string | null>(null)
   const [error,        setError]        = useState('')
   // ── other work admin ──────────────────────────────────────────────────────
-  const [owTargetUser, setOwTargetUser] = useState('')
-  const [owDesc,       setOwDesc]       = useState('')
-  const [owItem,       setOwItem]       = useState('')
-  const [owCost,       setOwCost]       = useState('')
-  const [owAmount,     setOwAmount]     = useState('')
-  const [owSaving,     setOwSaving]     = useState(false)
   const [approvingId,  setApprovingId]  = useState<string | null>(null)
   const [deletingOwId, setDeletingOwId] = useState<string | null>(null)
   // ── rate edit (admin) ─────────────────────────────────────────────────────
@@ -156,27 +150,6 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
       setPayments(prev => prev.filter(p => p.id !== id))
     } catch (e: any) { setError(e.message) }
     finally { returning ? setReturningId(null) : setDeletingId(null) }
-  }
-
-  async function addOtherWork() {
-    const computedAmount = Number(owAmount) || (Number(owItem) * Number(owCost))
-    if (!owTargetUser || !owDesc.trim() || !computedAmount) { setError('Fill user, description and amount (or item × cost)'); return }
-    setOwSaving(true); setError('')
-    try {
-      const targetUser = users.find(u => u.id === owTargetUser)
-      const descWithCalc = (owItem && owCost)
-        ? `${owDesc.trim()} (${owItem} × Rs.${fmtLKR(Number(owCost))})`
-        : owDesc.trim()
-      const res = await fetch('/api/other-work', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ user_id: owTargetUser, user_name: targetUser?.full_name || targetUser?.username, description: descWithCalc, amount: computedAmount }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error)
-      setOwTargetUser(''); setOwDesc(''); setOwItem(''); setOwCost(''); setOwAmount('')
-      await loadAllWork()
-    } catch (e: any) { setError(e.message) }
-    finally { setOwSaving(false) }
   }
 
   async function approveOtherWork(id: string, status: 'approved' | 'rejected') {
@@ -439,64 +412,6 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
                   </div>
                 </div>
 
-                {/* Add Other Work */}
-                <div className="bg-indigo-50 rounded-xl p-3">
-                  <p className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wide mb-2 flex items-center gap-1"><Briefcase size={12}/>Add Other Work</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
-                    <select value={owTargetUser} onChange={e => setOwTargetUser(e.target.value)} className="input text-sm">
-                      <option value="">— Select user —</option>
-                      {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
-                    </select>
-                    <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder="Description" className="input text-sm"/>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <input type="number" value={owItem} onChange={e => { setOwItem(e.target.value); setOwAmount(String(Number(e.target.value) * Number(owCost))) }}
-                      placeholder="Qty" className="input text-sm w-20"/>
-                    <span className="text-gray-400 text-sm">×</span>
-                    <input type="number" value={owCost} onChange={e => { setOwCost(e.target.value); setOwAmount(String(Number(owItem) * Number(e.target.value))) }}
-                      placeholder="Unit cost" className="input text-sm w-28"/>
-                    <span className="text-gray-400 text-sm">=</span>
-                    <input type="number" value={owAmount}
-                      onChange={e => { setOwAmount(e.target.value); setOwItem(''); setOwCost('') }}
-                      placeholder="Total (Rs.)" className="input text-sm w-28 bg-white font-semibold"/>
-                    <button onClick={addOtherWork} disabled={owSaving} className="btn-primary flex items-center justify-center gap-1.5 text-sm ml-auto">
-                      {owSaving ? <Loader size={13} className="animate-spin"/> : <Plus size={13}/>}Add
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-indigo-500 mt-1.5">Item × cost = auto-total. Needs approval before counting in balance.</p>
-                </div>
-
-                {/* Pending Other Work approvals */}
-                {allOtherWork.filter(x => x.status === 'pending').length > 0 && (
-                  <div className="border border-amber-200 rounded-xl overflow-hidden">
-                    <div className="px-3 py-1.5 bg-amber-50">
-                      <p className="text-[11px] font-semibold text-amber-700">Pending Approval — Other Work</p>
-                    </div>
-                    <div className="divide-y divide-gray-50">
-                      {allOtherWork.filter(x => x.status === 'pending').map(x => (
-                        <div key={x.id} className="flex items-center justify-between px-3 py-2 text-xs">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-gray-800">{x.user_name || x.user_id}</p>
-                            <p className="text-gray-500">{x.description} · Rs. {fmtLKR(Number(x.amount))}</p>
-                          </div>
-                          <div className="flex items-center gap-1.5 flex-shrink-0">
-                            <button onClick={() => approveOtherWork(x.id, 'approved')} disabled={approvingId === x.id}
-                              className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
-                              {approvingId === x.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
-                            </button>
-                            <button onClick={() => approveOtherWork(x.id, 'rejected')} disabled={approvingId === x.id}
-                              className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
-                              <X size={10}/>Reject
-                            </button>
-                            <button onClick={() => deleteOtherWork(x.id)} disabled={deletingOwId === x.id}
-                              className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
                 {/* Per-user summary */}
                 {users.map(u => {
                   const name = u.full_name || u.username
@@ -553,7 +468,7 @@ function SalaryPayments({ userId, isAdmin }: { userId: string | null; isAdmin: b
         )}
       </div>
 
-      {/* ═══ Panel 2 — Payments ═══ */}
+      {/* ═══ Panel 2 — Payments (unchanged below) ═══ */}
       <div className="card mb-5">
         <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2 mb-3"><Send size={15}/>Payments</h2>
 
@@ -661,6 +576,189 @@ function InvoiceBlock({ cdn, cap, rates }: { cdn: number; cap: number; rates: Wo
           <span className="font-semibold text-gray-800">Rs. {fmtLKR(capTotal)}</span>
         </div>
       </div>
+    </div>
+  )
+}
+
+function OtherWorkPanel({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
+  const [myItems, setMyItems]   = useState<OtherWorkItem[]>([])
+  const [allItems, setAllItems] = useState<OtherWorkItem[]>([])
+  const [users, setUsers]       = useState<Profile[]>([])
+  const [error, setError]       = useState('')
+
+  // form
+  const [owTargetUser, setOwTargetUser] = useState('')
+  const [owDesc, setOwDesc]             = useState('')
+  const [owItem, setOwItem]             = useState('')
+  const [owCost, setOwCost]             = useState('')
+  const [owAmount, setOwAmount]         = useState('')
+  const [owSaving, setOwSaving]         = useState(false)
+  const [approvingId, setApprovingId]   = useState<string | null>(null)
+  const [deletingId, setDeletingId]     = useState<string | null>(null)
+
+  async function load() {
+    const h = await authHeader()
+    const [mine, all] = await Promise.all([
+      fetch('/api/other-work', { headers: h }).then(r => r.json()),
+      isAdmin ? fetch('/api/other-work?all=1', { headers: h }).then(r => r.json()) : Promise.resolve({ items: [] }),
+    ])
+    setMyItems(mine.items || [])
+    if (isAdmin) {
+      setAllItems(all.items || [])
+      const { data } = await supabase.from('profiles').select('id, username, full_name')
+      setUsers((data as any) || [])
+    }
+  }
+
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function addWork() {
+    const computedAmount = Number(owAmount) || (Number(owItem) * Number(owCost))
+    const targetId = isAdmin ? owTargetUser : userId
+    if (!targetId || !owDesc.trim() || !computedAmount) { setError('Fill description and amount'); return }
+    setOwSaving(true); setError('')
+    try {
+      const targetUser = isAdmin ? users.find(u => u.id === targetId) : null
+      const descWithCalc = (owItem && owCost)
+        ? `${owDesc.trim()} (${owItem} × Rs.${fmtLKR(Number(owCost))})`
+        : owDesc.trim()
+      const res = await fetch('/api/other-work', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ user_id: targetId, user_name: targetUser ? (targetUser.full_name || targetUser.username) : undefined, description: descWithCalc, amount: computedAmount }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setOwTargetUser(''); setOwDesc(''); setOwItem(''); setOwCost(''); setOwAmount('')
+      await load()
+    } catch (e: any) { setError(e.message) }
+    finally { setOwSaving(false) }
+  }
+
+  async function approve(id: string, status: 'approved' | 'rejected') {
+    setApprovingId(id)
+    try {
+      const res = await fetch('/api/other-work', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ id, status }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setAllItems(prev => prev.map(x => x.id === id ? d.item : x))
+      setMyItems(prev => prev.map(x => x.id === id ? d.item : x))
+    } catch (e: any) { setError(e.message) }
+    finally { setApprovingId(null) }
+  }
+
+  async function deleteItem(id: string) {
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/other-work?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setAllItems(prev => prev.filter(x => x.id !== id))
+      setMyItems(prev => prev.filter(x => x.id !== id))
+    } catch (e: any) { setError(e.message) }
+    finally { setDeletingId(null) }
+  }
+
+  const pendingAll = allItems.filter(x => x.status === 'pending')
+
+  return (
+    <div className="card mb-5">
+      <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2 mb-3"><Briefcase size={15}/>Other Work</h2>
+
+      {/* Add form — all users */}
+      <div className="bg-indigo-50 rounded-xl p-3 mb-4">
+        <p className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wide mb-2">
+          {isAdmin ? 'Add Other Work (for any user)' : 'Add Other Work (for yourself)'}
+        </p>
+        <div className={`grid gap-2 mb-2 ${isAdmin ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
+          {isAdmin && (
+            <select value={owTargetUser} onChange={e => setOwTargetUser(e.target.value)} className="input text-sm">
+              <option value="">— Select user —</option>
+              {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
+            </select>
+          )}
+          <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder="Description" className="input text-sm"/>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input type="number" value={owItem} onChange={e => { setOwItem(e.target.value); setOwAmount(String(Number(e.target.value) * Number(owCost))) }}
+            placeholder="Qty" className="input text-sm w-20"/>
+          <span className="text-gray-400 text-sm">×</span>
+          <input type="number" value={owCost} onChange={e => { setOwCost(e.target.value); setOwAmount(String(Number(owItem) * Number(e.target.value))) }}
+            placeholder="Unit cost" className="input text-sm w-28"/>
+          <span className="text-gray-400 text-sm">=</span>
+          <input type="number" value={owAmount} onChange={e => { setOwAmount(e.target.value); setOwItem(''); setOwCost('') }}
+            placeholder="Total (Rs.)" className="input text-sm w-28 bg-white font-semibold"/>
+          <button onClick={addWork} disabled={owSaving} className="btn-primary flex items-center justify-center gap-1.5 text-sm ml-auto">
+            {owSaving ? <Loader size={13} className="animate-spin"/> : <Plus size={13}/>}Add
+          </button>
+        </div>
+        {!isAdmin && <p className="text-[10px] text-indigo-500 mt-1.5">Submitted as pending — admin needs to approve before it counts in your balance.</p>}
+        {error && <p className="text-xs text-red-600 mt-1.5">{error}</p>}
+      </div>
+
+      {/* Admin: pending approvals */}
+      {isAdmin && pendingAll.length > 0 && (
+        <div className="border border-amber-200 rounded-xl overflow-hidden mb-4">
+          <div className="px-3 py-1.5 bg-amber-50">
+            <p className="text-[11px] font-semibold text-amber-700">Pending Approval ({pendingAll.length})</p>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {pendingAll.map(x => (
+              <div key={x.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-gray-800">{x.user_name || x.user_id}</p>
+                  <p className="text-gray-500">{x.description} · Rs. {fmtLKR(Number(x.amount))}</p>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button onClick={() => approve(x.id, 'approved')} disabled={approvingId === x.id}
+                    className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                    {approvingId === x.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
+                  </button>
+                  <button onClick={() => approve(x.id, 'rejected')} disabled={approvingId === x.id}
+                    className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
+                    <X size={10}/>Reject
+                  </button>
+                  <button onClick={() => deleteItem(x.id)} disabled={deletingId === x.id}
+                    className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* My items */}
+      {myItems.length > 0 && (
+        <div>
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Your Other Work</p>
+          <div className="divide-y divide-gray-50 border border-gray-100 rounded-xl overflow-hidden">
+            {myItems.map(x => (
+              <div key={x.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-gray-800 truncate">{x.description}</p>
+                  <p className="text-gray-400">{new Date(x.created_at).toLocaleDateString('en-GB')}</p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className="font-semibold text-indigo-700">Rs. {fmtLKR(Number(x.amount))}</span>
+                  {x.status === 'approved' && <span className="text-[10px] text-green-600 font-medium flex items-center gap-0.5"><Check size={10}/>Approved</span>}
+                  {x.status === 'pending'  && <span className="text-[10px] text-amber-600 font-medium">Pending</span>}
+                  {x.status === 'rejected' && <span className="text-[10px] text-red-500 font-medium flex items-center gap-0.5"><X size={10}/>Rejected</span>}
+                  {isAdmin && (
+                    <button onClick={() => deleteItem(x.id)} disabled={deletingId === x.id}
+                      className="text-gray-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={11}/></button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {myItems.length === 0 && !isAdmin && (
+        <p className="text-xs text-gray-400">No other work added yet.</p>
+      )}
     </div>
   )
 }
@@ -1016,6 +1114,10 @@ function MyTasksContent() {
 
 
       <SalaryPayments userId={userId} isAdmin={isAdmin}/>
+
+      {has('section:my-tasks.other-work') && (
+        <OtherWorkPanel userId={userId} isAdmin={isAdmin}/>
+      )}
 
       <div className="flex gap-2 mb-4">
         {(['pending','done'] as const).map(t => (
