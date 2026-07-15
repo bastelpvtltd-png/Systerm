@@ -240,6 +240,7 @@ function ExcelTemplatesContent() {
   const [status, setStatus] = useState('')
 
   const [mapping, setMapping] = useState<MappingEntry[]>([])
+  const [printSheet, setPrintSheet] = useState('')
   const [printRange, setPrintRange] = useState('')
   const [savingMapping, setSavingMapping] = useState(false)
 
@@ -303,7 +304,15 @@ function ExcelTemplatesContent() {
   const selectedType = types.find(t => t.key === typeKey) || null
   useEffect(() => {
     setMapping(selected?.mapping || [])
-    setPrintRange(selected?.print_range || '')
+    const pr = selected?.print_range || ''
+    if (pr.includes('!')) {
+      const [sheet, range] = pr.split('!', 2)
+      setPrintSheet(sheet)
+      setPrintRange(range)
+    } else {
+      setPrintSheet('')
+      setPrintRange(pr)
+    }
     setManualValues({})
   }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -382,9 +391,12 @@ function ExcelTemplatesContent() {
     if (!selected) return
     setSavingMapping(true)
     try {
+      const combinedPrintRange = printSheet.trim()
+        ? `${printSheet.trim()}!${printRange.trim()}`
+        : printRange.trim() || null
       const res = await fetch('/api/document-templates', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping, print_range: printRange.trim() || null }),
+        body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping, print_range: combinedPrintRange }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
@@ -541,15 +553,29 @@ function ExcelTemplatesContent() {
                   </div>
                 ))}
               </div>
-              <div className="border border-dashed border-gray-200 rounded-lg p-2.5 mb-3 space-y-1">
+              <div className="border border-dashed border-gray-200 rounded-lg p-2.5 mb-3 space-y-1.5">
                 <label className="block text-[11px] font-medium text-gray-600">PDF Print Range (optional)</label>
-                <input
-                  value={printRange}
-                  onChange={e => setPrintRange(e.target.value)}
-                  placeholder="e.g. A1:F50  — only this range prints to PDF"
-                  className="input text-xs font-mono"
-                />
-                <p className="text-[10px] text-gray-400">Leave blank to print the whole sheet. When set, only cells within this range appear in the generated PDF.</p>
+                {sheetNames.length > 1 && (
+                  <div>
+                    <label className="block text-[10px] text-gray-500 mb-0.5">Which sheet to print</label>
+                    <select value={printSheet} onChange={e => setPrintSheet(e.target.value)} className="input text-xs">
+                      <option value="">— First sheet —</option>
+                      {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className="block text-[10px] text-gray-500 mb-0.5">Cell range</label>
+                  <input
+                    value={printRange}
+                    onChange={e => setPrintRange(e.target.value)}
+                    placeholder="e.g. A1:F50  — leave blank for whole sheet"
+                    className="input text-xs font-mono"
+                  />
+                </div>
+                <p className="text-[10px] text-gray-400">
+                  {printSheet && printRange ? `Saves as "${printSheet}!${printRange}"` : printRange ? `Saves as "${printRange}"` : 'Leave blank to print the whole first sheet.'}
+                </p>
               </div>
               <div className="flex items-center gap-2 mb-4">
                 <button onClick={addMappingRow} className="flex items-center gap-1 text-xs text-blue-600 hover:underline"><Plus size={13}/>Add Field</button>
@@ -576,7 +602,9 @@ function ExcelTemplatesContent() {
                   </div>
                 ))}
                 {selected?.print_range && (
-                  <p className="text-[10px] text-indigo-600 bg-indigo-50 rounded px-2 py-1 mb-2 font-mono">PDF range: {selected.print_range}</p>
+                  <p className="text-[10px] text-indigo-600 bg-indigo-50 rounded px-2 py-1 mb-2 font-mono">
+                    PDF: {selected.print_range.includes('!') ? selected.print_range : `range ${selected.print_range}`}
+                  </p>
                 )}
                 <div className="flex items-center gap-2 mt-2">
                   <button onClick={() => generate(undefined, 'xlsx')} disabled={generating} className="btn-primary text-xs px-3 py-2 flex items-center gap-1.5">

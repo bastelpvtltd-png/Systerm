@@ -333,7 +333,15 @@ function FloatingChat() {
               }).filter(Boolean)
               return (
                 <div key={m.id} className={`flex flex-col group ${isMe ? 'items-end' : 'items-start'}`}>
-                  {!isMe && <span className="text-[10px] text-gray-400 mb-0.5 px-1">{name}</span>}
+                  {!isMe && (
+                    <div className="flex items-center gap-1.5 mb-0.5 px-1">
+                      <span className="text-[10px] text-gray-400">{name}</span>
+                      {isAdminView && !isMe && m.sender_id && (
+                        <button onClick={() => setRecipientId(m.sender_id!)}
+                          className="text-[9px] text-blue-400 hover:text-blue-600 underline">Reply →</button>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-end gap-1">
                     {isMe && isAdmin && (
                       <button onClick={() => deleteMsg(m.id)}
@@ -345,6 +353,11 @@ function FloatingChat() {
                       isMe ? 'text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
                     }`}
                     style={isMe ? { background: '#22A87A' } : {}}>
+                      {isAdminView && !isMe && m.recipient_id && m.recipient_id !== userId && (
+                        <span className="block text-[9px] text-gray-400 mb-0.5">
+                          → {users.find(u => u.id === m.recipient_id)?.full_name?.split(' ')[0] || 'DM'}
+                        </span>
+                      )}
                       {m.body}
                     </div>
                     {!isMe && isAdmin && (
@@ -367,20 +380,26 @@ function FloatingChat() {
           </div>
 
           {/* Input */}
-          <div className="p-3 border-t bg-white flex gap-2 flex-shrink-0">
-            <input
-              value={body}
-              onChange={e => setBody(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-              placeholder={recipientId ? `Message ${selectedRecipient?.full_name?.split(' ')[0] || ''}…` : 'Message everyone…'}
-              className="flex-1 border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-green-400"
-            />
-            <button onClick={send} disabled={sending || !body.trim()}
-              className="w-8 h-8 rounded-xl flex items-center justify-center disabled:opacity-40 text-white flex-shrink-0"
-              style={{ background: '#22A87A' }}>
-              {sending ? <Loader size={13} className="animate-spin"/> : <Send size={13}/>}
-            </button>
-          </div>
+          {isAdminView ? (
+            <div className="p-3 border-t bg-gray-50 text-center flex-shrink-0">
+              <p className="text-[11px] text-gray-400">Click a user tab or <b>Reply →</b> on a message to send a DM</p>
+            </div>
+          ) : (
+            <div className="p-3 border-t bg-white flex gap-2 flex-shrink-0">
+              <input
+                value={body}
+                onChange={e => setBody(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+                placeholder={recipientId ? `Message ${selectedRecipient?.full_name?.split(' ')[0] || ''}…` : 'Message everyone…'}
+                className="flex-1 border border-gray-200 rounded-xl px-3 py-1.5 text-sm outline-none focus:border-green-400"
+              />
+              <button onClick={send} disabled={sending || !body.trim()}
+                className="w-8 h-8 rounded-xl flex items-center justify-center disabled:opacity-40 text-white flex-shrink-0"
+                style={{ background: '#22A87A' }}>
+                {sending ? <Loader size={13} className="animate-spin"/> : <Send size={13}/>}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </>

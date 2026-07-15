@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { authHeader } from '@/lib/supabase'
+import { supabase, authHeader } from '@/lib/supabase'
 import { Plus, Trash2, Ship, AlertTriangle, Copy, FileText, X } from 'lucide-react'
 
 interface TempShipment {
@@ -16,6 +16,7 @@ interface TempShipment {
   cap: string | null
   new_invoice: string | null
   new_packing: string | null
+  created_by: string | null
   created_at: string
 }
 
@@ -70,6 +71,9 @@ function ShipmentEntryContent() {
   const [options, setOptions] = useState<{ shippers: string[]; consignees: string[] }>({ shippers: [], consignees: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [duplicateRow, setDuplicateRow] = useState<TempShipment | null>(null)
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [profileMap, setProfileMap] = useState<Record<string, string>>({})
 
   // Drive file state for the current form
   const [invoiceFile, setInvoiceFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
@@ -90,6 +94,17 @@ function ShipmentEntryContent() {
   useEffect(() => {
     loadRows()
     fetch('/api/temp-shipment-options').then(r => r.json()).then(d => setOptions({ shippers: d.shippers || [], consignees: d.consignees || [] })).catch(() => {})
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return
+      supabase.from('profiles').select('id, full_name, username, is_admin').then(({ data }) => {
+        if (!data) return
+        const me = data.find(p => p.id === user.id)
+        setIsAdmin(!!me?.is_admin)
+        const map: Record<string, string> = {}
+        data.forEach(p => { map[p.id] = p.full_name || p.username || 'Unknown' })
+        setProfileMap(map)
+      })
+    })
     const t = setInterval(loadRows, 15000)
     return () => clearInterval(t)
   }, [])
@@ -114,9 +129,22 @@ function ShipmentEntryContent() {
 
   async function handleSave() {
     setError('')
+    setDuplicateRow(null)
     if (!form.shipper.trim() || !form.invoice_number.trim()) {
       setError('Shipper and Shipment Invoice Number are required.')
       return
+    }
+    // Duplicate check on new_invoice / new_packing
+    if (form.new_invoice.trim() || form.new_packing.trim()) {
+      const dup = rows.find(r =>
+        (form.new_invoice.trim() && r.new_invoice?.trim() === form.new_invoice.trim()) ||
+        (form.new_packing.trim() && r.new_packing?.trim() === form.new_packing.trim())
+      )
+      if (dup) {
+        setDuplicateRow(dup)
+        setError('This New Invoice or New Packing number already exists — see highlighted entry below.')
+        return
+      }
     }
     setLoading(true)
     try {
@@ -172,10 +200,6 @@ function ShipmentEntryContent() {
     }
   }
 
-  if (!canUse) {
-    return <div className="p-6 text-gray-400 text-sm">You don't have access to this page.</div>
-  }
-
   const anyUploading = invoiceFile.uploading || packingFile.uploading || licenseFile.uploading
 
   return (
@@ -194,7 +218,7 @@ function ShipmentEntryContent() {
         </div>
       )}
 
-      <div className="card mb-6">
+      {canUse && <div className="card mb-6">
         {/* Row 1: core shipment fields */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-3">
           <div>
@@ -258,33 +282,35 @@ function ShipmentEntryContent() {
         <button onClick={handleSave} disabled={loading || anyUploading} className="btn-primary flex items-center gap-2">
           <Plus size={16}/>{loading ? 'Saving...' : 'Save Shipment'}
         </button>
-      </div>
+      </div>}
 
       <div className="card overflow-hidden p-0">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                {['Reference', 'Shipper', 'Invoice', 'Packing', 'Consignee', 'Docs', 'Created', 'Actions'].map(h => (
-                  <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
+                {['Shipper', 'Invoice', 'Packing', 'New Invoice', 'New Packing', 'CAP', 'Docs', 'Created By', 'Date', 'Actions'].map(h => (
+                  <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {rows.map(r => {
+                const isDup = duplicateRow?.id === r.id
                 const docs: DriveFile[] = [
                   { label: 'Invoice', url: r.invoice_drive_url },
                   { label: 'Packing', url: r.packing_drive_url },
                   { label: 'License', url: r.license_drive_url },
                 ].filter(d => d.url)
                 return (
-                  <tr key={r.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-mono text-xs">{r.reference || '—'}</td>
-                    <td className="px-4 py-3">{r.shipper}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{r.invoice_number}</td>
-                    <td className="px-4 py-3 text-xs">{r.packing_number || '—'}</td>
-                    <td className="px-4 py-3 text-xs">{r.consignee || '—'}</td>
-                    <td className="px-4 py-3">
+                  <tr key={r.id} className={isDup ? 'bg-amber-50 ring-2 ring-inset ring-amber-300' : 'hover:bg-gray-50'}>
+                    <td className="px-3 py-3 text-sm">{r.shipper}</td>
+                    <td className="px-3 py-3 font-mono text-xs">{r.invoice_number}</td>
+                    <td className="px-3 py-3 text-xs">{r.packing_number || '—'}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-blue-700">{r.new_invoice || '—'}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-blue-700">{r.new_packing || '—'}</td>
+                    <td className="px-3 py-3 text-xs text-purple-700">{r.cap || '—'}</td>
+                    <td className="px-3 py-3">
                       <div className="flex flex-col gap-0.5">
                         {docs.length === 0 ? <span className="text-gray-300 text-xs">—</span> : docs.map(d => (
                           <a key={d.label} href={d.url!} target="_blank" rel="noreferrer"
@@ -292,12 +318,17 @@ function ShipmentEntryContent() {
                         ))}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{new Date(r.created_at).toLocaleDateString()}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 text-xs text-gray-600">{r.created_by ? (profileMap[r.created_by] || '—') : '—'}</td>
+                    <td className="px-3 py-3 text-gray-400 text-xs">{new Date(r.created_at).toLocaleDateString()}</td>
+                    <td className="px-3 py-3">
                       <div className="flex items-center gap-1">
-                        <button onClick={() => handleAddSame(r)} title="Add Same (copy this row)"
-                          className="p-1.5 rounded hover:bg-blue-50 text-blue-500"><Copy size={13}/></button>
-                        <button onClick={() => handleDelete(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-500"><Trash2 size={13}/></button>
+                        {canUse && (
+                          <button onClick={() => handleAddSame(r)} title="Add Same (copy this row)"
+                            className="p-1.5 rounded hover:bg-blue-50 text-blue-500"><Copy size={13}/></button>
+                        )}
+                        {isAdmin && (
+                          <button onClick={() => handleDelete(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-500"><Trash2 size={13}/></button>
+                        )}
                       </div>
                     </td>
                   </tr>
