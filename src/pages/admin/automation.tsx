@@ -305,7 +305,7 @@ function OrphanedDataMonitor({ label, count, items }: { label: string; count: nu
 }
 
 function useTriggerTimestamp(field: 'boatNote' | 'exportRelease') {
-  const [info, setInfo] = useState<{ time: string; cusdec?: string; user?: string } | null>(null)
+  const [info, setInfo] = useState<{ time: string; container?: string; cusdec?: string } | null>(null)
   useEffect(() => {
     authHeader().then(h =>
       fetch('/api/trigger-timestamps', { headers: h })
@@ -318,11 +318,31 @@ function useTriggerTimestamp(field: 'boatNote' | 'exportRelease') {
     if (!iso) return null
     try { return new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Colombo', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) } catch { return iso }
   }
-  return info ? fmt(info.time) : null
+  const timeStr = info ? fmt(info.time) : null
+  const ref = info ? (info.container || info.cusdec || null) : null
+  return { timeStr, ref }
+}
+
+function useNextVessel() {
+  const [vessel, setVessel] = useState<{ etb: string; vessel: string; voyage: string; opening: string; closing: string } | null>(null)
+  useEffect(() => {
+    authHeader().then(h =>
+      fetch('/api/trigger-timestamps', { headers: h })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d?.vessel) setVessel(d.vessel) })
+        .catch(() => {})
+    )
+  }, [])
+  function fmtDate(iso: string | null | undefined) {
+    if (!iso) return '—'
+    try { return new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Colombo', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) } catch { return iso || '—' }
+  }
+  return vessel ? { ...vessel, etbStr: fmtDate(vessel.etb) } : null
 }
 
 function BoatNoteCheckPanel() {
-  const lastTriggered = useTriggerTimestamp('boatNote')
+  const { timeStr: lastTime, ref: lastContainer } = useTriggerTimestamp('boatNote')
+  const nextVessel = useNextVessel()
   const [cdns, setCdns] = useState<CdnRec[]>([])
   const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
   const [search, setSearch] = useState('')
@@ -445,7 +465,13 @@ function BoatNoteCheckPanel() {
             {autoBusy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Auto Trigger (all pending)
           </button>
         </div>
-        <div className="mb-3"><SchedulerControl panel="boat_note" label="Auto-check"/></div>
+        <div className="mb-2"><SchedulerControl panel="boat_note" label="Auto-check"/></div>
+        {nextVessel && (
+          <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md px-2 py-1.5 mb-3 flex items-center gap-1.5">
+            <Ship size={10}/>
+            <span>Next vessel: <strong>{nextVessel.vessel} {nextVessel.voyage}</strong> · ETB {nextVessel.etbStr} · Open {nextVessel.opening} → Close {nextVessel.closing}</span>
+          </div>
+        )}
         {autoProgress && <p className="text-xs text-gray-500 mb-2">{autoProgress}</p>}
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container or shipper..." className="input mb-3"/>
         <div className="space-y-1 max-h-96 overflow-y-auto">
@@ -477,9 +503,12 @@ function BoatNoteCheckPanel() {
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-semibold text-gray-900 text-sm">Manual Trigger</h2>
-          {lastTriggered && (
+          {lastTime && (
             <span className="text-[11px] text-green-700 bg-green-50 border border-green-200 rounded-md px-2 py-0.5 flex items-center gap-1">
-              <Clock size={10}/> Last: {lastTriggered}
+              <Clock size={10}/>
+              {lastContainer && <span className="font-mono font-bold">{lastContainer}</span>}
+              {lastContainer && <span className="text-green-500">·</span>}
+              {lastTime}
             </span>
           )}
         </div>
@@ -526,7 +555,8 @@ function BoatNoteCheckPanel() {
 }
 
 function ExportReleaseCheckPanel() {
-  const lastTriggered = useTriggerTimestamp('exportRelease')
+  const { timeStr: lastTime, ref: lastCusdec } = useTriggerTimestamp('exportRelease')
+  const nextVessel = useNextVessel()
   const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
   const [cdns, setCdns] = useState<CdnRec[]>([])
   const [selectedId, setSelectedId] = useState('')
@@ -660,7 +690,13 @@ function ExportReleaseCheckPanel() {
             {autoBusy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Auto Trigger (all pending)
           </button>
         </div>
-        <div className="mb-3"><SchedulerControl panel="export_release" label="Auto-check"/></div>
+        <div className="mb-2"><SchedulerControl panel="export_release" label="Auto-check"/></div>
+        {nextVessel && (
+          <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md px-2 py-1.5 mb-3 flex items-center gap-1.5">
+            <Ship size={10}/>
+            <span>Next vessel: <strong>{nextVessel.vessel} {nextVessel.voyage}</strong> · ETB {nextVessel.etbStr} · Open {nextVessel.opening} → Close {nextVessel.closing}</span>
+          </div>
+        )}
         {autoProgress && <p className="text-xs text-gray-500 mb-2">{autoProgress}</p>}
         <p className="text-xs text-gray-400 mb-2">Blue-bordered = Boat Note passed, ready for Auto Trigger. Others can still be checked manually below.</p>
         <div className="space-y-1 max-h-96 overflow-y-auto">
@@ -685,9 +721,12 @@ function ExportReleaseCheckPanel() {
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-semibold text-gray-900 text-sm">Manual Trigger</h2>
-          {lastTriggered && (
+          {lastTime && (
             <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-0.5 flex items-center gap-1">
-              <Clock size={10}/> Last: {lastTriggered}
+              <Clock size={10}/>
+              {lastCusdec && <span className="font-mono font-bold">E {lastCusdec}</span>}
+              {lastCusdec && <span className="text-amber-400">·</span>}
+              {lastTime}
             </span>
           )}
         </div>

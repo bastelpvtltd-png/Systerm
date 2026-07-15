@@ -18,19 +18,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const [{ data: bnRow }, { data: erRow }, { data: vesselRow }] = await Promise.all([
-      // Last boat note generated
-      sb.from('cusdec')
-        .select('number, boat_note_created_at')
-        .not('boat_note_created_at', 'is', null)
-        .order('boat_note_created_at', { ascending: false })
+      // Last CDN container that passed boat note check
+      sb.from('cdn')
+        .select('container_no, boat_note_checked_at')
+        .not('boat_note_checked_at', 'is', null)
+        .order('boat_note_checked_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
 
-      // Last export release — from trigger_log if available, fallback to cusdec update
-      sb.from('trigger_log')
-        .select('cusdec_number, user_name, fired_at')
-        .eq('event_type', 'export_release')
-        .order('fired_at', { ascending: false })
+      // Last CUSDEC that passed export release check
+      sb.from('cusdec')
+        .select('number, export_release_checked_at')
+        .not('export_release_checked_at', 'is', null)
+        .order('export_release_checked_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
 
@@ -44,10 +44,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.json({
       boatNote: bnRow
-        ? { time: bnRow.boat_note_created_at, cusdec: bnRow.number }
+        ? { time: bnRow.boat_note_checked_at, container: bnRow.container_no }
         : null,
       exportRelease: erRow
-        ? { time: erRow.fired_at, cusdec: erRow.cusdec_number, user: erRow.user_name }
+        ? { time: erRow.export_release_checked_at, cusdec: erRow.number }
         : null,
       vessel: vesselRow
         ? { etb: vesselRow.etb, vessel: vesselRow.vessel, voyage: vesselRow.voyage, opening: vesselRow.opening_time, closing: vesselRow.closing_time }
