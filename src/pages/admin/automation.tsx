@@ -1399,7 +1399,7 @@ function PdfEditorPanel() {
       }
 
       const edited = await pdfDoc.save()
-      const blob = new Blob([edited], { type: 'application/pdf' })
+      const blob = new Blob([edited.buffer as ArrayBuffer], { type: 'application/pdf' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a'); a.href = url; a.download = 'edited.pdf'; a.click()
       URL.revokeObjectURL(url)

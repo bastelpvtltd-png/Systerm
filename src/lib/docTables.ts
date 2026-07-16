@@ -241,7 +241,23 @@ export async function mergeShipmentIntoCusdec(cusdecRow: any, shipment: any): Pr
   if (!cusdecRow.exporter && shipment.shipper) fill.exporter = shipment.shipper
   if (!cusdecRow.reference) fill.reference = fill.reference || generateReference(cusdecRow.exporter || shipment.shipper)
 
+  // Shipment entry's invoice_number is authoritative — it was typed by the user,
+  // not extracted from a PDF, so it's always preferred over the cusdec extraction.
+  if (shipment.invoice_number) fill.invoice_number = shipment.invoice_number
+
+  // Carry over all document URLs from the shipment entry to the cusdec row
+  // so documents attached before the cusdec existed aren't lost after the merge.
+  if (shipment.invoice_drive_url) fill.invoice_drive_url = shipment.invoice_drive_url
+  if (shipment.packing_drive_url) fill.packing_drive_url = shipment.packing_drive_url
+  if (shipment.license_drive_url) fill.license_drive_url = shipment.license_drive_url
+  if (shipment.divide_invoice_drive_url) fill.divide_invoice_drive_url = shipment.divide_invoice_drive_url
+  if (shipment.divide_packing_drive_url) fill.divide_packing_drive_url = shipment.divide_packing_drive_url
+  if (shipment.real_cap) fill.real_cap = shipment.real_cap
+  if (shipment.cap) fill.divide_cap = shipment.cap  // cap column = divide_cap
+
   if (Object.keys(fill).length) {
+    // Ensure columns exist before writing — doc URL fields may not exist yet on older cusdec rows
+    await ensureColumns('cusdec', Object.keys(fill))
     const { error } = await supabaseAdmin.from('cusdec').update(fill).eq('id', cusdecRow.id)
     if (error) throw new Error(error.message)
   }

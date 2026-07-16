@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { supabase, authHeader } from '@/lib/supabase'
-import { Plus, Trash2, Ship, AlertTriangle, Copy, FileText, X, Edit2, Save } from 'lucide-react'
+import { Plus, Trash2, Ship, AlertTriangle, Copy, FileText, X, Edit2, Save, Link } from 'lucide-react'
 
 interface TempShipment {
   id: string
@@ -13,22 +13,26 @@ interface TempShipment {
   invoice_drive_url: string | null
   packing_drive_url: string | null
   license_drive_url: string | null
-  cap: string | null
+  divide_invoice_drive_url: string | null
+  divide_packing_drive_url: string | null
+  real_cap: string | null
+  cap: string | null               // divide_cap stored in the 'cap' column
   new_invoice: string | null
   new_packing: string | null
   created_by: string | null
   created_at: string
 }
 
-interface DriveFile { label: string; url: string | null }
-
 const emptyForm = {
   shipper: '', invoice_number: '', packing_number: '', consignee: '',
-  cap: '', new_invoice: '', new_packing: '',
+  real_cap: '', cap: '',           // cap = divide_cap
+  new_invoice: '', new_packing: '',
 }
 
-function FileUploadField({ label, onUpload, currentUrl, uploading }: {
+// ── File upload field ────────────────────────────────────────────────────────
+function FileUploadField({ label, sublabel, onUpload, currentUrl, uploading }: {
   label: string
+  sublabel?: string
   onUpload: (base64: string, fileName: string) => void
   currentUrl: string | null
   uploading: boolean
@@ -36,7 +40,8 @@ function FileUploadField({ label, onUpload, currentUrl, uploading }: {
   const ref = useRef<HTMLInputElement>(null)
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+      <label className="block text-xs font-medium text-gray-600 mb-0.5">{label}</label>
+      {sublabel && <p className="text-[10px] text-gray-400 mb-1">{sublabel}</p>}
       <div className="flex items-center gap-2">
         <button type="button" onClick={() => ref.current?.click()}
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-gray-300 text-xs text-gray-500 hover:border-green-400 hover:text-green-600 transition-colors">
@@ -71,7 +76,6 @@ function ShipmentEntryContent() {
   const [options, setOptions] = useState<{ shippers: string[]; consignees: string[] }>({ shippers: [], consignees: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [duplicateRow, setDuplicateRow] = useState<TempShipment | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [profileMap, setProfileMap] = useState<Record<string, string>>({})
@@ -79,10 +83,12 @@ function ShipmentEntryContent() {
   const [editForm, setEditForm] = useState(emptyForm)
   const [editSaving, setEditSaving] = useState(false)
 
-  // Drive file state for the current form
-  const [invoiceFile, setInvoiceFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
-  const [packingFile, setPackingFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
+  // Drive file state — real docs are shared per invoice_number, divide docs are per-row
+  const [realInvoiceFile, setRealInvoiceFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
+  const [realPackingFile, setRealPackingFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
   const [licenseFile, setLicenseFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
+  const [divInvoiceFile, setDivInvoiceFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
+  const [divPackingFile, setDivPackingFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
 
   async function loadRows() {
     try {
@@ -114,18 +120,59 @@ function ShipmentEntryContent() {
     return () => clearInterval(t)
   }, [])
 
-  async function uploadFile(base64: string, fileName: string, slot: 'invoice' | 'packing' | 'license') {
-    const setSlot = slot === 'invoice' ? setInvoiceFile : slot === 'packing' ? setPackingFile : setLicenseFile
+  // When invoice_number is entered, auto-fill real docs + real_cap from any existing row
+  const handleInvoiceNumberBlur = useCallback((invoiceNum: string) => {
+    if (!invoiceNum.trim()) return
+    const sibling = rows.find(r => r.invoice_number === invoiceNum.trim())
+    if (!sibling) return
+    if (sibling.invoice_drive_url) setRealInvoiceFile(s => s.url ? s : { url: sibling.invoice_drive_url, uploading: false })
+    if (sibling.packing_drive_url) setRealPackingFile(s => s.url ? s : { url: sibling.packing_drive_url, uploading: false })
+    if (sibling.license_drive_url) setLicenseFile(s => s.url ? s : { url: sibling.license_drive_url, uploading: false })
+    if (sibling.real_cap) setForm(f => f.real_cap ? f : { ...f, real_cap: sibling.real_cap! })
+  }, [rows])
+
+  async function uploadFile(
+    base64: string, fileName: string,
+    slot: 'real_invoice' | 'real_packing' | 'license' | 'div_invoice' | 'div_packing'
+  ) {
+    const setSlot = {
+      real_invoice: setRealInvoiceFile,
+      real_packing: setRealPackingFile,
+      license: setLicenseFile,
+      div_invoice: setDivInvoiceFile,
+      div_packing: setDivPackingFile,
+    }[slot]
     setSlot(s => ({ ...s, uploading: true }))
     try {
+      const docType = slot === 'real_invoice' ? 'shipment-invoice'
+        : slot === 'real_packing' ? 'shipment-packing'
+        : slot === 'license' ? 'shipment-license'
+        : slot === 'div_invoice' ? 'shipment-divide-invoice'
+        : 'shipment-divide-packing'
       const res = await fetch('/api/upload-to-drive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ base64, fileName, docType: `shipment-${slot}` }),
+        body: JSON.stringify({ base64, fileName, docType }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Upload failed')
-      setSlot({ url: d.driveLink, uploading: false })
+      const url: string = d.driveLink
+
+      setSlot({ url, uploading: false })
+
+      // For real docs (not divide): sync URL to all existing rows with the same invoice_number immediately
+      const invoiceNum = form.invoice_number.trim()
+      if (invoiceNum && ['real_invoice', 'real_packing', 'license'].includes(slot)) {
+        const field = slot === 'real_invoice' ? 'invoice_drive_url'
+          : slot === 'real_packing' ? 'packing_drive_url'
+          : 'license_drive_url'
+        await fetch('/api/temp-shipments', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+          body: JSON.stringify({ _syncRealDoc: true, invoice_number: invoiceNum, [field]: url }),
+        }).catch(() => {})
+        await loadRows()
+      }
     } catch (e: any) {
       setError(e.message)
       setSlot(s => ({ ...s, uploading: false }))
@@ -134,22 +181,9 @@ function ShipmentEntryContent() {
 
   async function handleSave() {
     setError('')
-    setDuplicateRow(null)
     if (!form.shipper.trim() || !form.invoice_number.trim()) {
       setError('Shipper and Shipment Invoice Number are required.')
       return
-    }
-    // Duplicate check on new_invoice / new_packing
-    if (form.new_invoice.trim() || form.new_packing.trim()) {
-      const dup = rows.find(r =>
-        (form.new_invoice.trim() && r.new_invoice?.trim() === form.new_invoice.trim()) ||
-        (form.new_packing.trim() && r.new_packing?.trim() === form.new_packing.trim())
-      )
-      if (dup) {
-        setDuplicateRow(dup)
-        setError('This New Invoice or New Packing number already exists — see highlighted entry below.')
-        return
-      }
     }
     setLoading(true)
     try {
@@ -158,17 +192,21 @@ function ShipmentEntryContent() {
         headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({
           ...form,
-          invoice_drive_url: invoiceFile.url || null,
-          packing_drive_url: packingFile.url || null,
+          invoice_drive_url: realInvoiceFile.url || null,
+          packing_drive_url: realPackingFile.url || null,
           license_drive_url: licenseFile.url || null,
+          divide_invoice_drive_url: divInvoiceFile.url || null,
+          divide_packing_drive_url: divPackingFile.url || null,
         }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Save failed')
       setForm(emptyForm)
-      setInvoiceFile({ url: null, uploading: false })
-      setPackingFile({ url: null, uploading: false })
+      setRealInvoiceFile({ url: null, uploading: false })
+      setRealPackingFile({ url: null, uploading: false })
       setLicenseFile({ url: null, uploading: false })
+      setDivInvoiceFile({ url: null, uploading: false })
+      setDivPackingFile({ url: null, uploading: false })
       await loadRows()
     } catch (e: any) {
       setError(e.message)
@@ -183,24 +221,27 @@ function ShipmentEntryContent() {
       invoice_number: r.invoice_number,
       packing_number: r.packing_number || '',
       consignee: r.consignee || '',
-      cap: r.cap || '',
+      real_cap: r.real_cap || '',
+      cap: '',                   // divide_cap is per-row, don't copy
       new_invoice: '',
       new_packing: '',
     })
-    setInvoiceFile({ url: null, uploading: false })
-    setPackingFile({ url: null, uploading: false })
-    setLicenseFile({ url: null, uploading: false })
+    // Auto-fill shared real docs
+    setRealInvoiceFile({ url: r.invoice_drive_url, uploading: false })
+    setRealPackingFile({ url: r.packing_drive_url, uploading: false })
+    setLicenseFile({ url: r.license_drive_url, uploading: false })
+    setDivInvoiceFile({ url: null, uploading: false })
+    setDivPackingFile({ url: null, uploading: false })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Remove this shipment entry? (Drive documents will also be deleted)')) return
+    if (!confirm('Remove this shipment entry?')) return
     try {
       const res = await fetch(`/api/temp-shipments?id=${id}`, { method: 'DELETE', headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Delete failed')
       setRows(prev => prev.filter(r => r.id !== id))
-      if (duplicateRow?.id === id) setDuplicateRow(null)
     } catch (e: any) {
       setError(e.message)
     }
@@ -210,7 +251,8 @@ function ShipmentEntryContent() {
     setEditRow(r)
     setEditForm({
       shipper: r.shipper, invoice_number: r.invoice_number, packing_number: r.packing_number || '',
-      consignee: r.consignee || '', cap: r.cap || '', new_invoice: r.new_invoice || '', new_packing: r.new_packing || '',
+      consignee: r.consignee || '', real_cap: r.real_cap || '', cap: r.cap || '',
+      new_invoice: r.new_invoice || '', new_packing: r.new_packing || '',
     })
   }
 
@@ -233,7 +275,13 @@ function ShipmentEntryContent() {
     }
   }
 
-  const anyUploading = invoiceFile.uploading || packingFile.uploading || licenseFile.uploading
+  const anyUploading = realInvoiceFile.uploading || realPackingFile.uploading || licenseFile.uploading || divInvoiceFile.uploading || divPackingFile.uploading
+
+  // Group rows by invoice_number to show real_cap / divide_cap totals
+  const divCapSumByInvoice = rows.reduce<Record<string, number>>((acc, r) => {
+    if (r.invoice_number) acc[r.invoice_number] = (acc[r.invoice_number] || 0) + (parseInt(r.cap || '0', 10))
+    return acc
+  }, {})
 
   return (
     <div className="p-6">
@@ -251,98 +299,138 @@ function ShipmentEntryContent() {
         </div>
       )}
 
-      {canUse && <div className="card mb-6">
-        {/* Row 1: core shipment fields */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Shipper *</label>
-            <input value={form.shipper} onChange={e => setForm({ ...form, shipper: e.target.value })}
-              list="shipper-options" placeholder="Pick or type new..."
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-            <datalist id="shipper-options">{options.shippers.map(s => <option key={s} value={s}/>)}</datalist>
+      {canUse && (
+        <div className="card mb-6 space-y-4">
+          {/* Row 1: core fields */}
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Shipper *</label>
+              <input value={form.shipper} onChange={e => setForm({ ...form, shipper: e.target.value })}
+                list="shipper-options" placeholder="Pick or type new..."
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+              <datalist id="shipper-options">{options.shippers.map(s => <option key={s} value={s}/>)}</datalist>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Shipment Invoice Number *</label>
+              <input value={form.invoice_number}
+                onChange={e => setForm({ ...form, invoice_number: e.target.value })}
+                onBlur={e => handleInvoiceNumberBlur(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Packing Number</label>
+              <input value={form.packing_number} onChange={e => setForm({ ...form, packing_number: e.target.value })}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Consignee</label>
+              <input value={form.consignee} onChange={e => setForm({ ...form, consignee: e.target.value })}
+                list="consignee-options" placeholder="Pick or type new..."
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+              <datalist id="consignee-options">{options.consignees.map(c => <option key={c} value={c}/>)}</datalist>
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Shipment Invoice Number *</label>
-            <input value={form.invoice_number} onChange={e => setForm({ ...form, invoice_number: e.target.value })}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Packing Number</label>
-            <input value={form.packing_number} onChange={e => setForm({ ...form, packing_number: e.target.value })}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Consignee</label>
-            <input value={form.consignee} onChange={e => setForm({ ...form, consignee: e.target.value })}
-              list="consignee-options" placeholder="Pick or type new..."
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-            <datalist id="consignee-options">{options.consignees.map(c => <option key={c} value={c}/>)}</datalist>
-          </div>
-        </div>
 
-        {/* Row 2: new_invoice, new_packing, cap */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">New Invoice No.</label>
-            <input value={form.new_invoice} onChange={e => setForm({ ...form, new_invoice: e.target.value })}
-              placeholder="For Add Same flow"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+          {/* Row 2: CAP fields + New Invoice/Packing */}
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Real CAP</label>
+              <p className="text-[10px] text-gray-400 mb-1">Total containers for this invoice</p>
+              <input value={form.real_cap} onChange={e => setForm({ ...form, real_cap: e.target.value })}
+                placeholder="e.g. 5"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Divide CAP</label>
+              <p className="text-[10px] text-gray-400 mb-1">This entry's split (sum must ≤ Real CAP)</p>
+              <input value={form.cap} onChange={e => setForm({ ...form, cap: e.target.value })}
+                placeholder="e.g. 2"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">New Invoice No.</label>
+              <input value={form.new_invoice} onChange={e => setForm({ ...form, new_invoice: e.target.value })}
+                placeholder="For split/divide flow"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">New Packing No.</label>
+              <input value={form.new_packing} onChange={e => setForm({ ...form, new_packing: e.target.value })}
+                placeholder="For split/divide flow"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">New Packing No.</label>
-            <input value={form.new_packing} onChange={e => setForm({ ...form, new_packing: e.target.value })}
-              placeholder="For Add Same flow"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">CAP</label>
-            <input value={form.cap} onChange={e => setForm({ ...form, cap: e.target.value })}
-              placeholder="Container / capacity note"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-          </div>
-        </div>
 
-        {/* Row 3: file uploads */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-          <FileUploadField label="Invoice PDF" currentUrl={invoiceFile.url} uploading={invoiceFile.uploading}
-            onUpload={(b64, name) => uploadFile(b64, name, 'invoice')}/>
-          <FileUploadField label="Packing List PDF" currentUrl={packingFile.url} uploading={packingFile.uploading}
-            onUpload={(b64, name) => uploadFile(b64, name, 'packing')}/>
-          <FileUploadField label="License / Other" currentUrl={licenseFile.url} uploading={licenseFile.uploading}
-            onUpload={(b64, name) => uploadFile(b64, name, 'license')}/>
-        </div>
+          {/* Row 3: Real docs (shared per invoice_number) */}
+          <div>
+            <p className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+              <Link size={12} className="text-blue-500"/>Real Documents
+              <span className="font-normal text-gray-400">(shared across all entries with the same Invoice Number)</span>
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-4 border-l-2 border-blue-100">
+              <FileUploadField label="Real Invoice PDF" currentUrl={realInvoiceFile.url} uploading={realInvoiceFile.uploading}
+                onUpload={(b64, name) => uploadFile(b64, name, 'real_invoice')}/>
+              <FileUploadField label="Real Packing List PDF" currentUrl={realPackingFile.url} uploading={realPackingFile.uploading}
+                onUpload={(b64, name) => uploadFile(b64, name, 'real_packing')}/>
+              <FileUploadField label="License / Other" currentUrl={licenseFile.url} uploading={licenseFile.uploading}
+                onUpload={(b64, name) => uploadFile(b64, name, 'license')}/>
+            </div>
+          </div>
 
-        <button onClick={handleSave} disabled={loading || anyUploading} className="btn-primary flex items-center gap-2">
-          <Plus size={16}/>{loading ? 'Saving...' : 'Save Shipment'}
-        </button>
-      </div>}
+          {/* Row 4: Divide docs (per-row) */}
+          <div>
+            <p className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+              <FileText size={12} className="text-purple-500"/>Divide Documents
+              <span className="font-normal text-gray-400">(specific to this split entry)</span>
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pl-4 border-l-2 border-purple-100">
+              <FileUploadField label="Divide Invoice PDF" currentUrl={divInvoiceFile.url} uploading={divInvoiceFile.uploading}
+                onUpload={(b64, name) => uploadFile(b64, name, 'div_invoice')}/>
+              <FileUploadField label="Divide Packing List PDF" currentUrl={divPackingFile.url} uploading={divPackingFile.uploading}
+                onUpload={(b64, name) => uploadFile(b64, name, 'div_packing')}/>
+            </div>
+          </div>
+
+          <button onClick={handleSave} disabled={loading || anyUploading} className="btn-primary flex items-center gap-2">
+            <Plus size={16}/>{loading ? 'Saving...' : 'Save Shipment'}
+          </button>
+        </div>
+      )}
 
       <div className="card overflow-hidden p-0">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                {['Shipper', 'Invoice', 'Packing', 'New Invoice', 'New Packing', 'CAP', 'Docs', 'Created By', 'Date', 'Actions'].map(h => (
-                  <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wide">{h}</th>
+                {['Shipper', 'Invoice', 'Packing', 'New Inv', 'New Pkg', 'Real CAP', 'Div CAP', 'Docs', 'Created By', 'Date', 'Actions'].map(h => (
+                  <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {rows.map(r => {
-                const isDup = duplicateRow?.id === r.id
-                const docs: DriveFile[] = [
-                  { label: 'Invoice', url: r.invoice_drive_url },
-                  { label: 'Packing', url: r.packing_drive_url },
+                const realCap = parseInt(r.real_cap || '0', 10)
+                const divSum = divCapSumByInvoice[r.invoice_number] || 0
+                const capOver = realCap > 0 && divSum > realCap
+                const docs = [
+                  { label: 'Real Inv', url: r.invoice_drive_url },
+                  { label: 'Real Pkg', url: r.packing_drive_url },
                   { label: 'License', url: r.license_drive_url },
+                  { label: 'Div Inv', url: r.divide_invoice_drive_url },
+                  { label: 'Div Pkg', url: r.divide_packing_drive_url },
                 ].filter(d => d.url)
                 return (
-                  <tr key={r.id} className={isDup ? 'bg-amber-50 ring-2 ring-inset ring-amber-300' : 'hover:bg-gray-50'}>
+                  <tr key={r.id} className="hover:bg-gray-50">
                     <td className="px-3 py-3 text-sm">{r.shipper}</td>
                     <td className="px-3 py-3 font-mono text-xs">{r.invoice_number}</td>
                     <td className="px-3 py-3 text-xs">{r.packing_number || '—'}</td>
                     <td className="px-3 py-3 font-mono text-xs text-blue-700">{r.new_invoice || '—'}</td>
                     <td className="px-3 py-3 font-mono text-xs text-blue-700">{r.new_packing || '—'}</td>
-                    <td className="px-3 py-3 text-xs text-purple-700">{r.cap || '—'}</td>
+                    <td className="px-3 py-3 text-xs font-medium text-indigo-700">{r.real_cap || '—'}</td>
+                    <td className={`px-3 py-3 text-xs font-medium ${capOver ? 'text-red-600' : 'text-purple-700'}`}>
+                      {r.cap || '—'}
+                      {capOver && <span className="ml-1 text-[10px] text-red-500">⚠ over!</span>}
+                    </td>
                     <td className="px-3 py-3">
                       <div className="flex flex-col gap-0.5">
                         {docs.length === 0 ? <span className="text-gray-300 text-xs">—</span> : docs.map(d => (
@@ -352,11 +440,11 @@ function ShipmentEntryContent() {
                       </div>
                     </td>
                     <td className="px-3 py-3 text-xs text-gray-600">{r.created_by ? (profileMap[r.created_by] || '—') : '—'}</td>
-                    <td className="px-3 py-3 text-gray-400 text-xs">{new Date(r.created_at).toLocaleDateString()}</td>
+                    <td className="px-3 py-3 text-gray-400 text-xs whitespace-nowrap">{new Date(r.created_at).toLocaleDateString()}</td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-1">
                         {canUse && (
-                          <button onClick={() => handleAddSame(r)} title="Add Same (copy this row)"
+                          <button onClick={() => handleAddSame(r)} title="Add Same (split this invoice)"
                             className="p-1.5 rounded hover:bg-blue-50 text-blue-500"><Copy size={13}/></button>
                         )}
                         {(isAdmin || r.created_by === currentUserId) && (
@@ -394,7 +482,9 @@ function ShipmentEntryContent() {
               {[
                 ['Shipper', 'shipper'], ['Invoice Number', 'invoice_number'],
                 ['Packing Number', 'packing_number'], ['Consignee', 'consignee'],
-                ['New Invoice No.', 'new_invoice'], ['New Packing No.', 'new_packing'], ['CAP', 'cap'],
+                ['Real CAP (total for invoice)', 'real_cap'],
+                ['Divide CAP (this entry)', 'cap'],
+                ['New Invoice No.', 'new_invoice'], ['New Packing No.', 'new_packing'],
               ].map(([label, key]) => (
                 <div key={key}>
                   <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
