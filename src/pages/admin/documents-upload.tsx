@@ -1904,6 +1904,7 @@ function BillsPanel() {
   const [search, setSearch] = useState('')
   const [searching, setSearching] = useState(false)
   const [matches, setMatches] = useState<CusdecMatch[]>([])
+  const [showDropdown, setShowDropdown] = useState(false)
   const [selected, setSelected] = useState<CusdecMatch | null>(null)
   const [bills, setBills] = useState<BillRecord[]>([])
   const [loadingBills, setLoadingBills] = useState(false)
@@ -1913,23 +1914,43 @@ function BillsPanel() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [status, setStatus] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  async function searchCusdec() {
-    if (!search.trim()) return
+  async function doSearch(term: string) {
     setSearching(true)
     try {
-      const { data } = await supabase
-        .from('cusdec').select('id, code, number, exporter, reference')
-        .or(`number.ilike.%${search.trim()}%,reference.ilike.%${search.trim()}%`)
-        .limit(10)
+      let q = supabase.from('cusdec').select('id, code, number, exporter, reference')
+      if (term.trim()) {
+        q = q.or(`number.ilike.%${term.trim()}%,reference.ilike.%${term.trim()}%`)
+      }
+      const { data } = await q.limit(15)
       setMatches((data as CusdecMatch[]) || [])
     } catch { setMatches([]) }
     finally { setSearching(false) }
   }
 
+  function handleSearchChange(val: string) {
+    setSearch(val)
+    if (selected) { setSelected(null); setBills([]) }
+    setShowDropdown(true)
+    if (searchTimeout.current) clearTimeout(searchTimeout.current)
+    searchTimeout.current = setTimeout(() => doSearch(val), 250)
+  }
+
+  function handleSearchFocus() {
+    setShowDropdown(true)
+    if (matches.length === 0 && !selected) doSearch(search)
+  }
+
+  function handleSearchBlur() {
+    // delay so click on dropdown item fires first
+    setTimeout(() => setShowDropdown(false), 150)
+  }
+
   async function selectCusdec(c: CusdecMatch) {
     setSelected(c)
     setMatches([])
+    setShowDropdown(false)
     setSearch(`${c.number}${c.reference ? ' · ' + c.reference : ''}`)
     loadBills(c.number)
   }
@@ -2003,27 +2024,27 @@ function BillsPanel() {
         </h2>
 
         {/* Shipment search */}
-        <div>
+        <div className="relative">
           <label className="block text-xs font-medium text-gray-600 mb-1">Shipment / CUSDEC Number</label>
           <div className="flex gap-2">
-            <input
-              value={search} onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && searchCusdec()}
-              placeholder="e.g. E 41423 or reference…"
-              className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"/>
-            <button onClick={searchCusdec} disabled={searching}
-              className="px-3 py-2 rounded-lg text-xs font-medium text-white disabled:opacity-50 flex-shrink-0"
-              style={{ background: '#1B3A5C' }}>
-              {searching ? <Loader size={12} className="animate-spin"/> : <Search size={12}/>}
-            </button>
+            <div className="relative flex-1">
+              <input
+                value={search}
+                onChange={e => handleSearchChange(e.target.value)}
+                onFocus={handleSearchFocus}
+                onBlur={handleSearchBlur}
+                placeholder="Type to search by number or reference…"
+                className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 pr-7 focus:outline-none focus:border-blue-400"/>
+              {searching && <Loader size={11} className="animate-spin text-gray-400 absolute right-2 top-1/2 -translate-y-1/2"/>}
+            </div>
           </div>
 
-          {/* Search results */}
-          {matches.length > 0 && (
-            <div className="mt-1 border border-gray-200 rounded-lg overflow-hidden divide-y divide-gray-50">
+          {/* Live search results dropdown */}
+          {showDropdown && !selected && matches.length > 0 && (
+            <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden divide-y divide-gray-50 max-h-64 overflow-y-auto">
               {matches.map(c => (
-                <button key={c.id} onClick={() => selectCusdec(c)}
-                  className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition-colors">
+                <button key={c.id} onMouseDown={() => selectCusdec(c)}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-blue-50 transition-colors">
                   <p className="font-medium text-gray-800 flex items-center gap-2 flex-wrap">
                     {c.number} <span className="text-gray-400 font-normal">({c.code})</span>
                     {c.reference && <span className="text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">{c.reference}</span>}

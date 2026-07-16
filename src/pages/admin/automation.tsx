@@ -1174,7 +1174,7 @@ interface PdfAnnotation {
   // units on download based on the rendered image dimensions
   xFrac: number
   yFrac: number
-  type: 'text' | 'highlight'
+  type: 'text' | 'highlight' | 'whiteout'
   text: string
   fontSize: number
   color: string
@@ -1197,7 +1197,7 @@ function PdfEditorPanel() {
   const [pages, setPages] = useState<RenderedPage[]>([]) // rendered page images
   const [currentPage, setCurrentPage] = useState(0)
   const [loadingPage, setLoadingPage] = useState(false)
-  const [tool, setTool] = useState<'text' | 'highlight'>('text')
+  const [tool, setTool] = useState<'text' | 'highlight' | 'whiteout'>('text')
   const [annotations, setAnnotations] = useState<PdfAnnotation[]>([])
   const [pendingInput, setPendingInput] = useState<{ x: number; y: number; xFrac: number; yFrac: number } | null>(null)
   const [pendingText, setPendingText] = useState('')
@@ -1284,13 +1284,13 @@ function PdfEditorPanel() {
   }
 
   function handleHighlightMouseDown(e: React.MouseEvent<HTMLImageElement>) {
-    if (tool !== 'highlight') return
+    if (tool !== 'highlight' && tool !== 'whiteout') return
     const rect = (e.target as HTMLImageElement).getBoundingClientRect()
     setDragStart({ x: e.clientX - rect.left, y: e.clientY - rect.top })
   }
 
   function handleHighlightMouseUp(e: React.MouseEvent<HTMLImageElement>) {
-    if (tool !== 'highlight' || !dragStart) return
+    if ((tool !== 'highlight' && tool !== 'whiteout') || !dragStart) return
     const rect = (e.target as HTMLImageElement).getBoundingClientRect()
     const x2 = e.clientX - rect.left
     const y2 = e.clientY - rect.top
@@ -1304,10 +1304,10 @@ function PdfEditorPanel() {
         page: currentPage,
         xFrac: x / rect.width,
         yFrac: y / rect.height,
-        type: 'highlight',
+        type: tool as 'highlight' | 'whiteout',
         text: '',
         fontSize: 0,
-        color: '#FFFF00',
+        color: tool === 'whiteout' ? '#FFFFFF' : '#FFFF00',
         width: w / rect.width,
         height: h / rect.height,
       }])
@@ -1362,6 +1362,16 @@ function PdfEditorPanel() {
             height: ann.height * pdfH,
             color: rgb(1, 1, 0),
             opacity: 0.35,
+          })
+        } else if (ann.type === 'whiteout') {
+          const pdfX = ann.xFrac * pdfW
+          const pdfY = (1 - ann.yFrac - ann.height) * pdfH
+          pg.drawRectangle({
+            x: pdfX, y: pdfY,
+            width: ann.width * pdfW,
+            height: ann.height * pdfH,
+            color: rgb(1, 1, 1),
+            opacity: 1,
           })
         }
       }
@@ -1431,6 +1441,11 @@ function PdfEditorPanel() {
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tool === 'highlight' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>
                   <Highlighter size={12}/>Highlight
                 </button>
+                <button onClick={() => setTool('whiteout')}
+                  title="Cover existing text with white — then add new text on top"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tool === 'whiteout' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>
+                  <Eraser size={12}/>Whiteout
+                </button>
               </div>
 
               {tool === 'text' && (
@@ -1492,7 +1507,7 @@ function PdfEditorPanel() {
                     ref={imgRef}
                     src={`data:image/png;base64,${page.png}`}
                     alt={`Page ${currentPage + 1}`}
-                    style={{ display: 'block', maxWidth: '100%', borderRadius: 'inherit', cursor: tool === 'text' ? 'text' : 'crosshair' }}
+                    style={{ display: 'block', maxWidth: '100%', borderRadius: 'inherit', cursor: tool === 'text' ? 'text' : tool === 'whiteout' ? 'cell' : 'crosshair' }}
                     onClick={handleImgClick}
                     onMouseDown={handleHighlightMouseDown}
                     onMouseUp={handleHighlightMouseUp}
@@ -1531,6 +1546,20 @@ function PdfEditorPanel() {
                             width: `${ann.width * 100}%`,
                             height: `${ann.height * 100}%`,
                             background: '#FFFF00', opacity: 0.4, pointerEvents: 'none',
+                          }}/>
+                        )
+                      }
+                      if (ann.type === 'whiteout') {
+                        return (
+                          <div key={ann.id} style={{
+                            position: 'absolute',
+                            left: `${ann.xFrac * 100}%`,
+                            top: `${ann.yFrac * 100}%`,
+                            width: `${ann.width * 100}%`,
+                            height: `${ann.height * 100}%`,
+                            background: '#ffffff',
+                            border: '1.5px dashed #9ca3af',
+                            pointerEvents: 'none',
                           }}/>
                         )
                       }
