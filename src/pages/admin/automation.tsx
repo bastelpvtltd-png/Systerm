@@ -1441,6 +1441,25 @@ function PdfEditorPanel() {
     }
   }
 
+  async function openInSejda() {
+    if (!origBase64) return
+    setStatus('Uploading to Sejda…')
+    try {
+      const res = await fetch('/api/pdf-temp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...await authHeader() },
+        body: JSON.stringify({ base64: origBase64 }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'upload failed')
+      const { filename } = await res.json()
+      const pdfUrl = `${window.location.origin}/api/pdf-serve?file=${encodeURIComponent(filename)}`
+      window.open(`https://www.sejda.com/pdf-editor?url=${encodeURIComponent(pdfUrl)}`, '_blank')
+      setStatus('')
+    } catch (e: any) {
+      setStatus(`Sejda error: ${e.message}`)
+    }
+  }
+
   function clearAll() {
     setOrigBase64('')
     setPages([])
@@ -1533,6 +1552,12 @@ function PdfEditorPanel() {
                   <ChevronRight size={14}/>
                 </button>
               </div>
+
+              <button onClick={openInSejda}
+                title="Upload this PDF to Sejda's editor in a new tab"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-indigo-200 text-indigo-700 hover:bg-indigo-50">
+                <ExternalLink size={12}/>Open in Sejda
+              </button>
 
               <button onClick={downloadEdited} disabled={downloading}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
