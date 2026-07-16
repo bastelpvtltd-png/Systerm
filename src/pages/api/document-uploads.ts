@@ -42,6 +42,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }).select().single()
       if (error) throw error
 
+      // Upload-time work count: insert immediately when doc is saved so the
+      // count reflects uploads, not just mail/downloads (log-document-action
+      // handles the mail/download side separately for the existing salary flow).
+      try {
+        if (doc_type === 'cdn' && reason === 'Container Moved') {
+          await supabaseAdmin.from('work_counts').insert({
+            user_id: authed.userId, user_name: uploadedByName,
+            document_id: data.id, file_name,
+            reason, action: 'upload',
+            cdn_inc: 1, cusdec_inc: 0, cap_inc: 0,
+          })
+        } else if (doc_type === 'cusdec' && reason === 'CUSDEC Passed') {
+          await supabaseAdmin.from('work_counts').insert({
+            user_id: authed.userId, user_name: uploadedByName,
+            document_id: data.id, file_name,
+            reason, action: 'upload',
+            cdn_inc: 0, cusdec_inc: 1, cap_inc: 0,
+          })
+        }
+      } catch { /* non-fatal — work_counts is supplemental */ }
+
       if (notify) {
         const nowIso = new Date().toISOString()
         await supabaseAdmin.from('dashboard_notifications').insert({

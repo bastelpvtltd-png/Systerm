@@ -1122,6 +1122,10 @@ function MyTasksContent() {
 
       <OtherWorkPanel userId={userId} isAdmin={isAdmin}/>
 
+      {(isAdmin || has('section:my-tasks.upload-count')) && (
+        <UploadCountPanel userId={userId} isAdmin={isAdmin}/>
+      )}
+
       <div className="flex gap-2 mb-4">
         {(['pending','done'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)}
@@ -1164,6 +1168,158 @@ function MyTasksContent() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Upload Count Panel ───────────────────────────────────────────────────────
+// Shows per-user CDN (Container Moved) and CUSDEC (CUSDEC Passed) upload
+// counts. Counts are inserted at upload time by document-uploads.ts with
+// action='upload'. View-only for regular users; admin can delete rows.
+
+function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
+  const [myRows,  setMyRows]  = useState<WorkCountRow[]>([])
+  const [allRows, setAllRows] = useState<WorkCountRow[]>([])
+  const [users,   setUsers]   = useState<Profile[]>([])
+  const [showAll, setShowAll] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  async function load() {
+    try {
+      const h = await authHeader()
+      const r = await fetch('/api/work-counts', { headers: h })
+      const d = await r.json()
+      if (d.rows) setMyRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload'))
+    } catch {}
+  }
+
+  async function loadAll() {
+    try {
+      const h = await authHeader()
+      const r = await fetch('/api/work-counts?all=1', { headers: h })
+      const d = await r.json()
+      if (d.rows) setAllRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload'))
+      const { data } = await supabase.from('profiles').select('id, username, full_name')
+      setUsers((data as any) || [])
+    } catch {}
+  }
+
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function deleteRow(id: string) {
+    setDeletingId(id)
+    try {
+      const h = await authHeader()
+      const r = await fetch(`/api/work-counts?id=${id}`, { method: 'DELETE', headers: h })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      setMyRows(prev => prev.filter(x => x.id !== id))
+      setAllRows(prev => prev.filter(x => x.id !== id))
+    } catch (e: any) { setError(e.message) }
+    finally { setDeletingId(null) }
+  }
+
+  const myCdn    = myRows.reduce((s, r) => s + (r.cdn_inc || 0), 0)
+  const myCusdec = myRows.reduce((s, r) => s + (r.cusdec_inc || 0), 0)
+
+  // Group all rows by user for admin summary
+  const byUser = allRows.reduce((acc, r) => {
+    const name = r.user_name || 'Unknown'
+    if (!acc[name]) acc[name] = { cdn: 0, cusdec: 0, rows: [] }
+    acc[name].cdn    += r.cdn_inc    || 0
+    acc[name].cusdec += r.cusdec_inc || 0
+    acc[name].rows.push(r)
+    return acc
+  }, {} as Record<string, { cdn: number; cusdec: number; rows: WorkCountRow[] }>)
+
+  return (
+    <div className="card mb-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+          <BarChart2 size={15} className="text-indigo-500"/>Upload Count
+        </h2>
+        {isAdmin && (
+          <button onClick={() => { setShowAll(x => !x); if (!showAll) loadAll() }}
+            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
+            <UsersIcon size={12}/>{showAll ? 'Hide' : 'Show all users'}
+          </button>
+        )}
+      </div>
+
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+
+      {/* My counts */}
+      {!showAll && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div className="bg-green-50 rounded-xl p-3 text-center">
+              <p className="text-2xl font-bold text-green-700">{myCdn}</p>
+              <p className="text-[11px] text-green-600 mt-0.5">Container Moved (CDN)</p>
+            </div>
+            <div className="bg-blue-50 rounded-xl p-3 text-center">
+              <p className="text-2xl font-bold text-blue-700">{myCusdec}</p>
+              <p className="text-[11px] text-blue-600 mt-0.5">CUSDEC Passed</p>
+            </div>
+          </div>
+
+          {myRows.length > 0 && (
+            <div className="border border-gray-100 rounded-lg overflow-hidden">
+              <div className="max-h-44 overflow-y-auto divide-y divide-gray-50">
+                {myRows.map(r => (
+                  <div key={r.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                    <div>
+                      <p className="text-gray-700 font-medium truncate max-w-xs">{r.file_name || '—'}</p>
+                      <p className="text-gray-400">{r.reason} · {new Date(r.created_at).toLocaleDateString('en-GB')}</p>
+                    </div>
+                    <span className={`font-bold text-sm ${r.cdn_inc ? 'text-green-600' : 'text-blue-600'}`}>
+                      {r.cdn_inc ? `CDN +${r.cdn_inc}` : `CUSDEC +${r.cusdec_inc}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {myRows.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No uploads counted yet</p>}
+        </>
+      )}
+
+      {/* Admin: all users */}
+      {isAdmin && showAll && (
+        <div className="space-y-3">
+          {Object.entries(byUser).map(([name, data]) => (
+            <div key={name} className="border border-gray-200 rounded-xl overflow-hidden">
+              <div className="px-3 py-2 bg-gray-50 flex items-center justify-between">
+                <span className="text-xs font-semibold text-gray-800">{name}</span>
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="text-green-600">CDN: <b>{data.cdn}</b></span>
+                  <span className="text-blue-600">CUSDEC: <b>{data.cusdec}</b></span>
+                </div>
+              </div>
+              <div className="max-h-40 overflow-y-auto divide-y divide-gray-50">
+                {data.rows.map(r => (
+                  <div key={r.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                    <div>
+                      <p className="text-gray-700 truncate max-w-sm">{r.file_name || '—'}</p>
+                      <p className="text-gray-400">{r.reason} · {new Date(r.created_at).toLocaleDateString('en-GB')}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className={`font-semibold ${r.cdn_inc ? 'text-green-600' : 'text-blue-600'}`}>
+                        {r.cdn_inc ? `CDN +${r.cdn_inc}` : `CUSDEC +${r.cusdec_inc}`}
+                      </span>
+                      <button onClick={() => deleteRow(r.id)} disabled={deletingId === r.id}
+                        className="text-gray-300 hover:text-red-500 disabled:opacity-40">
+                        {deletingId === r.id ? <Loader size={11} className="animate-spin"/> : <Trash2 size={11}/>}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          {Object.keys(byUser).length === 0 && <p className="text-xs text-gray-400 text-center py-4">No upload records yet</p>}
+        </div>
+      )}
     </div>
   )
 }

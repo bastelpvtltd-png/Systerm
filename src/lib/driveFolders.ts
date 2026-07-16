@@ -70,6 +70,16 @@ export const DOC_TYPE_FOLDER_NAMES: Record<string, string> = {
   template: 'Templates',
 }
 
+// Two-level path: mainFolder/Bills/{cusdecNumber}/
+export async function resolveBillFolderId(
+  drive: drive_v3.Drive,
+  mainFolderId: string,
+  cusdecNumber: string
+): Promise<string> {
+  const billsFolder = await getOrCreateSubfolder(drive, mainFolderId, 'Bills')
+  return getOrCreateSubfolder(drive, billsFolder, cusdecNumber.replace(/[/\\:*?"<>|]/g, '_'))
+}
+
 const folderIdCache = new Map<string, string>()
 
 // Finds the sub-folder by name under parentId, creating it if it doesn't exist yet.

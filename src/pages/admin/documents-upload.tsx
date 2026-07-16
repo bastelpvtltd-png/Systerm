@@ -7,7 +7,7 @@ import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
   Trash2, Pencil, FileWarning, Eye, RefreshCw, Plus, Lock, Unlock, Mail,
-  CheckSquare, Square, History, Send,
+  CheckSquare, Square, History, Send, Search,
 } from 'lucide-react'
 import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
 
@@ -31,7 +31,7 @@ type PdfField = {
   specNote?: string
   locked?: boolean
 }
-type Panel = 'upload' | 'preview' | 'admin-edit'
+type Panel = 'upload' | 'preview' | 'admin-edit' | 'bills'
 type ItemStatus = 'reading' | 'extracting' | 'ready' | 'saving' | 'saved' | 'error' | 'skipped'
 
 // CDN's container_no is expected to be the standard ISO 6346 shape (4
@@ -146,6 +146,7 @@ function DocumentsUploadContent() {
   const canSeeUploaded = has('section:documents-upload.uploaded')
   const canPreview = has('section:documents-upload.preview')
   const canAdminEdit = has('section:documents-upload.admin-edit')
+  const canBills = isAdmin || has('section:documents-upload.bills')
   const [uploaderName, setUploaderName] = useState('')
   const [uploaderId, setUploaderId] = useState('')
   useEffect(() => {
@@ -1000,8 +1001,10 @@ function DocumentsUploadContent() {
   }
 
   const canSeePreview = canUpload || canSeeUploaded || canPreview || isAdmin
-  const panelOptions: Panel[] = (['upload', 'preview', 'admin-edit'] as Panel[]).filter(p =>
-    p === 'upload' ? (canUpload || canSeeUploaded) : p === 'preview' ? canSeePreview : canAdminEdit
+  const panelOptions: Panel[] = (['upload', 'bills', 'preview', 'admin-edit'] as Panel[]).filter(p =>
+    p === 'upload' ? (canUpload || canSeeUploaded) :
+    p === 'bills' ? canBills :
+    p === 'preview' ? canSeePreview : canAdminEdit
   )
 
   return (
@@ -1018,7 +1021,7 @@ function DocumentsUploadContent() {
                 <button key={p} onClick={() => setPanel(p)}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors capitalize ${
                     panel === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                  }`}>{p === 'admin-edit' ? 'Admin Edit' : p}</button>
+                  }`}>{p === 'admin-edit' ? 'Admin Edit' : p === 'bills' ? 'Bills' : p}</button>
               ))}
             </div>
           )}
@@ -1163,6 +1166,9 @@ function DocumentsUploadContent() {
           )}
         </div>
         )}
+
+        {/* === BILLS panel === */}
+        {panel === 'bills' && canBills && <BillsPanel/>}
 
         {/* === PREVIEW panel: saved documents from anyone, read-only === */}
         {panel === 'preview' && canSeePreview && (
@@ -1871,5 +1877,255 @@ function DocumentsUploadContent() {
         />
       )}
     </>
+  )
+}
+
+// ── Bill Upload Panel ────────────────────────────────────────────────────────
+const BILL_SUBTYPES = [
+  { key: 'slpa_bill',          label: 'SLPA Bill' },
+  { key: 'trico_bill',         label: 'Trico Bill' },
+  { key: 'assessment_notice',  label: 'Assessment Notice' },
+  { key: 'amendment_receipt',  label: 'Amendment Receipt' },
+  { key: 'other',              label: 'Other' },
+]
+
+interface BillRecord {
+  id: string
+  file_name: string
+  drive_url: string
+  extracted_data: { bill_subtype?: string; cusdec_number?: string; reference?: string } | null
+  uploaded_by_name: string
+  created_at: string
+}
+interface CusdecMatch { id: string; code: string; number: string; exporter: string; reference?: string }
+
+function BillsPanel() {
+  const [search, setSearch] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [matches, setMatches] = useState<CusdecMatch[]>([])
+  const [selected, setSelected] = useState<CusdecMatch | null>(null)
+  const [bills, setBills] = useState<BillRecord[]>([])
+  const [loadingBills, setLoadingBills] = useState(false)
+  const [subtype, setSubtype] = useState('slpa_bill')
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [status, setStatus] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  async function searchCusdec() {
+    if (!search.trim()) return
+    setSearching(true)
+    try {
+      const { data } = await supabase
+        .from('cusdec').select('id, code, number, exporter, reference')
+        .or(`number.ilike.%${search.trim()}%,reference.ilike.%${search.trim()}%`)
+        .limit(10)
+      setMatches((data as CusdecMatch[]) || [])
+    } catch { setMatches([]) }
+    finally { setSearching(false) }
+  }
+
+  async function selectCusdec(c: CusdecMatch) {
+    setSelected(c)
+    setMatches([])
+    setSearch(`${c.number}${c.reference ? ' · ' + c.reference : ''}`)
+    loadBills(c.number)
+  }
+
+  async function loadBills(cusdecNumber: string) {
+    setLoadingBills(true)
+    try {
+      const h = await authHeader()
+      const r = await fetch(`/api/bill-uploads?cusdec_number=${encodeURIComponent(cusdecNumber)}`, { headers: h })
+      const d = await r.json()
+      setBills(d.bills || [])
+    } catch { setBills([]) }
+    finally { setLoadingBills(false) }
+  }
+
+  async function upload() {
+    if (!file || !selected) return
+    setUploading(true); setStatus('')
+    try {
+      const base64 = await new Promise<string>((res, rej) => {
+        const reader = new FileReader()
+        reader.onload = () => res((reader.result as string).split(',')[1])
+        reader.onerror = rej
+        reader.readAsDataURL(file)
+      })
+      const h = await authHeader()
+      const r = await fetch('/api/bill-uploads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({
+          base64,
+          fileName: file.name,
+          bill_subtype: subtype,
+          cusdec_number: selected.number,
+          cusdec_id: selected.id,
+          cusdec_reference: selected.reference || null,
+        }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      setFile(null); if (fileRef.current) fileRef.current.value = ''
+      setStatus('Uploaded!')
+      loadBills(selected.number)
+    } catch (e: any) { setStatus(`Error: ${e.message}`) }
+    finally { setUploading(false) }
+  }
+
+  async function deleteBill(id: string) {
+    if (!confirm('Delete this bill?')) return
+    setDeletingId(id)
+    try {
+      const h = await authHeader()
+      const r = await fetch(`/api/bill-uploads?id=${id}`, { method: 'DELETE', headers: h })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      setBills(prev => prev.filter(b => b.id !== id))
+    } catch (e: any) { setStatus(`Delete error: ${e.message}`) }
+    finally { setDeletingId(null) }
+  }
+
+  function subtypeLabel(key?: string) {
+    return BILL_SUBTYPES.find(s => s.key === key)?.label || key || 'Bill'
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      {/* Left: upload form */}
+      <div className="card space-y-4">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+          <Receipt size={15} className="text-red-500"/>Upload Bill
+        </h2>
+
+        {/* Shipment search */}
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Shipment / CUSDEC Number</label>
+          <div className="flex gap-2">
+            <input
+              value={search} onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && searchCusdec()}
+              placeholder="e.g. E 41423 or reference…"
+              className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"/>
+            <button onClick={searchCusdec} disabled={searching}
+              className="px-3 py-2 rounded-lg text-xs font-medium text-white disabled:opacity-50 flex-shrink-0"
+              style={{ background: '#1B3A5C' }}>
+              {searching ? <Loader size={12} className="animate-spin"/> : <Search size={12}/>}
+            </button>
+          </div>
+
+          {/* Search results */}
+          {matches.length > 0 && (
+            <div className="mt-1 border border-gray-200 rounded-lg overflow-hidden divide-y divide-gray-50">
+              {matches.map(c => (
+                <button key={c.id} onClick={() => selectCusdec(c)}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition-colors">
+                  <p className="font-medium text-gray-800">{c.number} <span className="text-gray-400 font-normal">({c.code})</span></p>
+                  <p className="text-gray-400 truncate">{c.exporter}{c.reference ? ` · Ref: ${c.reference}` : ''}</p>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selected && (
+            <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-blue-800">{selected.number}</p>
+                <p className="text-[11px] text-blue-600 truncate">{selected.exporter}</p>
+              </div>
+              <button onClick={() => { setSelected(null); setSearch(''); setBills([]) }}
+                className="text-blue-300 hover:text-blue-600"><X size={13}/></button>
+            </div>
+          )}
+        </div>
+
+        {/* Bill type */}
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Bill Type</label>
+          <select value={subtype} onChange={e => setSubtype(e.target.value)}
+            className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400">
+            {BILL_SUBTYPES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        </div>
+
+        {/* File */}
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">File</label>
+          {file ? (
+            <div className="flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2">
+              <span className="text-xs text-gray-700 truncate">{file.name}</span>
+              <button onClick={() => { setFile(null); if (fileRef.current) fileRef.current.value = '' }}
+                className="text-gray-300 hover:text-red-500"><X size={13}/></button>
+            </div>
+          ) : (
+            <button onClick={() => fileRef.current?.click()}
+              className="w-full border-2 border-dashed border-gray-200 rounded-lg py-6 text-center hover:border-blue-300 transition-colors">
+              <Upload size={18} className="mx-auto mb-1 text-gray-300"/>
+              <p className="text-xs text-gray-400">Click to select file</p>
+            </button>
+          )}
+          <input ref={fileRef} type="file" accept="*/*" className="hidden"
+            onChange={e => setFile(e.target.files?.[0] || null)}/>
+        </div>
+
+        {status && <p className={`text-xs ${status.startsWith('Error') ? 'text-red-600' : 'text-green-600'}`}>{status}</p>}
+
+        <button onClick={upload} disabled={uploading || !file || !selected}
+          className="w-full py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-40 flex items-center justify-center gap-2"
+          style={{ background: '#22A87A' }}>
+          {uploading ? <Loader size={14} className="animate-spin"/> : <Upload size={14}/>}
+          Upload Bill
+        </button>
+      </div>
+
+      {/* Right: uploaded bills for selected cusdec */}
+      <div className="card">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
+          <FileText size={15} className="text-gray-400"/>
+          {selected ? `Bills — ${selected.number}` : 'Bills'}
+        </h2>
+        {!selected ? (
+          <p className="text-xs text-gray-400 py-6 text-center">Search and select a shipment to see its bills</p>
+        ) : loadingBills ? (
+          <div className="flex items-center justify-center py-6"><Loader size={18} className="animate-spin text-gray-300"/></div>
+        ) : bills.length === 0 ? (
+          <p className="text-xs text-gray-400 py-6 text-center">No bills uploaded for this shipment yet</p>
+        ) : (
+          <div className="space-y-2">
+            {bills.map(b => (
+              <div key={b.id} className="flex items-center gap-3 border border-gray-100 rounded-lg px-3 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-gray-800 truncate">{b.file_name}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-md font-medium text-white"
+                      style={{ background: '#ef4444' }}>
+                      {subtypeLabel(b.extracted_data?.bill_subtype)}
+                    </span>
+                    <span className="text-[10px] text-gray-400">
+                      {b.uploaded_by_name} · {new Date(b.created_at).toLocaleDateString('en-GB')}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {b.drive_url && (
+                    <a href={b.drive_url} target="_blank" rel="noopener noreferrer"
+                      className="p-1.5 text-gray-400 hover:text-blue-600">
+                      <ExternalLink size={13}/>
+                    </a>
+                  )}
+                  <button onClick={() => deleteBill(b.id)} disabled={deletingId === b.id}
+                    className="p-1.5 text-gray-300 hover:text-red-500 disabled:opacity-40">
+                    {deletingId === b.id ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }

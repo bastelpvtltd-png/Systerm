@@ -7,13 +7,14 @@ import {
   Zap, Barcode as BarcodeIcon, Truck, RefreshCw,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Plus, Trash2,
   StickyNote, Save, Mail, CheckSquare, Square, AlertTriangle, Clock, Ship,
-  GitMerge, ExternalLink,
+  GitMerge, ExternalLink, FilePen, Upload, Download, Type, Highlighter,
+  ChevronLeft, ChevronRight, X, Eraser,
 } from 'lucide-react'
 
 type AutomationTab =
   | 'barcode' | 'trico' | 'data-updates'
   | 'boat-note-check' | 'export-release' | 'vessel-trigger'
-  | 'conflict-review' | 'cdn-approval' | 'notes'
+  | 'conflict-review' | 'cdn-approval' | 'notes' | 'pdf-editor'
 
 interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean; tin_vat?: string }
 
@@ -32,6 +33,7 @@ const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: stri
   { key: 'conflict-review', label: 'Conflict Review', icon: GitMerge, permission: 'section:automation.conflict-review' },
   { key: 'cdn-approval', label: 'CDN Approval', icon: CheckSquare, permission: 'section:automation.cdn-approval' },
   { key: 'notes', label: 'System Logic & Integration Notes', icon: StickyNote, permission: 'section:automation.notes' },
+  { key: 'pdf-editor', label: 'PDF Editor', icon: FilePen, permission: 'section:automation.pdf-editor' },
 ]
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -97,6 +99,7 @@ function AutomationContent() {
       {tab === 'conflict-review' && <ConflictReviewPanel/>}
       {tab === 'cdn-approval' && <CdnApprovalPanel/>}
       {tab === 'notes' && <SystemNotes/>}
+      {tab === 'pdf-editor' && <PdfEditorPanel/>}
     </div>
   )
 }
@@ -1153,6 +1156,441 @@ function SystemNotes() {
           ))}
           {notes.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No notes yet</p>}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── PDF Editor ─────────────────────────────────────────────────────────────
+// Client-side PDF annotator. Renders pages server-side (mupdf), lets the user
+// place text/highlight overlays on a canvas, then uses pdf-lib client-side to
+// burn those annotations into the PDF before download. Nothing is uploaded to
+// Drive — the edited file goes straight to the user's Downloads folder.
+
+interface PdfAnnotation {
+  id: string
+  page: number
+  // position as fractions of the rendered image (0–1), matched back to PDF
+  // units on download based on the rendered image dimensions
+  xFrac: number
+  yFrac: number
+  type: 'text' | 'highlight'
+  text: string
+  fontSize: number
+  color: string
+  width: number   // fraction of page width — only used for highlight rects
+  height: number  // fraction of page height — only used for highlight rects
+}
+
+interface RenderedPage {
+  png: string      // base64
+  width: number    // pixel width  (at 2× scale from mupdf)
+  height: number   // pixel height (at 2× scale from mupdf)
+  numPages: number
+}
+
+function PdfEditorPanel() {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const imgRef = useRef<HTMLImageElement>(null)
+
+  const [origBase64, setOrigBase64] = useState('')       // original PDF bytes
+  const [pages, setPages] = useState<RenderedPage[]>([]) // rendered page images
+  const [currentPage, setCurrentPage] = useState(0)
+  const [loadingPage, setLoadingPage] = useState(false)
+  const [tool, setTool] = useState<'text' | 'highlight'>('text')
+  const [annotations, setAnnotations] = useState<PdfAnnotation[]>([])
+  const [pendingInput, setPendingInput] = useState<{ x: number; y: number; xFrac: number; yFrac: number } | null>(null)
+  const [pendingText, setPendingText] = useState('')
+  const [fontSize, setFontSize] = useState(12)
+  const [color, setColor] = useState('#000000')
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
+  const [downloading, setDownloading] = useState(false)
+  const [status, setStatus] = useState('')
+
+  const page = pages[currentPage]
+
+  async function handleFile(file: File) {
+    setStatus('Reading file…')
+    const reader = new FileReader()
+    reader.onload = async () => {
+      const b64 = (reader.result as string).split(',')[1]
+      setOrigBase64(b64)
+      setAnnotations([])
+      setCurrentPage(0)
+      setPages([])
+      await loadPage(b64, 0)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  async function loadPage(base64: string, pageIndex: number) {
+    setLoadingPage(true)
+    setStatus(`Rendering page ${pageIndex + 1}…`)
+    try {
+      const r = await fetch('/api/render-page', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64, page: pageIndex }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      setPages(prev => {
+        const next = [...prev]
+        next[pageIndex] = d
+        return next
+      })
+      setStatus('')
+    } catch (e: any) {
+      setStatus(`Error: ${e.message}`)
+    } finally {
+      setLoadingPage(false)
+    }
+  }
+
+  async function goToPage(idx: number) {
+    setCurrentPage(idx)
+    setPendingInput(null)
+    if (!pages[idx] && origBase64) await loadPage(origBase64, idx)
+  }
+
+  function imgCoords(e: React.MouseEvent<HTMLImageElement>): { x: number; y: number; xFrac: number; yFrac: number } {
+    const rect = (e.target as HTMLImageElement).getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    return { x, y, xFrac: x / rect.width, yFrac: y / rect.height }
+  }
+
+  function handleImgClick(e: React.MouseEvent<HTMLImageElement>) {
+    if (tool !== 'text') return
+    const coords = imgCoords(e)
+    setPendingInput(coords)
+    setPendingText('')
+  }
+
+  function commitText() {
+    if (!pendingInput || !pendingText.trim()) { setPendingInput(null); return }
+    setAnnotations(prev => [...prev, {
+      id: `${Date.now()}`,
+      page: currentPage,
+      xFrac: pendingInput.xFrac,
+      yFrac: pendingInput.yFrac,
+      type: 'text',
+      text: pendingText.trim(),
+      fontSize,
+      color,
+      width: 0, height: 0,
+    }])
+    setPendingInput(null)
+    setPendingText('')
+  }
+
+  function handleHighlightMouseDown(e: React.MouseEvent<HTMLImageElement>) {
+    if (tool !== 'highlight') return
+    const rect = (e.target as HTMLImageElement).getBoundingClientRect()
+    setDragStart({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+  }
+
+  function handleHighlightMouseUp(e: React.MouseEvent<HTMLImageElement>) {
+    if (tool !== 'highlight' || !dragStart) return
+    const rect = (e.target as HTMLImageElement).getBoundingClientRect()
+    const x2 = e.clientX - rect.left
+    const y2 = e.clientY - rect.top
+    const x = Math.min(dragStart.x, x2)
+    const y = Math.min(dragStart.y, y2)
+    const w = Math.abs(x2 - dragStart.x)
+    const h = Math.abs(y2 - dragStart.y)
+    if (w > 5 && h > 5) {
+      setAnnotations(prev => [...prev, {
+        id: `${Date.now()}`,
+        page: currentPage,
+        xFrac: x / rect.width,
+        yFrac: y / rect.height,
+        type: 'highlight',
+        text: '',
+        fontSize: 0,
+        color: '#FFFF00',
+        width: w / rect.width,
+        height: h / rect.height,
+      }])
+    }
+    setDragStart(null)
+  }
+
+  function removeAnnotation(id: string) {
+    setAnnotations(prev => prev.filter(a => a.id !== id))
+  }
+
+  async function downloadEdited() {
+    if (!origBase64) return
+    setDownloading(true)
+    setStatus('Preparing download…')
+    try {
+      const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib')
+      const bytes = Uint8Array.from(atob(origBase64), c => c.charCodeAt(0))
+      const pdfDoc = await PDFDocument.load(bytes)
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+      const pdfPages = pdfDoc.getPages()
+
+      for (const ann of annotations) {
+        const pg = pdfPages[ann.page]
+        if (!pg) continue
+        const rendered = pages[ann.page]
+        // rendered image is at 2× mupdf scale; 1 PDF point = 2 rendered pixels
+        const pdfW = rendered ? rendered.width / 2 : pg.getWidth()
+        const pdfH = rendered ? rendered.height / 2 : pg.getHeight()
+
+        if (ann.type === 'text') {
+          const pdfX = ann.xFrac * pdfW
+          // PDF y-axis is from bottom; rendered y from top — flip it
+          const pdfY = (1 - ann.yFrac) * pdfH - ann.fontSize
+          const hexColor = ann.color || '#000000'
+          const r = parseInt(hexColor.slice(1, 3), 16) / 255
+          const g = parseInt(hexColor.slice(3, 5), 16) / 255
+          const b = parseInt(hexColor.slice(5, 7), 16) / 255
+          pg.drawText(ann.text, {
+            x: pdfX, y: pdfY,
+            size: ann.fontSize,
+            font: r === 0 && g === 0 && b === 0 ? font : boldFont,
+            color: rgb(r, g, b),
+          })
+        } else if (ann.type === 'highlight') {
+          const pdfX = ann.xFrac * pdfW
+          const pdfY = (1 - ann.yFrac - ann.height) * pdfH
+          pg.drawRectangle({
+            x: pdfX, y: pdfY,
+            width: ann.width * pdfW,
+            height: ann.height * pdfH,
+            color: rgb(1, 1, 0),
+            opacity: 0.35,
+          })
+        }
+      }
+
+      const edited = await pdfDoc.save()
+      const blob = new Blob([new Uint8Array(edited)], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = 'edited.pdf'; a.click()
+      URL.revokeObjectURL(url)
+      setStatus('Downloaded!')
+    } catch (e: any) {
+      setStatus(`Download error: ${e.message}`)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  function clearAll() {
+    setOrigBase64('')
+    setPages([])
+    setAnnotations([])
+    setCurrentPage(0)
+    setPendingInput(null)
+    setStatus('')
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  const pageAnnotations = annotations.filter(a => a.page === currentPage)
+
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+            <FilePen size={15} className="text-indigo-500"/>PDF Editor
+          </h2>
+          {origBase64 && (
+            <button onClick={clearAll} className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500">
+              <X size={12}/>Clear
+            </button>
+          )}
+        </div>
+
+        {!origBase64 ? (
+          <div
+            className="border-2 border-dashed border-gray-200 rounded-xl p-10 text-center cursor-pointer hover:border-indigo-300 transition-colors"
+            onClick={() => fileRef.current?.click()}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}>
+            <Upload size={24} className="mx-auto mb-2 text-gray-300"/>
+            <p className="text-sm text-gray-500">Click or drag a PDF to edit</p>
+            <p className="text-xs text-gray-400 mt-1">Annotate, add text, highlight — then download the edited PDF</p>
+            <input ref={fileRef} type="file" accept="application/pdf" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }}/>
+          </div>
+        ) : (
+          <>
+            {/* Toolbar */}
+            <div className="flex items-center gap-3 mb-3 flex-wrap">
+              <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg">
+                <button onClick={() => setTool('text')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tool === 'text' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>
+                  <Type size={12}/>Text
+                </button>
+                <button onClick={() => setTool('highlight')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tool === 'highlight' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>
+                  <Highlighter size={12}/>Highlight
+                </button>
+              </div>
+
+              {tool === 'text' && (
+                <>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                    Size
+                    <input type="number" min={6} max={72} value={fontSize}
+                      onChange={e => setFontSize(Number(e.target.value) || 12)}
+                      className="w-14 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none"/>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                    Color
+                    <input type="color" value={color} onChange={e => setColor(e.target.value)}
+                      className="w-7 h-7 rounded border border-gray-200 cursor-pointer p-0.5"/>
+                  </label>
+                </>
+              )}
+
+              <div className="flex-1"/>
+
+              <div className="flex items-center gap-2">
+                <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 0 || loadingPage}
+                  className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
+                  <ChevronLeft size={14}/>
+                </button>
+                <span className="text-xs text-gray-600">
+                  Page {currentPage + 1} / {page?.numPages || '?'}
+                </span>
+                <button onClick={() => goToPage(currentPage + 1)} disabled={!page || currentPage >= page.numPages - 1 || loadingPage}
+                  className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
+                  <ChevronRight size={14}/>
+                </button>
+              </div>
+
+              <button onClick={downloadEdited} disabled={downloading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
+                style={{ background: '#1B3A5C' }}>
+                {downloading ? <Loader size={12} className="animate-spin"/> : <Download size={12}/>}
+                Download
+              </button>
+            </div>
+
+            {status && (
+              <p className="text-xs text-indigo-600 mb-2 flex items-center gap-1">
+                {(loadingPage || downloading) && <Loader size={11} className="animate-spin"/>}{status}
+              </p>
+            )}
+
+            {/* Canvas area */}
+            <div className="relative inline-block border border-gray-200 rounded-xl overflow-hidden select-none"
+              style={{ maxWidth: '100%' }}>
+              {loadingPage ? (
+                <div className="w-full h-96 flex items-center justify-center bg-gray-50">
+                  <Loader size={24} className="animate-spin text-gray-400"/>
+                </div>
+              ) : page ? (
+                <>
+                  <img
+                    ref={imgRef}
+                    src={`data:image/png;base64,${page.png}`}
+                    alt={`Page ${currentPage + 1}`}
+                    style={{ display: 'block', maxWidth: '100%', cursor: tool === 'text' ? 'text' : 'crosshair' }}
+                    onClick={handleImgClick}
+                    onMouseDown={handleHighlightMouseDown}
+                    onMouseUp={handleHighlightMouseUp}
+                    draggable={false}
+                  />
+
+                  {/* Existing annotations overlay */}
+                  {pageAnnotations.map(ann => {
+                    if (!imgRef.current) return null
+                    const { width: dW, height: dH } = imgRef.current.getBoundingClientRect()
+                    const left = ann.xFrac * dW
+                    const top = ann.yFrac * dH
+                    if (ann.type === 'text') {
+                      return (
+                        <div key={ann.id} style={{ position: 'absolute', left, top, pointerEvents: 'auto', display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+                          <span style={{ fontSize: ann.fontSize * 0.75, color: ann.color, fontFamily: 'Helvetica, Arial, sans-serif', whiteSpace: 'pre', lineHeight: 1.2, userSelect: 'none' }}>
+                            {ann.text}
+                          </span>
+                          <button onClick={() => removeAnnotation(ann.id)}
+                            style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 3, padding: '1px 3px', fontSize: 9, cursor: 'pointer', lineHeight: 1 }}>
+                            ×
+                          </button>
+                        </div>
+                      )
+                    }
+                    if (ann.type === 'highlight') {
+                      const w = ann.width * dW
+                      const h = ann.height * dH
+                      return (
+                        <div key={ann.id} style={{ position: 'absolute', left, top, width: w, height: h, background: '#FFFF00', opacity: 0.4, pointerEvents: 'none' }}/>
+                      )
+                    }
+                    return null
+                  })}
+
+                  {/* Pending text input */}
+                  {pendingInput && (
+                    <div style={{ position: 'absolute', left: pendingInput.x, top: pendingInput.y, zIndex: 10 }}>
+                      <input
+                        autoFocus
+                        value={pendingText}
+                        onChange={e => setPendingText(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') commitText(); if (e.key === 'Escape') setPendingInput(null) }}
+                        onBlur={commitText}
+                        style={{
+                          fontSize: fontSize * 0.75,
+                          color,
+                          fontFamily: 'Helvetica, Arial, sans-serif',
+                          border: '1px dashed #6366f1',
+                          background: 'rgba(255,255,255,0.9)',
+                          padding: '1px 4px',
+                          outline: 'none',
+                          minWidth: 80,
+                          borderRadius: 3,
+                        }}
+                        placeholder="Type text…"
+                      />
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </div>
+
+            {/* Annotation list */}
+            {annotations.length > 0 && (
+              <div className="mt-3 border border-gray-100 rounded-lg overflow-hidden">
+                <div className="bg-gray-50 px-3 py-1.5 flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                    Annotations ({annotations.length})
+                  </span>
+                  <button onClick={() => setAnnotations([])} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500">
+                    <Eraser size={11}/>Clear all
+                  </button>
+                </div>
+                <div className="divide-y divide-gray-50 max-h-36 overflow-y-auto">
+                  {annotations.map((ann, i) => (
+                    <div key={ann.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                      <span className="text-gray-500">
+                        Pg {ann.page + 1} · {ann.type === 'text' ? `"${ann.text}"` : 'Highlight'}
+                      </span>
+                      <button onClick={() => removeAnnotation(ann.id)} className="text-gray-300 hover:text-red-500">
+                        <X size={12}/>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="text-xs text-gray-400 flex items-start gap-1.5">
+        <AlertTriangle size={12} className="flex-shrink-0 mt-0.5"/>
+        <span>
+          Annotations are applied to the downloaded PDF. The original file is not stored anywhere — only your download is saved.
+          Text tool: click to place · Highlight tool: click-drag · Press Enter or click elsewhere to confirm text.
+        </span>
       </div>
     </div>
   )
