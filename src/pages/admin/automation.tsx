@@ -1182,36 +1182,32 @@ interface PdfAnnotation {
   height: number  // fraction of page height — only used for highlight rects
 }
 
-interface RenderedPage {
-  png: string      // base64
-  width: number    // pixel width  (at 2× scale from mupdf)
-  height: number   // pixel height (at 2× scale from mupdf)
-  numPages: number
+// Text span extracted by PDF.js — cx/cy/cw/ch/cFontSize in canvas pixels,
+// pdfX/pdfY/pdfW/pdfFontSize in PDF points for pdf-lib burn step.
+interface PdfTextItem {
+  id: string; page: number
+  cx: number; cy: number; cw: number; ch: number; cFontSize: number
+  pdfX: number; pdfY: number; pdfW: number; pdfFontSize: number
+  text: string
 }
 
-// A text span extracted from the PDF — positioned in mupdf coordinates
-// (y from top, x from left, in PDF points). Used to create clickable
-// editable overlays so the user can edit existing PDF text in place.
-interface PdfTextItem {
-  id: string
-  page: number
-  x: number; y: number; w: number; h: number   // PDF points, y from top
-  text: string
-  fontSize: number
-  pageW: number; pageH: number  // total page dims in PDF points (for pdf-lib Y flip)
-}
+const PDF_SCALE = 1.5 // render scale — higher = sharper but heavier
 
 function PdfEditorPanel() {
   const fileRef = useRef<HTMLInputElement>(null)
-  const imgRef = useRef<HTMLImageElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const pdfDocRef = useRef<any>(null)
+  const viewportRef = useRef<{ width: number; height: number } | null>(null)
+  const renderTaskRef = useRef<any>(null)
 
-  const [origBase64, setOrigBase64] = useState('')       // original PDF bytes
-  const [pages, setPages] = useState<RenderedPage[]>([]) // rendered page images
+  const [origBase64, setOrigBase64] = useState('')
+  const [numPages, setNumPages] = useState(0)
   const [currentPage, setCurrentPage] = useState(0)
-  const [loadingPage, setLoadingPage] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [canvasReady, setCanvasReady] = useState(false)
   const [tool, setTool] = useState<'text' | 'highlight' | 'whiteout'>('text')
   const [annotations, setAnnotations] = useState<PdfAnnotation[]>([])
-  const [pendingInput, setPendingInput] = useState<{ x: number; y: number; xFrac: number; yFrac: number } | null>(null)
+  const [pendingInput, setPendingInput] = useState<{ xFrac: number; yFrac: number } | null>(null)
   const [pendingText, setPendingText] = useState('')
   const [fontSize, setFontSize] = useState(12)
   const [color, setColor] = useState('#000000')
@@ -1219,261 +1215,209 @@ function PdfEditorPanel() {
   const [downloading, setDownloading] = useState(false)
   const [status, setStatus] = useState('')
   const [textItems, setTextItems] = useState<PdfTextItem[]>([])
-  const [editedTexts, setEditedTexts] = useState<Record<string, string>>({}) // id → new text
+  const [editedTexts, setEditedTexts] = useState<Record<string, string>>({})
   const [editingId, setEditingId] = useState<string | null>(null)
 
-  const page = pages[currentPage]
+  const pageAnnotations = annotations.filter(a => a.page === currentPage)
+  const pageTextItems = textItems.filter(t => t.page === currentPage)
 
   async function handleFile(file: File) {
-    setStatus('Reading file…')
-    const reader = new FileReader()
-    reader.onload = async () => {
-      const b64 = (reader.result as string).split(',')[1]
-      setOrigBase64(b64)
-      setAnnotations([])
-      setCurrentPage(0)
-      setPages([])
-      await loadPage(b64, 0)
-    }
-    reader.readAsDataURL(file)
-  }
-
-  async function loadPage(base64: string, pageIndex: number) {
-    setLoadingPage(true)
-    setStatus(`Rendering page ${pageIndex + 1}…`)
+    setStatus('Loading…'); setLoading(true); setCanvasReady(false)
+    setAnnotations([]); setTextItems([]); setEditedTexts({}); setEditingId(null)
+    setCurrentPage(0); setPendingInput(null)
     try {
-      const [renderRes, textRes] = await Promise.all([
-        fetch('/api/render-page', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64, page: pageIndex }),
-        }),
-        fetch('/api/extract-pdf-text', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64, page: pageIndex }),
-        }),
-      ])
-      const d = await renderRes.json()
-      if (!renderRes.ok) throw new Error(d.error)
-      setPages(prev => { const next = [...prev]; next[pageIndex] = d; return next })
+      const ab = await file.arrayBuffer()
+      const bytes = new Uint8Array(ab)
+      // Store as base64 for download + openInSejda
+      let bin = ''; bytes.forEach(b => { bin += String.fromCharCode(b) })
+      setOrigBase64(btoa(bin))
 
-      if (textRes.ok) {
-        const td = await textRes.json()
-        setTextItems(prev => {
-          const filtered = prev.filter(it => it.page !== pageIndex)
-          const newItems: PdfTextItem[] = (td.items || []).map((it: any) => ({
-            ...it, page: pageIndex, pageW: td.pageW, pageH: td.pageH,
-          }))
-          return [...filtered, ...newItems]
-        })
-      }
-      setStatus('')
+      const pdfjs = await import('pdfjs-dist')
+      pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
+      const doc = await pdfjs.getDocument({ data: bytes }).promise
+      pdfDocRef.current = doc
+      setNumPages(doc.numPages)
+      await renderPage(doc, 0, pdfjs)
     } catch (e: any) {
       setStatus(`Error: ${e.message}`)
     } finally {
-      setLoadingPage(false)
+      setLoading(false)
+    }
+  }
+
+  async function renderPage(doc: any, pageIndex: number, pdfjsLib?: any) {
+    setLoading(true); setCanvasReady(false); setStatus(`Page ${pageIndex + 1}…`)
+    setEditingId(null); setPendingInput(null)
+    try {
+      if (!pdfjsLib) pdfjsLib = await import('pdfjs-dist')
+      const page = await doc.getPage(pageIndex + 1)
+      const vp = page.getViewport({ scale: PDF_SCALE })
+      viewportRef.current = { width: vp.width, height: vp.height }
+
+      const canvas = canvasRef.current!
+      canvas.width = vp.width
+      canvas.height = vp.height
+      const ctx = canvas.getContext('2d')!
+
+      if (renderTaskRef.current) { try { renderTaskRef.current.cancel() } catch {} }
+      const task = page.render({ canvasContext: ctx, viewport: vp })
+      renderTaskRef.current = task
+      await task.promise
+
+      // Extract text items using PDF.js — positions in canvas px and PDF pts
+      const tc = await page.getTextContent()
+      const items: PdfTextItem[] = []
+      tc.items.forEach((it: any, i: number) => {
+        const str = (it.str || '').trim()
+        if (!str) return
+        // tx = item transform applied to viewport → canvas-space coords
+        const tx = pdfjsLib.Util.transform(vp.transform, it.transform)
+        const cFontSize = Math.abs(tx[0]) || Math.abs(tx[3]) || 10
+        const cx = tx[4]
+        const cy = tx[5] - cFontSize                        // baseline → top
+        const cw = (it.width || 0) * PDF_SCALE || cFontSize * str.length * 0.55
+        const ch = (it.height || 0) * PDF_SCALE || cFontSize
+
+        // PDF-native coords for pdf-lib (x from left, y from bottom)
+        const pdfFontSize = Math.sqrt(it.transform[0] ** 2 + it.transform[1] ** 2) || 10
+
+        items.push({
+          id: `p${pageIndex}_${i}`,
+          page: pageIndex,
+          cx, cy, cw, ch, cFontSize,
+          pdfX: it.transform[4], pdfY: it.transform[5],
+          pdfW: it.width || pdfFontSize * str.length * 0.55,
+          pdfFontSize,
+          text: it.str,
+        })
+      })
+      setTextItems(prev => [...prev.filter(t => t.page !== pageIndex), ...items])
+      setCanvasReady(true)
+      setStatus('')
+    } catch (e: any) {
+      if ((e as any)?.name !== 'RenderingCancelledException') setStatus(`Error: ${e.message}`)
+    } finally {
+      setLoading(false)
     }
   }
 
   async function goToPage(idx: number) {
+    if (!pdfDocRef.current || idx < 0 || idx >= numPages) return
     setCurrentPage(idx)
-    setPendingInput(null)
-    setEditingId(null)
-    if (!pages[idx] && origBase64) await loadPage(origBase64, idx)
+    await renderPage(pdfDocRef.current, idx)
   }
 
-  function imgCoords(e: React.MouseEvent<HTMLImageElement>): { x: number; y: number; xFrac: number; yFrac: number } {
-    const rect = (e.target as HTMLImageElement).getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-    return { x, y, xFrac: x / rect.width, yFrac: y / rect.height }
+  function canvasCoords(e: React.MouseEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current!
+    const rect = canvas.getBoundingClientRect()
+    // map display pixels → canvas pixels
+    const sx = canvas.width / rect.width
+    const sy = canvas.height / rect.height
+    const x = (e.clientX - rect.left) * sx
+    const y = (e.clientY - rect.top) * sy
+    const vp = viewportRef.current!
+    return { xFrac: x / vp.width, yFrac: y / vp.height }
   }
 
-  function handleImgClick(e: React.MouseEvent<HTMLImageElement>) {
+  function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
     if (tool !== 'text') return
-    const coords = imgCoords(e)
-    setPendingInput(coords)
+    const { xFrac, yFrac } = canvasCoords(e)
+    setPendingInput({ xFrac, yFrac })
     setPendingText('')
   }
 
   function commitText() {
     if (!pendingInput || !pendingText.trim()) { setPendingInput(null); return }
     setAnnotations(prev => [...prev, {
-      id: `${Date.now()}`,
-      page: currentPage,
-      xFrac: pendingInput.xFrac,
-      yFrac: pendingInput.yFrac,
-      type: 'text',
-      text: pendingText.trim(),
-      fontSize,
-      color,
-      width: 0, height: 0,
+      id: `${Date.now()}`, page: currentPage,
+      xFrac: pendingInput.xFrac, yFrac: pendingInput.yFrac,
+      type: 'text', text: pendingText.trim(), fontSize, color, width: 0, height: 0,
     }])
-    setPendingInput(null)
-    setPendingText('')
+    setPendingInput(null); setPendingText('')
   }
 
-  function handleHighlightMouseDown(e: React.MouseEvent<HTMLImageElement>) {
+  function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
     if (tool !== 'highlight' && tool !== 'whiteout') return
-    const rect = (e.target as HTMLImageElement).getBoundingClientRect()
+    const rect = canvasRef.current!.getBoundingClientRect()
     setDragStart({ x: e.clientX - rect.left, y: e.clientY - rect.top })
   }
 
-  function handleHighlightMouseUp(e: React.MouseEvent<HTMLImageElement>) {
+  function handleMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
     if ((tool !== 'highlight' && tool !== 'whiteout') || !dragStart) return
-    const rect = (e.target as HTMLImageElement).getBoundingClientRect()
-    const x2 = e.clientX - rect.left
-    const y2 = e.clientY - rect.top
-    const x = Math.min(dragStart.x, x2)
-    const y = Math.min(dragStart.y, y2)
-    const w = Math.abs(x2 - dragStart.x)
-    const h = Math.abs(y2 - dragStart.y)
+    const rect = canvasRef.current!.getBoundingClientRect()
+    const x2 = e.clientX - rect.left; const y2 = e.clientY - rect.top
+    const x = Math.min(dragStart.x, x2); const y = Math.min(dragStart.y, y2)
+    const w = Math.abs(x2 - dragStart.x); const h = Math.abs(y2 - dragStart.y)
     if (w > 5 && h > 5) {
       setAnnotations(prev => [...prev, {
-        id: `${Date.now()}`,
-        page: currentPage,
-        xFrac: x / rect.width,
-        yFrac: y / rect.height,
-        type: tool as 'highlight' | 'whiteout',
-        text: '',
-        fontSize: 0,
-        color: tool === 'whiteout' ? '#FFFFFF' : '#FFFF00',
-        width: w / rect.width,
-        height: h / rect.height,
+        id: `${Date.now()}`, page: currentPage,
+        xFrac: x / rect.width, yFrac: y / rect.height,
+        type: tool as 'highlight' | 'whiteout', text: '', fontSize: 0, color: '',
+        width: w / rect.width, height: h / rect.height,
       }])
     }
     setDragStart(null)
   }
 
-  function removeAnnotation(id: string) {
-    setAnnotations(prev => prev.filter(a => a.id !== id))
-  }
+  function removeAnnotation(id: string) { setAnnotations(prev => prev.filter(a => a.id !== id)) }
 
   async function downloadEdited() {
     if (!origBase64) return
-    setDownloading(true)
-    setStatus('Preparing download…')
+    setDownloading(true); setStatus('Preparing…')
     try {
       const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib')
       const bytes = Uint8Array.from(atob(origBase64), c => c.charCodeAt(0))
       const pdfDoc = await PDFDocument.load(bytes)
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
-      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
       const pdfPages = pdfDoc.getPages()
 
       for (const ann of annotations) {
-        const pg = pdfPages[ann.page]
-        if (!pg) continue
-        const rendered = pages[ann.page]
-        // rendered image is at 2× mupdf scale; 1 PDF point = 2 rendered pixels
-        const pdfW = rendered ? rendered.width / 2 : pg.getWidth()
-        const pdfH = rendered ? rendered.height / 2 : pg.getHeight()
-
+        const pg = pdfPages[ann.page]; if (!pg) continue
+        const pdfW = pg.getWidth(); const pdfH = pg.getHeight()
+        const hex = ann.color || '#000000'
+        const r = parseInt(hex.slice(1,3),16)/255, g = parseInt(hex.slice(3,5),16)/255, b = parseInt(hex.slice(5,7),16)/255
         if (ann.type === 'text') {
-          const pdfX = ann.xFrac * pdfW
-          // PDF y-axis is from bottom; rendered y from top — flip it
-          const pdfY = (1 - ann.yFrac) * pdfH - ann.fontSize
-          const hexColor = ann.color || '#000000'
-          const r = parseInt(hexColor.slice(1, 3), 16) / 255
-          const g = parseInt(hexColor.slice(3, 5), 16) / 255
-          const b = parseInt(hexColor.slice(5, 7), 16) / 255
-          pg.drawText(ann.text, {
-            x: pdfX, y: pdfY,
-            size: ann.fontSize,
-            font: r === 0 && g === 0 && b === 0 ? font : boldFont,
-            color: rgb(r, g, b),
-          })
+          pg.drawText(ann.text, { x: ann.xFrac * pdfW, y: (1 - ann.yFrac) * pdfH - ann.fontSize, size: ann.fontSize, font, color: rgb(r,g,b) })
         } else if (ann.type === 'highlight') {
-          const pdfX = ann.xFrac * pdfW
-          const pdfY = (1 - ann.yFrac - ann.height) * pdfH
-          pg.drawRectangle({
-            x: pdfX, y: pdfY,
-            width: ann.width * pdfW,
-            height: ann.height * pdfH,
-            color: rgb(1, 1, 0),
-            opacity: 0.35,
-          })
+          pg.drawRectangle({ x: ann.xFrac*pdfW, y:(1-ann.yFrac-ann.height)*pdfH, width:ann.width*pdfW, height:ann.height*pdfH, color:rgb(1,1,0), opacity:0.35 })
         } else if (ann.type === 'whiteout') {
-          const pdfX = ann.xFrac * pdfW
-          const pdfY = (1 - ann.yFrac - ann.height) * pdfH
-          pg.drawRectangle({
-            x: pdfX, y: pdfY,
-            width: ann.width * pdfW,
-            height: ann.height * pdfH,
-            color: rgb(1, 1, 1),
-            opacity: 1,
-          })
+          pg.drawRectangle({ x: ann.xFrac*pdfW, y:(1-ann.yFrac-ann.height)*pdfH, width:ann.width*pdfW, height:ann.height*pdfH, color:rgb(1,1,1), opacity:1 })
         }
       }
 
-      // Burn edited text items: whiteout original area then draw new text
+      // Burn edited text: whiteout original area, draw new text at same PDF coords
       for (const [id, newText] of Object.entries(editedTexts)) {
-        const item = textItems.find(t => t.id === id)
-        if (!item) continue
-        const pg = pdfPages[item.page]
-        if (!pg) continue
-        // mupdf y is from top; pdf-lib y is from bottom — flip
-        const pdfY = item.pageH - item.y - item.h
-        // white rectangle over original text (+2pt padding)
+        const item = textItems.find(t => t.id === id); if (!item) continue
+        const pg = pdfPages[item.page]; if (!pg) continue
         pg.drawRectangle({
-          x: item.x - 1, y: pdfY - 1,
-          width: item.w + 2, height: item.h + 2,
-          color: rgb(1, 1, 1), opacity: 1,
+          x: item.pdfX - 1, y: item.pdfY - 2,
+          width: Math.max(item.pdfW, newText.length * item.pdfFontSize * 0.55) + 4,
+          height: item.pdfFontSize + 4,
+          color: rgb(1,1,1), opacity: 1,
         })
-        pg.drawText(newText, {
-          x: item.x, y: pdfY,
-          size: item.fontSize,
-          font,
-          color: rgb(0, 0, 0),
-        })
+        pg.drawText(newText, { x: item.pdfX, y: item.pdfY, size: item.pdfFontSize, font, color: rgb(0,0,0) })
       }
 
       const edited = await pdfDoc.save()
-      const blob = new Blob([new Uint8Array(edited)], { type: 'application/pdf' })
+      const blob = new Blob([edited], { type: 'application/pdf' })
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = 'edited.pdf'; a.click()
+      const a = document.createElement('a'); a.href = url; a.download = 'edited.pdf'; a.click()
       URL.revokeObjectURL(url)
       setStatus('Downloaded!')
     } catch (e: any) {
-      setStatus(`Download error: ${e.message}`)
+      setStatus(`Error: ${e.message}`)
     } finally {
       setDownloading(false)
     }
   }
 
-  async function openInSejda() {
-    if (!origBase64) return
-    setStatus('Uploading to Sejda…')
-    try {
-      const res = await fetch('/api/pdf-temp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...await authHeader() },
-        body: JSON.stringify({ base64: origBase64 }),
-      })
-      if (!res.ok) throw new Error((await res.json()).error || 'upload failed')
-      const { filename } = await res.json()
-      const pdfUrl = `${window.location.origin}/api/pdf-serve?file=${encodeURIComponent(filename)}`
-      window.open(`https://www.sejda.com/pdf-editor?url=${encodeURIComponent(pdfUrl)}`, '_blank')
-      setStatus('')
-    } catch (e: any) {
-      setStatus(`Sejda error: ${e.message}`)
-    }
-  }
-
   function clearAll() {
-    setOrigBase64('')
-    setPages([])
-    setAnnotations([])
-    setTextItems([])
-    setEditedTexts({})
-    setEditingId(null)
-    setCurrentPage(0)
-    setPendingInput(null)
-    setStatus('')
+    pdfDocRef.current = null; viewportRef.current = null
+    setOrigBase64(''); setNumPages(0); setCurrentPage(0)
+    setAnnotations([]); setTextItems([]); setEditedTexts({}); setEditingId(null)
+    setPendingInput(null); setPendingText(''); setStatus(''); setCanvasReady(false); setLoading(false)
     if (fileRef.current) fileRef.current.value = ''
   }
-
-  const pageAnnotations = annotations.filter(a => a.page === currentPage)
 
   return (
     <div className="space-y-4 max-w-4xl">
@@ -1497,7 +1441,7 @@ function PdfEditorPanel() {
             onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}>
             <Upload size={24} className="mx-auto mb-2 text-gray-300"/>
             <p className="text-sm text-gray-500">Click or drag a PDF to edit</p>
-            <p className="text-xs text-gray-400 mt-1">Annotate, add text, highlight — then download the edited PDF</p>
+            <p className="text-xs text-gray-400 mt-1">Click existing text to edit · Highlight · Whiteout · Add new text</p>
             <input ref={fileRef} type="file" accept="application/pdf" className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }}/>
           </div>
@@ -1515,7 +1459,6 @@ function PdfEditorPanel() {
                   <Highlighter size={12}/>Highlight
                 </button>
                 <button onClick={() => setTool('whiteout')}
-                  title="Cover existing text with white — then add new text on top"
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tool === 'whiteout' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>
                   <Eraser size={12}/>Whiteout
                 </button>
@@ -1540,26 +1483,20 @@ function PdfEditorPanel() {
               <div className="flex-1"/>
 
               <div className="flex items-center gap-2">
-                <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 0 || loadingPage}
+                <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 0 || loading}
                   className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
                   <ChevronLeft size={14}/>
                 </button>
                 <span className="text-xs text-gray-600">
-                  Page {currentPage + 1} / {page?.numPages || '?'}
+                  Page {currentPage + 1} / {numPages || '?'}
                 </span>
-                <button onClick={() => goToPage(currentPage + 1)} disabled={!page || currentPage >= page.numPages - 1 || loadingPage}
+                <button onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= numPages - 1 || loading}
                   className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
                   <ChevronRight size={14}/>
                 </button>
               </div>
 
-              <button onClick={openInSejda}
-                title="Upload this PDF to Sejda's editor in a new tab"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-indigo-200 text-indigo-700 hover:bg-indigo-50">
-                <ExternalLink size={12}/>Open in Sejda
-              </button>
-
-              <button onClick={downloadEdited} disabled={downloading}
+              <button onClick={downloadEdited} disabled={downloading || loading}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
                 style={{ background: '#1B3A5C' }}>
                 {downloading ? <Loader size={12} className="animate-spin"/> : <Download size={12}/>}
@@ -1569,198 +1506,122 @@ function PdfEditorPanel() {
 
             {status && (
               <p className="text-xs text-indigo-600 mb-2 flex items-center gap-1">
-                {(loadingPage || downloading) && <Loader size={11} className="animate-spin"/>}{status}
+                {(loading || downloading) && <Loader size={11} className="animate-spin"/>}{status}
               </p>
             )}
 
-            {/* Canvas area */}
+            {/* Canvas + overlay */}
             <div className="relative inline-block border border-gray-200 rounded-xl select-none"
               style={{ maxWidth: '100%', overflow: 'visible' }}>
-              {loadingPage ? (
-                <div className="w-full h-96 flex items-center justify-center bg-gray-50 rounded-xl">
+              {loading && !canvasReady && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 rounded-xl z-10 min-h-[24rem]">
                   <Loader size={24} className="animate-spin text-gray-400"/>
                 </div>
-              ) : page ? (
-                <>
-                  <img
-                    ref={imgRef}
-                    src={`data:image/png;base64,${page.png}`}
-                    alt={`Page ${currentPage + 1}`}
-                    style={{ display: 'block', maxWidth: '100%', borderRadius: 'inherit', cursor: tool === 'text' ? 'text' : tool === 'whiteout' ? 'cell' : 'crosshair' }}
-                    onClick={handleImgClick}
-                    onMouseDown={handleHighlightMouseDown}
-                    onMouseUp={handleHighlightMouseUp}
-                    draggable={false}
-                  />
+              )}
 
-                  {/* Annotation overlay — percentage coords so no getBoundingClientRect needed */}
-                  <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 2, containerType: 'inline-size' } as React.CSSProperties}>
-                    {pageAnnotations.map(ann => {
-                      if (ann.type === 'text') {
-                        return (
-                          <div key={ann.id} style={{
-                            position: 'absolute',
-                            left: `${ann.xFrac * 100}%`,
-                            top: `${ann.yFrac * 100}%`,
-                            pointerEvents: 'auto',
-                            display: 'flex', alignItems: 'flex-start', gap: 2,
-                            zIndex: 3,
-                          }}>
-                            <span style={{ fontSize: ann.fontSize * 0.75, color: ann.color, fontFamily: 'Helvetica, Arial, sans-serif', whiteSpace: 'pre', lineHeight: 1.2, userSelect: 'none' }}>
-                              {ann.text}
-                            </span>
-                            <button onClick={() => removeAnnotation(ann.id)}
-                              style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 3, padding: '1px 3px', fontSize: 9, cursor: 'pointer', lineHeight: 1, pointerEvents: 'auto' }}>
-                              ×
-                            </button>
-                          </div>
-                        )
-                      }
-                      if (ann.type === 'highlight') {
-                        return (
-                          <div key={ann.id} style={{
-                            position: 'absolute',
-                            left: `${ann.xFrac * 100}%`,
-                            top: `${ann.yFrac * 100}%`,
-                            width: `${ann.width * 100}%`,
-                            height: `${ann.height * 100}%`,
-                            background: '#FFFF00', opacity: 0.4, pointerEvents: 'none',
-                          }}/>
-                        )
-                      }
-                      if (ann.type === 'whiteout') {
-                        return (
-                          <div key={ann.id} style={{
-                            position: 'absolute',
-                            left: `${ann.xFrac * 100}%`,
-                            top: `${ann.yFrac * 100}%`,
-                            width: `${ann.width * 100}%`,
-                            height: `${ann.height * 100}%`,
-                            background: '#ffffff',
-                            border: '1.5px dashed #9ca3af',
-                            pointerEvents: 'none',
-                          }}/>
-                        )
-                      }
-                      return null
-                    })}
+              {/* PDF.js renders directly into this canvas */}
+              <canvas
+                ref={canvasRef}
+                style={{
+                  display: 'block', maxWidth: '100%', borderRadius: 'inherit',
+                  cursor: tool === 'text' ? 'text' : tool === 'whiteout' ? 'cell' : 'crosshair',
+                  visibility: canvasReady ? 'visible' : 'hidden',
+                }}
+                onClick={handleCanvasClick}
+                onMouseDown={handleMouseDown}
+                onMouseUp={handleMouseUp}
+              />
 
-                    {/* Existing PDF text item overlays — click to edit in place */}
-                    {textItems.filter(it => it.page === currentPage).map(item => {
-                      const xPct = `${(item.x / item.pageW) * 100}%`
-                      const yPct = `${(item.y / item.pageH) * 100}%`
-                      const wPct = `${(item.w / item.pageW) * 100}%`
-                      const hPct = `${(item.h / item.pageH) * 100}%`
-                      const currentText = editedTexts[item.id] ?? item.text
-                      const isEditing = editingId === item.id
-                      const isEdited = item.id in editedTexts
+              {/* Overlay — same logical size as canvas via percentage coords */}
+              {canvasReady && (
+                <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 2, containerType: 'inline-size' } as React.CSSProperties}>
 
-                      if (isEditing) {
-                        return (
-                          <div key={item.id} style={{ position: 'absolute', left: xPct, top: yPct, width: wPct, minWidth: 60, zIndex: 20, pointerEvents: 'auto' }}>
-                            <input
-                              autoFocus
-                              defaultValue={currentText}
-                              onKeyDown={e => {
-                                if (e.key === 'Enter') {
-                                  const v = (e.target as HTMLInputElement).value
-                                  if (v !== item.text) setEditedTexts(prev => ({ ...prev, [item.id]: v }))
-                                  else { const next = { ...editedTexts }; delete next[item.id]; setEditedTexts(next) }
-                                  setEditingId(null)
-                                }
-                                if (e.key === 'Escape') setEditingId(null)
-                              }}
-                              onBlur={e => {
-                                const v = e.target.value
-                                if (v !== item.text) setEditedTexts(prev => ({ ...prev, [item.id]: v }))
-                                else { const next = { ...editedTexts }; delete next[item.id]; setEditedTexts(next) }
-                                setEditingId(null)
-                              }}
-                              style={{
-                                width: '100%',
-                                fontSize: `${item.fontSize / item.pageW * 100}cqw`,
-                                fontFamily: 'Helvetica, Arial, sans-serif',
-                                border: '1.5px solid #6366f1',
-                                background: 'rgba(255,255,255,0.97)',
-                                padding: '0 2px',
-                                outline: 'none',
-                                borderRadius: 2,
-                                lineHeight: 1.2,
-                              }}
-                            />
-                          </div>
-                        )
-                      }
+                  {/* User-added annotations (text labels, highlights, whiteouts) */}
+                  {pageAnnotations.map(ann => {
+                    if (ann.type === 'text') return (
+                      <div key={ann.id} style={{ position: 'absolute', left: `${ann.xFrac*100}%`, top: `${ann.yFrac*100}%`, pointerEvents: 'auto', display: 'flex', alignItems: 'flex-start', gap: 2, zIndex: 3 }}>
+                        <span style={{ fontSize: ann.fontSize * 0.75, color: ann.color, fontFamily: 'Helvetica, Arial, sans-serif', whiteSpace: 'pre', lineHeight: 1.2, userSelect: 'none' }}>{ann.text}</span>
+                        <button onClick={() => removeAnnotation(ann.id)} style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 3, padding: '1px 3px', fontSize: 9, cursor: 'pointer', lineHeight: 1 }}>×</button>
+                      </div>
+                    )
+                    if (ann.type === 'highlight') return <div key={ann.id} style={{ position: 'absolute', left: `${ann.xFrac*100}%`, top: `${ann.yFrac*100}%`, width: `${ann.width*100}%`, height: `${ann.height*100}%`, background: '#FFFF00', opacity: 0.4, pointerEvents: 'none' }}/>
+                    if (ann.type === 'whiteout') return <div key={ann.id} style={{ position: 'absolute', left: `${ann.xFrac*100}%`, top: `${ann.yFrac*100}%`, width: `${ann.width*100}%`, height: `${ann.height*100}%`, background: '#fff', border: '1.5px dashed #9ca3af', pointerEvents: 'none' }}/>
+                    return null
+                  })}
 
-                      return (
-                        <div
-                          key={item.id}
-                          title={`Click to edit: "${item.text}"`}
-                          onClick={e => { if (tool === 'text') { e.stopPropagation(); setEditingId(item.id); setPendingInput(null) } }}
-                          style={{
-                            position: 'absolute', left: xPct, top: yPct, width: wPct, height: hPct,
-                            cursor: tool === 'text' ? 'text' : 'default',
-                            pointerEvents: tool === 'text' ? 'auto' : 'none',
-                            border: isEdited ? '1px solid #6366f1' : '1px solid transparent',
-                            background: isEdited ? 'rgba(99,102,241,0.08)' : 'transparent',
-                            boxSizing: 'border-box',
-                            zIndex: 5,
+                  {/* Existing PDF text — transparent clickable rects; click → edit in place */}
+                  {pageTextItems.map(item => {
+                    const vp = viewportRef.current!
+                    const xPct = `${item.cx / vp.width * 100}%`
+                    const yPct = `${item.cy / vp.height * 100}%`
+                    const wPct = `${item.cw / vp.width * 100}%`
+                    const hPct = `${item.ch / vp.height * 100}%`
+                    const fontCqw = `${item.cFontSize / vp.width * 100}cqw`
+                    const isEdited = item.id in editedTexts
+                    const isEditing = editingId === item.id
+
+                    if (isEditing) return (
+                      <div key={item.id} style={{ position: 'absolute', left: xPct, top: yPct, minWidth: wPct, zIndex: 20, pointerEvents: 'auto' }}>
+                        <input autoFocus
+                          defaultValue={editedTexts[item.id] ?? item.text}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' || e.key === 'Escape') {
+                              const v = (e.target as HTMLInputElement).value
+                              if (e.key === 'Enter' && v !== item.text) setEditedTexts(p => ({ ...p, [item.id]: v }))
+                              else if (e.key === 'Enter') { const n = { ...editedTexts }; delete n[item.id]; setEditedTexts(n) }
+                              setEditingId(null)
+                            }
                           }}
-                          onMouseEnter={e => { if (tool === 'text') (e.currentTarget as HTMLElement).style.border = '1px dashed #6366f1' }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.border = isEdited ? '1px solid #6366f1' : '1px solid transparent' }}
-                        />
-                      )
-                    })}
-
-                    {/* Pending text input — add new text in blank space */}
-                    {pendingInput && (
-                      <div style={{ position: 'absolute', left: `${pendingInput.xFrac * 100}%`, top: `${pendingInput.yFrac * 100}%`, zIndex: 10, pointerEvents: 'auto' }}>
-                        <input
-                          autoFocus
-                          value={pendingText}
-                          onChange={e => setPendingText(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') commitText(); if (e.key === 'Escape') setPendingInput(null) }}
-                          onBlur={commitText}
-                          style={{
-                            fontSize: fontSize * 0.75,
-                            color,
-                            fontFamily: 'Helvetica, Arial, sans-serif',
-                            border: '1px dashed #6366f1',
-                            background: 'rgba(255,255,255,0.9)',
-                            padding: '1px 4px',
-                            outline: 'none',
-                            minWidth: 80,
-                            borderRadius: 3,
+                          onBlur={e => {
+                            const v = e.target.value
+                            if (v !== item.text) setEditedTexts(p => ({ ...p, [item.id]: v }))
+                            else { const n = { ...editedTexts }; delete n[item.id]; setEditedTexts(n) }
+                            setEditingId(null)
                           }}
-                          placeholder="Type text…"
+                          style={{ fontSize: fontCqw, fontFamily: 'Helvetica, Arial, sans-serif', border: '1.5px solid #6366f1', background: 'rgba(255,255,255,0.97)', padding: 0, outline: 'none', borderRadius: 2, lineHeight: 1, width: '100%', minWidth: 60 }}
                         />
                       </div>
-                    )}
-                  </div>
-                </>
-              ) : null}
+                    )
+
+                    return (
+                      <div key={item.id}
+                        title={item.text}
+                        onClick={e => { if (tool === 'text') { e.stopPropagation(); setEditingId(item.id); setPendingInput(null) } }}
+                        onMouseEnter={e => { if (tool === 'text') (e.currentTarget as HTMLElement).style.outline = '1px dashed #6366f1' }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.outline = isEdited ? '1px solid #6366f1' : 'none' }}
+                        style={{ position: 'absolute', left: xPct, top: yPct, width: wPct, height: hPct, cursor: tool === 'text' ? 'text' : 'default', pointerEvents: tool === 'text' ? 'auto' : 'none', outline: isEdited ? '1px solid #6366f1' : 'none', background: isEdited ? 'rgba(99,102,241,0.08)' : 'transparent', boxSizing: 'border-box', zIndex: 5 }}
+                      />
+                    )
+                  })}
+
+                  {/* Click-to-add new text in blank area */}
+                  {pendingInput && (
+                    <div style={{ position: 'absolute', left: `${(pendingInput as any).xFrac*100}%`, top: `${(pendingInput as any).yFrac*100}%`, zIndex: 10, pointerEvents: 'auto' }}>
+                      <input autoFocus value={pendingText}
+                        onChange={e => setPendingText(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') commitText(); if (e.key === 'Escape') setPendingInput(null) }}
+                        onBlur={commitText}
+                        style={{ fontSize: fontSize * 0.75, color, fontFamily: 'Helvetica, Arial, sans-serif', border: '1px dashed #6366f1', background: 'rgba(255,255,255,0.9)', padding: '1px 4px', outline: 'none', minWidth: 80, borderRadius: 3 }}
+                        placeholder="Type text…"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Annotation list */}
             {annotations.length > 0 && (
               <div className="mt-3 border border-gray-100 rounded-lg overflow-hidden">
                 <div className="bg-gray-50 px-3 py-1.5 flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
-                    Annotations ({annotations.length})
-                  </span>
-                  <button onClick={() => setAnnotations([])} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500">
-                    <Eraser size={11}/>Clear all
-                  </button>
+                  <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Annotations ({annotations.length})</span>
+                  <button onClick={() => setAnnotations([])} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500"><Eraser size={11}/>Clear all</button>
                 </div>
                 <div className="divide-y divide-gray-50 max-h-36 overflow-y-auto">
-                  {annotations.map((ann, i) => (
+                  {annotations.map(ann => (
                     <div key={ann.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
-                      <span className="text-gray-500">
-                        Pg {ann.page + 1} · {ann.type === 'text' ? `"${ann.text}"` : 'Highlight'}
-                      </span>
-                      <button onClick={() => removeAnnotation(ann.id)} className="text-gray-300 hover:text-red-500">
-                        <X size={12}/>
-                      </button>
+                      <span className="text-gray-500">Pg {ann.page + 1} · {ann.type === 'text' ? `"${ann.text}"` : ann.type}</span>
+                      <button onClick={() => removeAnnotation(ann.id)} className="text-gray-300 hover:text-red-500"><X size={12}/></button>
                     </div>
                   ))}
                 </div>
@@ -1773,8 +1634,8 @@ function PdfEditorPanel() {
       <div className="text-xs text-gray-400 flex items-start gap-1.5">
         <AlertTriangle size={12} className="flex-shrink-0 mt-0.5"/>
         <span>
-          Annotations are applied to the downloaded PDF. The original file is not stored anywhere — only your download is saved.
-          Text tool: click to place · Highlight tool: click-drag · Press Enter or click elsewhere to confirm text.
+          Text tool: click existing PDF text to edit in place, or click blank area to add new text.
+          Highlight/Whiteout: click-drag to select area. Press Enter to confirm, Escape to cancel.
         </span>
       </div>
     </div>
