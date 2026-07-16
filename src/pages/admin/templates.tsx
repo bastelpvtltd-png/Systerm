@@ -553,7 +553,14 @@ function ExcelTemplatesContent() {
         <div className="card">
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Settings size={15}/>Cell Mapping</h2>
-            {sheetsLoading && selectedId && <Loader size={12} className="animate-spin text-gray-400"/>}
+            <div className="flex items-center gap-2">
+              {sheetsLoading && selectedId && <Loader size={12} className="animate-spin text-gray-400"/>}
+              {selected && !sheetsLoading && (
+                <button onClick={() => { if (selected) { setSheetsLoading(true); authHeader().then(h => fetch(`/api/excel-template-sheets?template_id=${selected.id}`,{headers:h}).then(r=>r.json()).then(d=>setSheetsList(d.sheets||[])).catch(()=>setSheetsList([])).finally(()=>setSheetsLoading(false))) } }} className="text-[11px] text-blue-500 hover:underline">
+                  {sheetNames.length > 0 ? `${sheetNames.length} sheets` : 'Reload sheets'}
+                </button>
+              )}
+            </div>
           </div>
           {!selected ? (
             <p className="text-xs text-gray-400 text-center py-12">Select a template to map its cells</p>
@@ -579,14 +586,16 @@ function ExcelTemplatesContent() {
                         </select>
                       )}
                     </div>
-                    {sheetNames.length > 1 && (
-                      <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
-                        <span className="flex-shrink-0">Sheet:</span>
+                    <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                      <span className="flex-shrink-0">Sheet:</span>
+                      {sheetNames.length > 0 ? (
                         <select value={m.sheetName || sheetNames[0]} onChange={e => updateMappingRow(i, { sheetName: e.target.value })} className="input text-xs flex-1">
                           {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
-                      </div>
-                    )}
+                      ) : (
+                        <input value={m.sheetName || ''} onChange={e => updateMappingRow(i, { sheetName: e.target.value })} placeholder="Sheet name (e.g. Data)" className="input text-xs flex-1 font-mono"/>
+                      )}
+                    </div>
                     {m.source === 'cdn' && (
                       <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
                         <input type="checkbox" checked={m.isArray} onChange={e => updateMappingRow(i, { isArray: e.target.checked })}/>
