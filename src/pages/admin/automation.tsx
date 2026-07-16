@@ -1189,6 +1189,18 @@ interface RenderedPage {
   numPages: number
 }
 
+// A text span extracted from the PDF — positioned in mupdf coordinates
+// (y from top, x from left, in PDF points). Used to create clickable
+// editable overlays so the user can edit existing PDF text in place.
+interface PdfTextItem {
+  id: string
+  page: number
+  x: number; y: number; w: number; h: number   // PDF points, y from top
+  text: string
+  fontSize: number
+  pageW: number; pageH: number  // total page dims in PDF points (for pdf-lib Y flip)
+}
+
 function PdfEditorPanel() {
   const fileRef = useRef<HTMLInputElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
@@ -1206,6 +1218,9 @@ function PdfEditorPanel() {
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
   const [downloading, setDownloading] = useState(false)
   const [status, setStatus] = useState('')
+  const [textItems, setTextItems] = useState<PdfTextItem[]>([])
+  const [editedTexts, setEditedTexts] = useState<Record<string, string>>({}) // id → new text
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   const page = pages[currentPage]
 
@@ -1227,17 +1242,30 @@ function PdfEditorPanel() {
     setLoadingPage(true)
     setStatus(`Rendering page ${pageIndex + 1}…`)
     try {
-      const r = await fetch('/api/render-page', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64, page: pageIndex }),
-      })
-      const d = await r.json()
-      if (!r.ok) throw new Error(d.error)
-      setPages(prev => {
-        const next = [...prev]
-        next[pageIndex] = d
-        return next
-      })
+      const [renderRes, textRes] = await Promise.all([
+        fetch('/api/render-page', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64, page: pageIndex }),
+        }),
+        fetch('/api/extract-pdf-text', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64, page: pageIndex }),
+        }),
+      ])
+      const d = await renderRes.json()
+      if (!renderRes.ok) throw new Error(d.error)
+      setPages(prev => { const next = [...prev]; next[pageIndex] = d; return next })
+
+      if (textRes.ok) {
+        const td = await textRes.json()
+        setTextItems(prev => {
+          const filtered = prev.filter(it => it.page !== pageIndex)
+          const newItems: PdfTextItem[] = (td.items || []).map((it: any) => ({
+            ...it, page: pageIndex, pageW: td.pageW, pageH: td.pageH,
+          }))
+          return [...filtered, ...newItems]
+        })
+      }
       setStatus('')
     } catch (e: any) {
       setStatus(`Error: ${e.message}`)
@@ -1249,6 +1277,7 @@ function PdfEditorPanel() {
   async function goToPage(idx: number) {
     setCurrentPage(idx)
     setPendingInput(null)
+    setEditingId(null)
     if (!pages[idx] && origBase64) await loadPage(origBase64, idx)
   }
 
@@ -1376,6 +1405,28 @@ function PdfEditorPanel() {
         }
       }
 
+      // Burn edited text items: whiteout original area then draw new text
+      for (const [id, newText] of Object.entries(editedTexts)) {
+        const item = textItems.find(t => t.id === id)
+        if (!item) continue
+        const pg = pdfPages[item.page]
+        if (!pg) continue
+        // mupdf y is from top; pdf-lib y is from bottom — flip
+        const pdfY = item.pageH - item.y - item.h
+        // white rectangle over original text (+2pt padding)
+        pg.drawRectangle({
+          x: item.x - 1, y: pdfY - 1,
+          width: item.w + 2, height: item.h + 2,
+          color: rgb(1, 1, 1), opacity: 1,
+        })
+        pg.drawText(newText, {
+          x: item.x, y: pdfY,
+          size: item.fontSize,
+          font,
+          color: rgb(0, 0, 0),
+        })
+      }
+
       const edited = await pdfDoc.save()
       const blob = new Blob([new Uint8Array(edited)], { type: 'application/pdf' })
       const url = URL.createObjectURL(blob)
@@ -1394,6 +1445,9 @@ function PdfEditorPanel() {
     setOrigBase64('')
     setPages([])
     setAnnotations([])
+    setTextItems([])
+    setEditedTexts({})
+    setEditingId(null)
     setCurrentPage(0)
     setPendingInput(null)
     setStatus('')
@@ -1566,7 +1620,74 @@ function PdfEditorPanel() {
                       return null
                     })}
 
-                    {/* Pending text input */}
+                    {/* Existing PDF text item overlays — click to edit in place */}
+                    {textItems.filter(it => it.page === currentPage).map(item => {
+                      const xPct = `${(item.x / item.pageW) * 100}%`
+                      const yPct = `${(item.y / item.pageH) * 100}%`
+                      const wPct = `${(item.w / item.pageW) * 100}%`
+                      const hPct = `${(item.h / item.pageH) * 100}%`
+                      const currentText = editedTexts[item.id] ?? item.text
+                      const isEditing = editingId === item.id
+                      const isEdited = item.id in editedTexts
+
+                      if (isEditing) {
+                        return (
+                          <div key={item.id} style={{ position: 'absolute', left: xPct, top: yPct, width: wPct, minWidth: 60, zIndex: 20, pointerEvents: 'auto' }}>
+                            <input
+                              autoFocus
+                              defaultValue={currentText}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  const v = (e.target as HTMLInputElement).value
+                                  if (v !== item.text) setEditedTexts(prev => ({ ...prev, [item.id]: v }))
+                                  else { const next = { ...editedTexts }; delete next[item.id]; setEditedTexts(next) }
+                                  setEditingId(null)
+                                }
+                                if (e.key === 'Escape') setEditingId(null)
+                              }}
+                              onBlur={e => {
+                                const v = e.target.value
+                                if (v !== item.text) setEditedTexts(prev => ({ ...prev, [item.id]: v }))
+                                else { const next = { ...editedTexts }; delete next[item.id]; setEditedTexts(next) }
+                                setEditingId(null)
+                              }}
+                              style={{
+                                width: '100%',
+                                fontSize: `${item.fontSize * 0.5}px`,
+                                fontFamily: 'Helvetica, Arial, sans-serif',
+                                border: '1.5px solid #6366f1',
+                                background: 'rgba(255,255,255,0.97)',
+                                padding: '0 2px',
+                                outline: 'none',
+                                borderRadius: 2,
+                                lineHeight: 1.2,
+                              }}
+                            />
+                          </div>
+                        )
+                      }
+
+                      return (
+                        <div
+                          key={item.id}
+                          title={`Click to edit: "${item.text}"`}
+                          onClick={e => { if (tool === 'text') { e.stopPropagation(); setEditingId(item.id); setPendingInput(null) } }}
+                          style={{
+                            position: 'absolute', left: xPct, top: yPct, width: wPct, height: hPct,
+                            cursor: tool === 'text' ? 'text' : 'default',
+                            pointerEvents: tool === 'text' ? 'auto' : 'none',
+                            border: isEdited ? '1px solid #6366f1' : '1px solid transparent',
+                            background: isEdited ? 'rgba(99,102,241,0.08)' : 'transparent',
+                            boxSizing: 'border-box',
+                            zIndex: 5,
+                          }}
+                          onMouseEnter={e => { if (tool === 'text') (e.currentTarget as HTMLElement).style.border = '1px dashed #6366f1' }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.border = isEdited ? '1px solid #6366f1' : '1px solid transparent' }}
+                        />
+                      )
+                    })}
+
+                    {/* Pending text input — add new text in blank space */}
                     {pendingInput && (
                       <div style={{ position: 'absolute', left: `${pendingInput.xFrac * 100}%`, top: `${pendingInput.yFrac * 100}%`, zIndex: 10, pointerEvents: 'auto' }}>
                         <input
