@@ -1569,7 +1569,7 @@ function PdfEditorPanel() {
                   />
 
                   {/* Annotation overlay — percentage coords so no getBoundingClientRect needed */}
-                  <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 2 }}>
+                  <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 2, containerType: 'inline-size' } as React.CSSProperties}>
                     {pageAnnotations.map(ann => {
                       if (ann.type === 'text') {
                         return (
@@ -1653,7 +1653,7 @@ function PdfEditorPanel() {
                               }}
                               style={{
                                 width: '100%',
-                                fontSize: `${item.fontSize * 0.5}px`,
+                                fontSize: `${item.fontSize / item.pageW * 100}cqw`,
                                 fontFamily: 'Helvetica, Arial, sans-serif',
                                 border: '1.5px solid #6366f1',
                                 background: 'rgba(255,255,255,0.97)',
