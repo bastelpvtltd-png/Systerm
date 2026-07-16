@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { FileStack, Upload, Trash2, FileDown, AlertTriangle, Loader, Plus, X, Grid3x3, Zap, Save, ExternalLink } from 'lucide-react'
+import { FileStack, Trash2, FileDown, AlertTriangle, Loader, Plus, X, Zap, Save, Link2, Settings, Upload } from 'lucide-react'
 
 // Word template upload with {{placeholder}} tags (e.g. {{invoice_number}},
 // {{consignee_name}}, {{total_value}}) — upload once, then any time a
@@ -218,9 +218,10 @@ function TemplatesContent() {
   )
 }
 
-// ── Excel Templates: Type management + cell mapping + generate ───────────
+// ── Google Sheets Templates: link a Sheet, map cells, generate PDFs ──────
 interface TemplateType { id: string; key: string; label: string; is_auto_capable: boolean }
 interface MappingEntry { key: string; label: string; source: 'cusdec' | 'cdn' | 'manual'; dbColumn?: string; isArray: boolean; cellRef?: string; cellRange?: string; colRange?: string; rowRange?: string; sheetName?: string }
+interface PrintConfig { sheetName: string; range: string; landscape: boolean; scale: 1|2|3|4; paperSize: string; askAtGenerateTime: boolean }
 
 // Parse "A10:A25" → { col: 'A', rows: '10:25' }; "A10:D25" → { col: 'A:D', rows: '10:25' }
 function parseCellRange(range: string): { col: string; rows: string } {
@@ -238,8 +239,15 @@ function buildCellRange(col: string, rows: string): string {
   const sc = parts[0], ec = parts.length > 1 ? parts[1] : parts[0]
   return `${sc}${r[0]}:${ec}${r[1]}`
 }
-interface ExcelTemplate { id: string; type_key: string; name: string; file_name: string; drive_url: string; mapping: MappingEntry[]; print_range?: string | null }
+interface ExcelTemplate {
+  id: string; type_key: string; name: string; file_name?: string | null
+  drive_url?: string | null; sheet_url?: string | null
+  mapping: MappingEntry[]; print_range?: string | null; print_config?: PrintConfig | null
+}
 interface CusdecRec { id: string; code: string; number: string; exporter: string; cap: string }
+interface SheetInfo { title: string; sheetId: number }
+
+const defaultPrintConfig: PrintConfig = { sheetName: '', range: '', landscape: true, scale: 4, paperSize: 'A4', askAtGenerateTime: false }
 
 function ExcelTemplatesContent() {
   const [types, setTypes] = useState<TemplateType[]>([])
@@ -250,15 +258,14 @@ function ExcelTemplatesContent() {
   const [templates, setTemplates] = useState<ExcelTemplate[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [name, setName] = useState('')
-  const [file, setFile] = useState<File | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const [confirmPrompt, setConfirmPrompt] = useState<{ name: string; base64: string; fileName: string } | null>(null)
+  const [sheetUrlInput, setSheetUrlInput] = useState('')   // URL paste field for new template
+  const [savingNew, setSavingNew] = useState(false)
+  const [confirmPrompt, setConfirmPrompt] = useState<{ name: string; sheetUrl: string } | null>(null)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
 
   const [mapping, setMapping] = useState<MappingEntry[]>([])
-  const [printSheet, setPrintSheet] = useState('')
-  const [printRange, setPrintRange] = useState('')
+  const [printConfig, setPrintConfig] = useState<PrintConfig>(defaultPrintConfig)
   const [savingMapping, setSavingMapping] = useState(false)
 
   const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
@@ -266,7 +273,14 @@ function ExcelTemplatesContent() {
   const [manualValues, setManualValues] = useState<Record<string, string>>({})
   const [generating, setGenerating] = useState(false)
   const [autoModal, setAutoModal] = useState(false)
-  const [sheetNames, setSheetNames] = useState<string[]>([])
+  // "Ask at generate time" modal state
+  const [askModal, setAskModal] = useState(false)
+  const [askSheet, setAskSheet] = useState('')
+  const [askRange, setAskRange] = useState('')
+
+  const [sheetsList, setSheetsList] = useState<SheetInfo[]>([])
+  const [sheetsLoading, setSheetsLoading] = useState(false)
+  const sheetNames = sheetsList.map(s => s.title)
   const [columnsByTable, setColumnsByTable] = useState<{ cusdec: string[]; cdn: string[] }>({ cusdec: [], cdn: [] })
 
   async function loadTypes() {
@@ -303,25 +317,39 @@ function ExcelTemplatesContent() {
     loadCols()
   }, [])
 
-  // Which sheets exist in the currently selected template — populates the
-  // per-field sheet picker below (multi-sheet mapping support).
+  // Load sheets list for the selected template (from its Google Sheets URL).
   useEffect(() => {
-    if (!selectedId) { setSheetNames([]); return }
+    if (!selectedId) { setSheetsList([]); return }
     let cancelled = false
+    setSheetsLoading(true)
     authHeader().then(headers =>
       fetch(`/api/excel-template-sheets?template_id=${selectedId}`, { headers })
         .then(r => r.json())
-        .then(d => { if (!cancelled) setSheetNames(d.sheets || []) })
-        .catch(() => { if (!cancelled) setSheetNames([]) })
+        .then(d => { if (!cancelled) setSheetsList(d.sheets || []) })
+        .catch(() => { if (!cancelled) setSheetsList([]) })
+        .finally(() => { if (!cancelled) setSheetsLoading(false) })
     )
     return () => { cancelled = true }
   }, [selectedId])
 
+  // Load sheets when a URL is typed/pasted in the new-template form.
+  async function fetchSheetsForUrl(url: string) {
+    if (!url.includes('spreadsheets')) { setSheetsList([]); return }
+    setSheetsLoading(true)
+    try {
+      const headers = await authHeader()
+      const res = await fetch(`/api/excel-template-sheets?sheet_url=${encodeURIComponent(url)}`, { headers })
+      const d = await res.json()
+      setSheetsList(d.sheets || [])
+    } catch { setSheetsList([]) }
+    finally { setSheetsLoading(false) }
+  }
+
   const selected = templates.find(t => t.id === selectedId) || null
   const selectedType = types.find(t => t.key === typeKey) || null
+
   useEffect(() => {
     const raw = selected?.mapping || []
-    // Backfill colRange/rowRange from legacy cellRange for existing entries
     setMapping(raw.map(m => {
       if (m.isArray && m.cellRange && !m.colRange && !m.rowRange) {
         const p = parseCellRange(m.cellRange)
@@ -329,16 +357,9 @@ function ExcelTemplatesContent() {
       }
       return m
     }))
-    const pr = selected?.print_range || ''
-    if (pr.includes('!')) {
-      const [sheet, range] = pr.split('!', 2)
-      setPrintSheet(sheet)
-      setPrintRange(range)
-    } else {
-      setPrintSheet('')
-      setPrintRange(pr)
-    }
+    setPrintConfig(selected?.print_config || defaultPrintConfig)
     setManualValues({})
+    setSheetUrlInput('')
   }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function addType() {
@@ -348,51 +369,27 @@ function ExcelTemplatesContent() {
       body: JSON.stringify({ key: newTypeLabel, label: newTypeLabel }),
     })
     const d = await res.json()
-    if (res.ok) {
-      setNewTypeLabel(''); setAddingType(false)
-      await loadTypes()
-      setTypeKey(d.type.key)
-    }
+    if (res.ok) { setNewTypeLabel(''); setAddingType(false); await loadTypes(); setTypeKey(d.type.key) }
   }
 
-  async function doUpload(fileName: string, base64: string, confirmUpdate: boolean) {
-    setUploading(true); setError('')
+  async function saveNewTemplate(confirmUpdate: boolean) {
+    setSavingNew(true); setError('')
     try {
-      let driveUrl = ''
-      const dr = await fetch('/api/upload-to-drive', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ base64, fileName, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docType: 'excel_template' }),
-      })
-      const dd = await dr.json()
-      if (dr.ok && dd.driveLink) driveUrl = dd.driveLink
-      if (!driveUrl) throw new Error('Drive upload failed')
-
+      const url = sheetUrlInput.trim()
+      if (!url) throw new Error('Paste a Google Sheets URL first')
       const res = await fetch('/api/document-templates', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ type_key: typeKey, name: name.trim(), file_name: fileName, drive_url: driveUrl, mapping: [], confirmUpdate }),
+        body: JSON.stringify({ type_key: typeKey, name: name.trim(), sheet_url: url, mapping: [], confirmUpdate }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Save failed')
-      if (d.needsConfirm) {
-        setConfirmPrompt({ name: d.name, base64, fileName })
-        return
-      }
+      if (d.needsConfirm) { setConfirmPrompt({ name: d.name, sheetUrl: url }); return }
       setStatus(`✓ Template "${d.template.name}" ${d.updated ? 'updated' : 'saved'}`)
-      setFile(null); setName(''); setConfirmPrompt(null)
+      setName(''); setSheetUrlInput(''); setConfirmPrompt(null)
       await loadTemplates()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  async function handleUpload() {
-    setError('')
-    if (!file) { setError('Choose an Excel (.xlsx) file first'); return }
-    if (!typeKey) { setError('Pick a template type first'); return }
-    const base64 = await fileToBase64(file)
-    await doUpload(file.name, base64, false)
+      if (d.template?.id) setSelectedId(d.template.id)
+    } catch (e: any) { setError(e.message) }
+    finally { setSavingNew(false) }
   }
 
   async function handleDeleteTemplate(id: string) {
@@ -416,7 +413,6 @@ function ExcelTemplatesContent() {
     if (!selected) return
     setSavingMapping(true)
     try {
-      // Compute cellRange from colRange+rowRange for array fields; validate
       const finalMapping = mapping.map(m => {
         if (m.isArray && (m.colRange || m.rowRange)) {
           if (!m.colRange || !m.rowRange) throw new Error(`Field "${m.label || m.key}": fill both Column and Rows`)
@@ -426,48 +422,48 @@ function ExcelTemplatesContent() {
         }
         return m
       })
-      const combinedPrintRange = printSheet.trim()
-        ? `${printSheet.trim()}!${printRange.trim()}`
-        : printRange.trim() || null
       const res = await fetch('/api/document-templates', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping: finalMapping, print_range: combinedPrintRange }),
+        body: JSON.stringify({ id: selected.id, type_key: selected.type_key, name: selected.name, mapping: finalMapping, print_config: printConfig }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setStatus('✓ Mapping saved')
+      setStatus('✓ Mapping & print config saved')
       await loadTemplates()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSavingMapping(false)
-    }
+    } catch (e: any) { setError(e.message) }
+    finally { setSavingMapping(false) }
   }
 
-  async function generate(cusdecId?: string, format: 'xlsx' | 'pdf' = 'xlsx') {
+  async function generate(opts: { cusdecId?: string; printSheet?: string; printRange?: string } = {}) {
     if (!selected) return
     setGenerating(true); setError('')
     try {
       const res = await fetch('/api/generate-from-template', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ template_id: selected.id, cusdec_id: cusdecId || genCusdecId || undefined, manual_values: manualValues, format }),
+        body: JSON.stringify({
+          template_id: selected.id,
+          cusdec_id: opts.cusdecId || genCusdecId || undefined,
+          manual_values: manualValues,
+          print_sheet: opts.printSheet,
+          print_range: opts.printRange,
+        }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
-      const mime = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      const blob = new Blob([bytes], { type: mime })
+      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' })
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = d.fileName
-      a.click()
+      const a = document.createElement('a'); a.href = url; a.download = d.fileName; a.click()
       URL.revokeObjectURL(url)
-      setStatus('✓ Document generated')
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setGenerating(false)
-    }
+      setStatus('✓ PDF generated')
+    } catch (e: any) { setError(e.message) }
+    finally { setGenerating(false) }
+  }
+
+  function openAskModal() {
+    setAskSheet(sheetNames[0] || '')
+    setAskRange(printConfig.range || '')
+    setAskModal(true)
   }
 
   const capCompleteCusdecs = cusdecs.filter(c => c.cap && String(c.cap).trim())
@@ -500,19 +496,31 @@ function ExcelTemplatesContent() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Left: Add template + Template list */}
         <div className="card">
           <h2 className="font-semibold text-gray-900 text-sm mb-3">Add / Update Template</h2>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Template Name (optional — defaults to "{selectedType?.label}")</label>
-              <input value={name} onChange={e => setName(e.target.value)} placeholder={selectedType?.label} className="input"/>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Google Sheets URL</label>
+              <div className="flex gap-2">
+                <input
+                  value={sheetUrlInput}
+                  onChange={e => { setSheetUrlInput(e.target.value); fetchSheetsForUrl(e.target.value) }}
+                  placeholder="https://docs.google.com/spreadsheets/d/..."
+                  className="input flex-1 text-xs font-mono"
+                />
+                {sheetsLoading && !selectedId && <Loader size={14} className="animate-spin text-blue-500 mt-2.5 flex-shrink-0"/>}
+              </div>
+              {sheetsList.length > 0 && !selectedId && (
+                <p className="text-[11px] text-green-600 mt-1">{sheetsList.length} sheet{sheetsList.length === 1 ? '' : 's'} found: {sheetsList.map(s => s.title).join(', ')}</p>
+              )}
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">.xlsx File</label>
-              <input type="file" accept=".xlsx" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm"/>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Template Name (optional)</label>
+              <input value={name} onChange={e => setName(e.target.value)} placeholder={selectedType?.label || 'e.g. Boat Note'} className="input"/>
             </div>
-            <button onClick={handleUpload} disabled={uploading} className="btn-primary flex items-center gap-2">
-              {uploading ? <Loader size={14} className="animate-spin"/> : <Upload size={14}/>}Upload Template
+            <button onClick={() => saveNewTemplate(false)} disabled={savingNew} className="btn-primary flex items-center gap-2">
+              {savingNew ? <Loader size={14} className="animate-spin"/> : <Link2 size={14}/>}Save Template
             </button>
           </div>
 
@@ -521,26 +529,31 @@ function ExcelTemplatesContent() {
             {templates.map(t => (
               <div key={t.id} onClick={() => setSelectedId(t.id)}
                 className={`flex items-center justify-between p-2.5 rounded-lg border text-xs cursor-pointer ${selectedId === t.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
-                <div>
-                  <p className="font-medium text-gray-800">{t.name}</p>
-                  <p className="text-gray-400">{t.mapping?.length || 0} field{(t.mapping?.length || 0) === 1 ? '' : 's'} mapped</p>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-gray-800 truncate">{t.name}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <p className="text-gray-400">{t.mapping?.length || 0} field{(t.mapping?.length || 0) === 1 ? '' : 's'} mapped</p>
+                    {(t.sheet_url || t.drive_url) && (
+                      <a href={(t.sheet_url || t.drive_url)!} target="_blank" rel="noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        className="flex items-center gap-0.5 text-blue-500 hover:underline">
+                        <Link2 size={10}/>Sheet
+                      </a>
+                    )}
+                  </div>
                 </div>
-                <button onClick={e => { e.stopPropagation(); handleDeleteTemplate(t.id) }} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
+                <button onClick={e => { e.stopPropagation(); handleDeleteTemplate(t.id) }} className="text-gray-300 hover:text-red-500 ml-2 flex-shrink-0"><Trash2 size={14}/></button>
               </div>
             ))}
             {templates.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No templates for this type yet</p>}
           </div>
         </div>
 
+        {/* Right: Cell mapping + print config + generate */}
         <div className="card">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Grid3x3 size={15}/>Cell Mapping</h2>
-            {selected?.drive_url && (
-              <a href={selected.drive_url} target="_blank" rel="noreferrer"
-                className="flex items-center gap-1 text-xs text-blue-600 hover:underline flex-shrink-0">
-                <ExternalLink size={12}/>Open in Drive
-              </a>
-            )}
+            <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Settings size={15}/>Cell Mapping</h2>
+            {sheetsLoading && selectedId && <Loader size={12} className="animate-spin text-gray-400"/>}
           </div>
           {!selected ? (
             <p className="text-xs text-gray-400 text-center py-12">Select a template to map its cells</p>
@@ -583,9 +596,6 @@ function ExcelTemplatesContent() {
                     {m.source === 'cdn' && m.isArray && !m.dbColumn && (
                       <p className="text-[10px] text-amber-600 bg-amber-50 rounded px-2 py-1">⚠ Pick a CDN column above — without it nothing fills</p>
                     )}
-                    {m.source === 'cusdec' && m.isArray && (
-                      <p className="text-[10px] text-red-600 bg-red-50 rounded px-2 py-1">⚠ "CUSDEC field" is a single value. Switch to "CDN per-container" for array fill.</p>
-                    )}
                     {m.isArray ? (
                       <div className="space-y-1">
                         <div className="flex gap-1.5">
@@ -596,7 +606,6 @@ function ExcelTemplatesContent() {
                               onChange={e => updateMappingRow(i, { colRange: e.target.value.toUpperCase() })}
                               placeholder="e.g. A"
                               className="input text-xs font-mono"
-                              title="Column letter — e.g. A  or A:D for multi-column"
                             />
                           </div>
                           <div className="flex-1">
@@ -606,7 +615,6 @@ function ExcelTemplatesContent() {
                               onChange={e => updateMappingRow(i, { rowRange: e.target.value })}
                               placeholder="e.g. 10:25"
                               className="input text-xs font-mono"
-                              title="Row range — e.g. 10:25"
                             />
                           </div>
                         </div>
@@ -620,30 +628,58 @@ function ExcelTemplatesContent() {
                   </div>
                 ))}
               </div>
-              <div className="border border-dashed border-gray-200 rounded-lg p-2.5 mb-3 space-y-1.5">
-                <label className="block text-[11px] font-medium text-gray-600">PDF Print Range (optional)</label>
-                {sheetNames.length > 1 && (
+
+              {/* Print Config */}
+              <div className="border border-dashed border-gray-200 rounded-lg p-2.5 mb-3 space-y-2">
+                <label className="block text-[11px] font-medium text-gray-600">PDF Print Config</label>
+                <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[10px] text-gray-500 mb-0.5">Which sheet to print</label>
-                    <select value={printSheet} onChange={e => setPrintSheet(e.target.value)} className="input text-xs">
+                    <label className="block text-[10px] text-gray-500 mb-0.5">Print Sheet</label>
+                    <select value={printConfig.sheetName} onChange={e => setPrintConfig(p => ({ ...p, sheetName: e.target.value }))} className="input text-xs">
                       <option value="">— First sheet —</option>
                       {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                   </div>
-                )}
-                <div>
-                  <label className="block text-[10px] text-gray-500 mb-0.5">Cell range</label>
-                  <input
-                    value={printRange}
-                    onChange={e => setPrintRange(e.target.value)}
-                    placeholder="e.g. A1:AA80  — format: StartCell:EndCell"
-                    className="input text-xs font-mono"
-                  />
+                  <div>
+                    <label className="block text-[10px] text-gray-500 mb-0.5">Cell Range</label>
+                    <input
+                      value={printConfig.range}
+                      onChange={e => setPrintConfig(p => ({ ...p, range: e.target.value }))}
+                      placeholder="e.g. A1:Z80"
+                      className="input text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-gray-500 mb-0.5">Scale</label>
+                    <select value={printConfig.scale} onChange={e => setPrintConfig(p => ({ ...p, scale: Number(e.target.value) as 1|2|3|4 }))} className="input text-xs">
+                      <option value={1}>Normal (100%)</option>
+                      <option value={2}>Fit Width</option>
+                      <option value={3}>Fit Height</option>
+                      <option value={4}>Fit to Page</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-gray-500 mb-0.5">Paper</label>
+                    <select value={printConfig.paperSize} onChange={e => setPrintConfig(p => ({ ...p, paperSize: e.target.value }))} className="input text-xs">
+                      <option value="A4">A4</option>
+                      <option value="Letter">Letter</option>
+                      <option value="A3">A3</option>
+                      <option value="Legal">Legal</option>
+                    </select>
+                  </div>
                 </div>
-                <p className="text-[10px] text-gray-400">
-                  {printSheet && printRange ? `Saves as "${printSheet}!${printRange}"` : printRange ? `Saves as "${printRange}"` : 'Leave blank to print the whole first sheet.'}
-                </p>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer">
+                    <input type="checkbox" checked={printConfig.landscape} onChange={e => setPrintConfig(p => ({ ...p, landscape: e.target.checked }))}/>
+                    Landscape
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer">
+                    <input type="checkbox" checked={printConfig.askAtGenerateTime} onChange={e => setPrintConfig(p => ({ ...p, askAtGenerateTime: e.target.checked }))}/>
+                    Ask sheet/range at generate time
+                  </label>
+                </div>
               </div>
+
               <div className="flex items-center gap-2 mb-4">
                 <button onClick={addMappingRow} className="flex items-center gap-1 text-xs text-blue-600 hover:underline"><Plus size={13}/>Add Field</button>
                 <button onClick={saveMapping} disabled={savingMapping} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
@@ -651,8 +687,9 @@ function ExcelTemplatesContent() {
                 </button>
               </div>
 
+              {/* Generate */}
               <div className="border-t border-gray-100 pt-3">
-                <h3 className="font-semibold text-gray-800 text-xs mb-2">Generate</h3>
+                <h3 className="font-semibold text-gray-800 text-xs mb-2">Generate PDF</h3>
                 {needsCusdec && (
                   <div className="mb-2">
                     <label className="block text-xs font-medium text-gray-600 mb-1">CUSDEC</label>
@@ -668,18 +705,16 @@ function ExcelTemplatesContent() {
                     <input value={manualValues[f.key] || ''} onChange={e => setManualValues(v => ({ ...v, [f.key]: e.target.value }))} className="input text-xs"/>
                   </div>
                 ))}
-                {selected?.print_range && (
-                  <p className="text-[10px] text-indigo-600 bg-indigo-50 rounded px-2 py-1 mb-2 font-mono">
-                    PDF: {selected.print_range.includes('!') ? selected.print_range : `range ${selected.print_range}`}
-                  </p>
-                )}
-                <div className="flex items-center gap-2 mt-2">
-                  <button onClick={() => generate(undefined, 'xlsx')} disabled={generating} className="btn-primary text-xs px-3 py-2 flex items-center gap-1.5">
-                    {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate Excel
-                  </button>
-                  <button onClick={() => generate(undefined, 'pdf')} disabled={generating} className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg text-white disabled:opacity-50" style={{ background: '#dc2626' }}>
-                    {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}{selected?.print_range ? `PDF (${selected.print_range})` : 'Generate PDF'}
-                  </button>
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  {printConfig.askAtGenerateTime ? (
+                    <button onClick={openAskModal} disabled={generating} className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg text-white disabled:opacity-50" style={{ background: '#dc2626' }}>
+                      {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate PDF…
+                    </button>
+                  ) : (
+                    <button onClick={() => generate()} disabled={generating} className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg text-white disabled:opacity-50" style={{ background: '#dc2626' }}>
+                      {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate PDF
+                    </button>
+                  )}
                   {selectedType?.is_auto_capable && (
                     <button onClick={() => setAutoModal(true)} className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg text-white" style={{ background: '#8b5cf6' }}>
                       <Zap size={12}/>Auto
@@ -692,29 +727,65 @@ function ExcelTemplatesContent() {
         </div>
       </div>
 
+      {/* Confirm duplicate name modal */}
       {confirmPrompt && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm p-5">
-            <h3 className="font-semibold text-gray-900 mb-2">Template "{confirmPrompt.name}" already exists</h3>
-            <p className="text-xs text-gray-500 mb-4">Update it with this new file instead of saving a duplicate?</p>
+            <h3 className="font-semibold text-gray-900 mb-2">Template &quot;{confirmPrompt.name}&quot; already exists</h3>
+            <p className="text-xs text-gray-500 mb-4">Update it with this Google Sheet URL instead of saving a duplicate?</p>
             <div className="flex gap-3">
               <button onClick={() => setConfirmPrompt(null)} className="btn-secondary flex-1">Cancel</button>
-              <button onClick={() => doUpload(confirmPrompt.fileName, confirmPrompt.base64, true)} className="btn-primary flex-1">Update</button>
+              <button onClick={() => saveNewTemplate(true)} className="btn-primary flex-1">Update</button>
             </div>
           </div>
         </div>
       )}
 
+      {/* Ask at generate time modal */}
+      {askModal && selected && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-5">
+            <h3 className="font-semibold text-gray-900 mb-3">PDF Print Options</h3>
+            <div className="space-y-3">
+              {sheetNames.length > 1 && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Sheet to Print</label>
+                  <select value={askSheet} onChange={e => setAskSheet(e.target.value)} className="input text-xs">
+                    {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Cell Range (optional)</label>
+                <input value={askRange} onChange={e => setAskRange(e.target.value)} placeholder="e.g. A1:Z80" className="input text-xs font-mono"/>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setAskModal(false)} className="btn-secondary flex-1">Cancel</button>
+              <button
+                onClick={() => { setAskModal(false); generate({ printSheet: askSheet || undefined, printRange: askRange || undefined }) }}
+                disabled={generating}
+                className="flex items-center justify-center gap-1.5 flex-1 text-xs py-2 rounded-lg text-white disabled:opacity-50"
+                style={{ background: '#dc2626' }}
+              >
+                {generating ? <Loader size={12} className="animate-spin"/> : <FileDown size={12}/>}Generate PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto modal */}
       {autoModal && selected && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col">
             <div className="p-5 border-b">
               <h3 className="font-semibold text-gray-900">Auto — pick a CAP-complete CUSDEC</h3>
-              <p className="text-xs text-gray-500 mt-1">Pulls the CUSDEC's data once, then fills each mapped array field down its cell range — once per CDN container, in order.</p>
+              <p className="text-xs text-gray-500 mt-1">Pulls the CUSDEC&apos;s data, fills each mapped array field down its cell range — once per CDN container, in order.</p>
             </div>
             <div className="p-5 overflow-y-auto flex-1 space-y-1.5">
               {capCompleteCusdecs.map(c => (
-                <button key={c.id} onClick={() => { setAutoModal(false); generate(c.id) }}
+                <button key={c.id} onClick={() => { setAutoModal(false); generate({ cusdecId: c.id }) }}
                   className="w-full text-left border border-gray-100 rounded-lg p-2.5 text-xs hover:bg-gray-50">
                   <p className="font-medium text-gray-800">E {c.number} · CAP {c.cap}</p>
                   <p className="text-gray-400 truncate">{c.exporter}</p>
