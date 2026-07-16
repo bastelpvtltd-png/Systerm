@@ -1921,9 +1921,9 @@ function BillsPanel() {
     try {
       let q = supabase.from('cusdec').select('id, code, number, exporter, reference')
       if (term.trim()) {
-        q = q.or(`number.ilike.%${term.trim()}%,reference.ilike.%${term.trim()}%`)
+        q = q.or(`number.ilike.%${term.trim()}%,reference.ilike.%${term.trim()}%,exporter.ilike.%${term.trim()}%,code.ilike.%${term.trim()}%`)
       }
-      const { data } = await q.limit(15)
+      const { data } = await q.order('created_at', { ascending: false }).limit(15)
       setMatches((data as CusdecMatch[]) || [])
     } catch { setMatches([]) }
     finally { setSearching(false) }
@@ -2023,18 +2023,28 @@ function BillsPanel() {
           <Receipt size={15} className="text-red-500"/>Upload Bill
         </h2>
 
-        {/* Shipment search */}
+        {/* Bill type FIRST — user picks type before searching */}
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Bill Type</label>
+          <select value={subtype} onChange={e => setSubtype(e.target.value)}
+            className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400">
+            {BILL_SUBTYPES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        </div>
+
+        {/* Shipment search — fuzzy by number, reference, exporter, code */}
         <div className="relative">
           <label className="block text-xs font-medium text-gray-600 mb-1">Shipment / CUSDEC Number</label>
           <div className="flex gap-2">
             <div className="relative flex-1">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"/>
               <input
                 value={search}
                 onChange={e => handleSearchChange(e.target.value)}
                 onFocus={handleSearchFocus}
                 onBlur={handleSearchBlur}
-                placeholder="Type to search by number or reference…"
-                className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 pr-7 focus:outline-none focus:border-blue-400"/>
+                placeholder="Number, reference, exporter…"
+                className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 pl-7 pr-7 focus:outline-none focus:border-blue-400"/>
               {searching && <Loader size={11} className="animate-spin text-gray-400 absolute right-2 top-1/2 -translate-y-1/2"/>}
             </div>
           </div>
@@ -2068,15 +2078,6 @@ function BillsPanel() {
                 className="text-blue-300 hover:text-blue-600 ml-2 flex-shrink-0"><X size={13}/></button>
             </div>
           )}
-        </div>
-
-        {/* Bill type */}
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Bill Type</label>
-          <select value={subtype} onChange={e => setSubtype(e.target.value)}
-            className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400">
-            {BILL_SUBTYPES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-          </select>
         </div>
 
         {/* File */}

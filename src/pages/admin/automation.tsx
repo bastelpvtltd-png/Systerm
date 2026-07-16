@@ -767,11 +767,23 @@ function ExportReleaseCheckPanel() {
 
 // ── Vessel Triggers ────────────────────────────────────────────────────────
 interface VesselRow { id: string; terminal: string; vessel: string; voyage: string; opening_time: string; closing_time: string; etb: string; last_update: string }
+type VesselSortKey = keyof VesselRow
+type SortDir = 'asc' | 'desc'
+
+function sortVessel(rows: VesselRow[], key: VesselSortKey, dir: SortDir) {
+  return [...rows].sort((a, b) => {
+    const av = (a[key] || '').toString().toLowerCase()
+    const bv = (b[key] || '').toString().toLowerCase()
+    return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
+  })
+}
 
 function VesselTriggerPanel() {
   const [items, setItems] = useState<VesselRow[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [sortKey, setSortKey] = useState<VesselSortKey>('etb')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [syncing, setSyncing] = useState(false)
   const [status, setStatus] = useState('')
   // The mount-only poll interval below closes over `load` as it was at mount
@@ -840,12 +852,15 @@ function VesselTriggerPanel() {
         <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table className="w-full text-xs">
             <thead className="bg-gray-50 sticky top-0"><tr>
-              {['Terminal', 'Vessel', 'Voyage', 'Opening', 'Closing', 'ETB', 'Last Updated'].map(h => (
-                <th key={h} className="text-left px-2 py-1.5 text-gray-500 font-medium">{h}</th>
+              {([['terminal','Terminal'],['vessel','Vessel'],['voyage','Voyage'],['opening_time','Opening'],['closing_time','Closing'],['etb','ETB'],['last_update','Last Updated']] as [VesselSortKey, string][]).map(([k, label]) => (
+                <th key={k} onClick={() => { if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortKey(k); setSortDir('asc') } }}
+                  className="text-left px-2 py-1.5 text-gray-500 font-medium cursor-pointer select-none hover:text-gray-800 whitespace-nowrap">
+                  {label}{sortKey === k ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                </th>
               ))}
             </tr></thead>
             <tbody>
-              {items.map(r => (
+              {sortVessel(items, sortKey, sortDir).map(r => (
                 <tr key={r.id} className="border-t border-gray-50">
                   <td className="px-2 py-1.5 text-gray-800">{r.terminal}</td>
                   <td className="px-2 py-1.5 text-gray-800 font-medium">{r.vessel}</td>
