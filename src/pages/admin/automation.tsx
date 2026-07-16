@@ -1480,10 +1480,10 @@ function PdfEditorPanel() {
             )}
 
             {/* Canvas area */}
-            <div className="relative inline-block border border-gray-200 rounded-xl overflow-hidden select-none"
-              style={{ maxWidth: '100%' }}>
+            <div className="relative inline-block border border-gray-200 rounded-xl select-none"
+              style={{ maxWidth: '100%', overflow: 'visible' }}>
               {loadingPage ? (
-                <div className="w-full h-96 flex items-center justify-center bg-gray-50">
+                <div className="w-full h-96 flex items-center justify-center bg-gray-50 rounded-xl">
                   <Loader size={24} className="animate-spin text-gray-400"/>
                 </div>
               ) : page ? (
@@ -1492,66 +1492,76 @@ function PdfEditorPanel() {
                     ref={imgRef}
                     src={`data:image/png;base64,${page.png}`}
                     alt={`Page ${currentPage + 1}`}
-                    style={{ display: 'block', maxWidth: '100%', cursor: tool === 'text' ? 'text' : 'crosshair' }}
+                    style={{ display: 'block', maxWidth: '100%', borderRadius: 'inherit', cursor: tool === 'text' ? 'text' : 'crosshair' }}
                     onClick={handleImgClick}
                     onMouseDown={handleHighlightMouseDown}
                     onMouseUp={handleHighlightMouseUp}
                     draggable={false}
                   />
 
-                  {/* Existing annotations overlay */}
-                  {pageAnnotations.map(ann => {
-                    if (!imgRef.current) return null
-                    const { width: dW, height: dH } = imgRef.current.getBoundingClientRect()
-                    const left = ann.xFrac * dW
-                    const top = ann.yFrac * dH
-                    if (ann.type === 'text') {
-                      return (
-                        <div key={ann.id} style={{ position: 'absolute', left, top, pointerEvents: 'auto', display: 'flex', alignItems: 'flex-start', gap: 2 }}>
-                          <span style={{ fontSize: ann.fontSize * 0.75, color: ann.color, fontFamily: 'Helvetica, Arial, sans-serif', whiteSpace: 'pre', lineHeight: 1.2, userSelect: 'none' }}>
-                            {ann.text}
-                          </span>
-                          <button onClick={() => removeAnnotation(ann.id)}
-                            style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 3, padding: '1px 3px', fontSize: 9, cursor: 'pointer', lineHeight: 1 }}>
-                            ×
-                          </button>
-                        </div>
-                      )
-                    }
-                    if (ann.type === 'highlight') {
-                      const w = ann.width * dW
-                      const h = ann.height * dH
-                      return (
-                        <div key={ann.id} style={{ position: 'absolute', left, top, width: w, height: h, background: '#FFFF00', opacity: 0.4, pointerEvents: 'none' }}/>
-                      )
-                    }
-                    return null
-                  })}
+                  {/* Annotation overlay — percentage coords so no getBoundingClientRect needed */}
+                  <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 2 }}>
+                    {pageAnnotations.map(ann => {
+                      if (ann.type === 'text') {
+                        return (
+                          <div key={ann.id} style={{
+                            position: 'absolute',
+                            left: `${ann.xFrac * 100}%`,
+                            top: `${ann.yFrac * 100}%`,
+                            pointerEvents: 'auto',
+                            display: 'flex', alignItems: 'flex-start', gap: 2,
+                            zIndex: 3,
+                          }}>
+                            <span style={{ fontSize: ann.fontSize * 0.75, color: ann.color, fontFamily: 'Helvetica, Arial, sans-serif', whiteSpace: 'pre', lineHeight: 1.2, userSelect: 'none' }}>
+                              {ann.text}
+                            </span>
+                            <button onClick={() => removeAnnotation(ann.id)}
+                              style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 3, padding: '1px 3px', fontSize: 9, cursor: 'pointer', lineHeight: 1, pointerEvents: 'auto' }}>
+                              ×
+                            </button>
+                          </div>
+                        )
+                      }
+                      if (ann.type === 'highlight') {
+                        return (
+                          <div key={ann.id} style={{
+                            position: 'absolute',
+                            left: `${ann.xFrac * 100}%`,
+                            top: `${ann.yFrac * 100}%`,
+                            width: `${ann.width * 100}%`,
+                            height: `${ann.height * 100}%`,
+                            background: '#FFFF00', opacity: 0.4, pointerEvents: 'none',
+                          }}/>
+                        )
+                      }
+                      return null
+                    })}
 
-                  {/* Pending text input */}
-                  {pendingInput && (
-                    <div style={{ position: 'absolute', left: pendingInput.x, top: pendingInput.y, zIndex: 10 }}>
-                      <input
-                        autoFocus
-                        value={pendingText}
-                        onChange={e => setPendingText(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') commitText(); if (e.key === 'Escape') setPendingInput(null) }}
-                        onBlur={commitText}
-                        style={{
-                          fontSize: fontSize * 0.75,
-                          color,
-                          fontFamily: 'Helvetica, Arial, sans-serif',
-                          border: '1px dashed #6366f1',
-                          background: 'rgba(255,255,255,0.9)',
-                          padding: '1px 4px',
-                          outline: 'none',
-                          minWidth: 80,
-                          borderRadius: 3,
-                        }}
-                        placeholder="Type text…"
-                      />
-                    </div>
-                  )}
+                    {/* Pending text input */}
+                    {pendingInput && (
+                      <div style={{ position: 'absolute', left: `${pendingInput.xFrac * 100}%`, top: `${pendingInput.yFrac * 100}%`, zIndex: 10, pointerEvents: 'auto' }}>
+                        <input
+                          autoFocus
+                          value={pendingText}
+                          onChange={e => setPendingText(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') commitText(); if (e.key === 'Escape') setPendingInput(null) }}
+                          onBlur={commitText}
+                          style={{
+                            fontSize: fontSize * 0.75,
+                            color,
+                            fontFamily: 'Helvetica, Arial, sans-serif',
+                            border: '1px dashed #6366f1',
+                            background: 'rgba(255,255,255,0.9)',
+                            padding: '1px 4px',
+                            outline: 'none',
+                            minWidth: 80,
+                            borderRadius: 3,
+                          }}
+                          placeholder="Type text…"
+                        />
+                      </div>
+                    )}
+                  </div>
                 </>
               ) : null}
             </div>

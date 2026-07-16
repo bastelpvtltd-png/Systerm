@@ -66,8 +66,12 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
   }
   function setReasonChecked(value: string) {
     setReason(value)
-    if (value === 'CUSDEC Passed') setSave(true)
-    else { setUseReference(false); setReference('') }
+    if (value === 'CUSDEC Passed') {
+      setSave(true)
+    } else {
+      setUseReference(false); setReference('')
+      if (value === 'Container Moved') { setNotify(true); setSave(true) }
+    }
   }
   const [error, setError] = useState('')
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)

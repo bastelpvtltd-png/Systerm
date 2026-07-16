@@ -82,6 +82,7 @@ interface UploadItem {
   numPages: number
   boxes: Record<string, PctBox>
   variant: 'native' | 'scanned'
+  savedReference?: string
 }
 
 interface DbRecord {
@@ -118,7 +119,7 @@ function statusLabel(it: UploadItem) {
     case 'extracting': return 'Detecting type...'
     case 'ready':      return it.scanned ? 'Scanned — select type' : 'Ready to save'
     case 'saving':     return 'Saving...'
-    case 'saved':      return 'Saved'
+    case 'saved':      return it.savedReference ? `Saved → ${it.savedReference}` : 'Saved'
     case 'error':      return it.error || 'Error'
     case 'skipped':    return 'Skipped — not saved'
   }
@@ -511,7 +512,7 @@ function DocumentsUploadContent() {
         }
       }
 
-      updateItem(item.id, { status: 'saved', driveLink: link })
+      updateItem(item.id, { status: 'saved', driveLink: link, savedReference: referenceOverride || undefined })
       return { ok: true, driveLink: link }
     } catch (e: any) {
       updateItem(item.id, { status: 'error', error: e.message })
@@ -2023,8 +2024,11 @@ function BillsPanel() {
               {matches.map(c => (
                 <button key={c.id} onClick={() => selectCusdec(c)}
                   className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition-colors">
-                  <p className="font-medium text-gray-800">{c.number} <span className="text-gray-400 font-normal">({c.code})</span></p>
-                  <p className="text-gray-400 truncate">{c.exporter}{c.reference ? ` · Ref: ${c.reference}` : ''}</p>
+                  <p className="font-medium text-gray-800 flex items-center gap-2 flex-wrap">
+                    {c.number} <span className="text-gray-400 font-normal">({c.code})</span>
+                    {c.reference && <span className="text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">{c.reference}</span>}
+                  </p>
+                  <p className="text-gray-400 truncate mt-0.5">{c.exporter}</p>
                 </button>
               ))}
             </div>
@@ -2032,12 +2036,15 @@ function BillsPanel() {
 
           {selected && (
             <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-semibold text-blue-800">{selected.number}</p>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-blue-800 flex items-center gap-2 flex-wrap">
+                  {selected.number}
+                  {selected.reference && <span className="text-[10px] font-semibold text-blue-700 bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded">{selected.reference}</span>}
+                </p>
                 <p className="text-[11px] text-blue-600 truncate">{selected.exporter}</p>
               </div>
               <button onClick={() => { setSelected(null); setSearch(''); setBills([]) }}
-                className="text-blue-300 hover:text-blue-600"><X size={13}/></button>
+                className="text-blue-300 hover:text-blue-600 ml-2 flex-shrink-0"><X size={13}/></button>
             </div>
           )}
         </div>
