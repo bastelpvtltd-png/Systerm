@@ -55,6 +55,7 @@ function DocsCreateContent() {
   const [saving, setSaving]           = useState(false)
   const [savedDriveUrl, setSavedDriveUrl] = useState("")
   const [sendModalBn, setSendModalBn] = useState(false)
+  const [bnReason, setBnReason]       = useState("")
 
   // ── Load template + cusdec list when docType changes ──────────────────────
   useEffect(() => {
@@ -161,7 +162,7 @@ function DocsCreateContent() {
 
   // ── Generate from CUSDEC row ──────────────────────────────────────────────
   async function generateFromCusdec(cusdec: CusdecFull) {
-    setError(""); setGeneratingCusdecId(cusdec.id); setBnResult(null); setSavedDriveUrl("")
+    setError(""); setGeneratingCusdecId(cusdec.id); setBnResult(null); setSavedDriveUrl(""); setBnReason("")
     try {
       const h = await authHeader()
       const res = await fetch("/api/doc-generate", {
@@ -445,21 +446,29 @@ function DocsCreateContent() {
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      <label className="flex items-center gap-2 text-xs text-gray-600 bg-blue-50 rounded-lg px-3 py-2 border border-blue-100 cursor-not-allowed select-none">
-                        <input type="checkbox" checked readOnly className="opacity-60"/>
-                        <span className="font-medium">Boat Note Passed</span>
-                        <span className="text-gray-400 text-[11px]">(pre-checked)</span>
-                      </label>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Reason</label>
+                        <select
+                          value={bnReason}
+                          onChange={e => setBnReason(e.target.value)}
+                          className="input w-full text-xs">
+                          <option value="">— Select reason —</option>
+                          <option value="first_generation">First Generation</option>
+                          <option value="reissue">Re-issue</option>
+                          <option value="correction">Correction</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
                       {bnResult.cusdec.boat_note_url && (
                         <p className="text-xs text-amber-600 flex items-center gap-1">
                           <AlertTriangle size={12}/>Already saved before — saving will replace the existing link.
                         </p>
                       )}
-                      <button onClick={saveBnToDrive} disabled={saving}
+                      <button onClick={saveBnToDrive} disabled={saving || !bnReason}
                         className="flex items-center gap-2 w-full justify-center px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
                         style={{ background: '#22A87A' }}>
                         {saving ? <Loader size={14} className="animate-spin"/> : <CheckCircle size={14}/>}
-                        Upload to Drive &amp; Save
+                        Done
                       </button>
                     </div>
                   )}
