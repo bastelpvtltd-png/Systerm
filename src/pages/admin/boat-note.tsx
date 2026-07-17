@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search, FileCode, ScanText, Copy, Save, Download, AlertTriangle } from 'lucide-react'
+import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search, FileCode, ScanText, Copy, Save, Download, AlertTriangle, CheckCircle, Send } from 'lucide-react'
+import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
 import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
 
 type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note' | 'done-boat-note' | 'cusdec-xml' | 'cdn-text' | 'parties-copy'
 
-interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean }
+interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean; boat_note_url?: string }
 interface CdnRec    { id: string; code?: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; boat_note_passed?: boolean; shipper?: string; consignee?: string }
 
 interface DocTemplate { id: string; name: string; file_name: string; drive_url: string | null; raw_text: string; placeholders: string[]; created_at: string }
@@ -124,6 +125,9 @@ function BoatNoteContent() {
   const [excelTemplateId, setExcelTemplateId] = useState('')
   const [generatingExcel, setGeneratingExcel] = useState(false)
   const [bnPdf, setBnPdf] = useState<{ base64: string; fileName: string } | null>(null)
+  const [bnReason, setBnReason] = useState('')
+  const [savedBnUrl, setSavedBnUrl] = useState('')
+  const [sendModalBnOpen, setSendModalBnOpen] = useState(false)
 
   // ── Boat Note: Quick Upload (CUSDEC XML + PDF, ephemeral) ─────────────
   // Admin-only per spec. Nothing here ever reaches Supabase/Drive — the
@@ -523,7 +527,7 @@ function BoatNoteContent() {
 
     }
 
-    setGen(true); setBoatNotes([]); setBnPdf(null)
+    setGen(true); setBoatNotes([]); setBnPdf(null); setSavedBnUrl(''); setBnReason('')
     try {
       const h = await authHeader()
       const r = await fetch('/api/generate-boat-note', {
@@ -533,7 +537,8 @@ function BoatNoteContent() {
       const d = await r.json()
       if (!r.ok) throw new Error(d.error)
       setBoatNotes(d.boat_notes || [])
-      setCusdecNo(d.cusdec_no || '')
+      const cusdecNoVal = d.cusdec_no || ''
+      setCusdecNo(cusdecNoVal)
       // Generate PDF from Google Sheets template
       const pdfRes = await fetch('/api/doc-generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
@@ -541,7 +546,9 @@ function BoatNoteContent() {
       })
       const pdfD = await pdfRes.json()
       if (!pdfRes.ok) throw new Error(pdfD.error || 'Template PDF generate failed')
-      setBnPdf({ base64: pdfD.base64, fileName: pdfD.fileName })
+      const cusdecDigits = cusdecNoVal.replace(/[^0-9]/g, '')
+      const fileName = `B${cusdecDigits || cusdecNoVal || 'UNKNOWN'}.pdf`
+      setBnPdf({ base64: pdfD.base64, fileName })
       setStatus(`✓ ${d.boat_notes.length} container(s) — PDF ready`)
     } catch (e: any) { setStatus(`✗ ${e.message}`) }
     finally { setGen(false) }
@@ -781,12 +788,42 @@ function BoatNoteContent() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setStatus(`✓ Saved — ${bnPdf.fileName} (no download)`)
+      setSavedBnUrl(dd.driveLink)
+      setStatus(`✓ Saved — ${bnPdf.fileName}`)
     } catch (e: any) {
       setStatus(`✗ ${e.message}`)
     } finally {
       setSavingOnly(false)
     }
+  }
+
+  async function onSaveBnModal(): Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }> {
+    if (!bnPdf || !selCusdec) return { ok: false, error: 'No PDF or CUSDEC selected' }
+    try {
+      const h = await authHeader()
+      const dr = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ base64: bnPdf.base64, fileName: bnPdf.fileName, mimeType: 'application/pdf', docType: 'boat_note' }),
+      })
+      const dd = await dr.json()
+      if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
+      const res = await fetch('/api/save-boat-note', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ cusdec_id: selCusdec, drive_url: dd.driveLink, file_name: bnPdf.fileName }),
+      })
+      const sd = await res.json()
+      if (!res.ok) throw new Error(sd.error)
+      setSavedBnUrl(dd.driveLink)
+      return { ok: true, results: [{ fileName: bnPdf.fileName, driveLink: dd.driveLink, docType: 'boat_note' }] }
+    } catch (e: any) {
+      return { ok: false, error: e.message }
+    }
+  }
+
+  async function onGetDriveLinksBnModal(): Promise<SendResultFile[]> {
+    if (savedBnUrl && bnPdf) return [{ fileName: bnPdf.fileName, driveLink: savedBnUrl, docType: 'boat_note' }]
+    const res = await onSaveBnModal()
+    return res.results || []
   }
 
   async function sendEmail() {
@@ -810,6 +847,9 @@ function BoatNoteContent() {
   }
 
   const cur = cusdecs.find(c => c.id === selCusdec)
+  const curHasBnUrl = !!cur?.boat_note_url
+  const curIsBlue   = !!cur?.export_release_passed
+  const curIsGreen  = cur ? isCompleted(cur) && !curIsBlue : false
   const statusColor = status.startsWith('✓') ? 'text-green-600' : status.startsWith('⚠') ? 'text-amber-600' : 'text-red-600'
 
   return (
@@ -1072,6 +1112,7 @@ function BoatNoteContent() {
 
             {boatNotes.length > 0 ? (
               <>
+                {/* Container summary */}
                 <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4">
                   <p className="text-xs font-bold text-green-700 mb-1.5">
                     CUSDEC E {cusdecNo} · {boatNotes.length} container{boatNotes.length !== 1 ? 's' : ''}
@@ -1085,55 +1126,79 @@ function BoatNoteContent() {
                   </div>
                 </div>
 
-                <div className="flex gap-2 mb-2">
-                  {bnPdf && (
+                {/* Download + Send */}
+                {bnPdf && (
+                  <div className="flex gap-2 mb-3">
                     <button onClick={downloadPdf}
                       className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium"
                       style={{ background: '#1B3A5C' }}>
-                      <FileDown size={14}/> PDF
+                      <FileDown size={14}/> Download
                     </button>
-                  )}
-                  <button onClick={downloadExcel}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium"
-                    style={{ background: '#22A87A' }}>
-                    <FileDown size={14}/> Excel
-                  </button>
-                </div>
-                {bnPdf && (
-                  <button onClick={saveOnly} disabled={savingOnly}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 mb-3 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
-                    {savingOnly ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>} Save Only (no download)
-                  </button>
+                    {!(curIsGreen && curHasBnUrl) && (
+                      <button onClick={() => setSendModalBnOpen(true)}
+                        className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 hover:bg-gray-50">
+                        <Send size={14}/> Send
+                      </button>
+                    )}
+                  </div>
                 )}
 
-                <div className="border-t border-gray-100 pt-3 space-y-2">
-                  <p className="text-xs font-medium text-gray-600">Send Email</p>
-                  <input value={emailTo} onChange={e => setEmailTo(e.target.value)}
-                    className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
-                    placeholder="recipient@email.com"/>
-                  <button onClick={sendEmail} disabled={sending || !emailTo}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-                    style={{ background: '#22A87A' }}>
-                    {sending ? <Loader size={14} className="animate-spin"/> : <Mail size={14}/>}
-                    Send Email
-                  </button>
-                </div>
-
-                {excelTemplates.length > 0 && (
-                  <div className="border-t border-gray-100 pt-3 space-y-2">
-                    <p className="text-xs font-medium text-gray-600">Excel Template</p>
-                    <select value={excelTemplateId} onChange={e => setExcelTemplateId(e.target.value)}
-                      className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400">
-                      <option value="">— pick template —</option>
-                      {excelTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                    <button onClick={generateExcelTemplate} disabled={generatingExcel || !excelTemplateId || !selCusdec}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-                      style={{ background: '#1B3A5C' }}>
-                      {generatingExcel ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-                      Generate Excel
-                    </button>
+                {/* Save panel — status-based */}
+                {bnPdf && !(curIsGreen && curHasBnUrl) && (
+                  <div className="border-t border-gray-100 pt-3">
+                    <h3 className="text-xs font-semibold text-gray-700 mb-2">Save to System</h3>
+                    {savedBnUrl ? (
+                      <div className="flex items-center gap-2 text-xs text-green-600 bg-green-50 rounded-lg px-3 py-2 border border-green-100">
+                        <CheckCircle size={13}/>Saved!{" "}
+                        <a href={savedBnUrl} target="_blank" rel="noreferrer" className="underline ml-1">View in Drive</a>
+                      </div>
+                    ) : curHasBnUrl ? (
+                      /* Rule 2: has existing url → locked replace */
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-2 text-xs text-gray-600 bg-amber-50 rounded-lg px-3 py-2 border border-amber-100 cursor-not-allowed select-none">
+                          <input type="checkbox" checked readOnly className="opacity-60"/>
+                          <span className="font-medium">Replace existing Boat Note link</span>
+                          <span className="text-gray-400 text-[11px]">(locked)</span>
+                        </label>
+                        <p className="text-xs text-amber-600 flex items-center gap-1">
+                          <AlertTriangle size={12}/>Will upload new PDF and replace the existing Drive link.
+                        </p>
+                        <button onClick={saveOnly} disabled={savingOnly}
+                          className="flex items-center gap-2 w-full justify-center px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                          style={{ background: '#22A87A' }}>
+                          {savingOnly ? <Loader size={14} className="animate-spin"/> : <CheckCircle size={14}/>}Done
+                        </button>
+                      </div>
+                    ) : (
+                      /* Rules 3 & 4: no existing url → reason dropdown */
+                      <div className="space-y-2">
+                        <select value={bnReason} onChange={e => setBnReason(e.target.value)} className="input w-full text-xs">
+                          <option value="">— Select reason —</option>
+                          <option value="first_generation">First Generation</option>
+                          <option value="reissue">Re-issue</option>
+                          <option value="correction">Correction</option>
+                          <option value="other">Other</option>
+                        </select>
+                        <button onClick={saveOnly} disabled={savingOnly || !bnReason}
+                          className="flex items-center gap-2 w-full justify-center px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                          style={{ background: '#22A87A' }}>
+                          {savingOnly ? <Loader size={14} className="animate-spin"/> : <CheckCircle size={14}/>}Done
+                        </button>
+                      </div>
+                    )}
                   </div>
+                )}
+
+                {/* SendModal */}
+                {sendModalBnOpen && bnPdf && (
+                  <SendModal
+                    label={bnPdf.fileName}
+                    docType="boat_note"
+                    onSave={onSaveBnModal}
+                    onGetDriveLinks={onGetDriveLinksBnModal}
+                    onClose={() => setSendModalBnOpen(false)}
+                    onDone={() => { setSendModalBnOpen(false); loadCusdecs(true) }}
+                  />
                 )}
               </>
             ) : (
