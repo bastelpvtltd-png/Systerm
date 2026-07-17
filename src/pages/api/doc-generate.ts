@@ -21,10 +21,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   let copyId: string | null = null
   try {
-    const { document_type, cusdec_id, manual_values } = req.body as {
+    const { document_type, cusdec_id, manual_values, cdn_ids } = req.body as {
       document_type: string
       cusdec_id?: string
       manual_values?: Record<string, string>
+      cdn_ids?: string[]
     }
     if (!document_type) return res.status(400).json({ error: 'document_type required' })
 
@@ -42,7 +43,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { data: cusdec } = await sb.from('cusdec').select('*').eq('id', cusdec_id).maybeSingle()
       cusdecRow = cusdec || null
       if (cusdec) {
-        const { data: cdns } = await sb.from('cdn').select('*').eq('code', cusdec.code).eq('cusdec_number', cusdec.number)
+        let q = sb.from('cdn').select('*').eq('code', cusdec.code).eq('cusdec_number', cusdec.number)
+        if (cdn_ids?.length) q = q.in('id', cdn_ids) as typeof q
+        const { data: cdns } = await q
         cdnRows = cdns || []
       }
     }

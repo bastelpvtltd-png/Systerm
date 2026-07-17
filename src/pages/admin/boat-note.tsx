@@ -123,6 +123,7 @@ function BoatNoteContent() {
   const [excelTemplates, setExcelTemplates] = useState<{id: string; name: string}[]>([])
   const [excelTemplateId, setExcelTemplateId] = useState('')
   const [generatingExcel, setGeneratingExcel] = useState(false)
+  const [bnPdf, setBnPdf] = useState<{ base64: string; fileName: string } | null>(null)
 
   // ── Boat Note: Quick Upload (CUSDEC XML + PDF, ephemeral) ─────────────
   // Admin-only per spec. Nothing here ever reaches Supabase/Drive — the
@@ -522,17 +523,26 @@ function BoatNoteContent() {
 
     }
 
-    setGen(true); setBoatNotes([])
+    setGen(true); setBoatNotes([]); setBnPdf(null)
     try {
+      const h = await authHeader()
       const r = await fetch('/api/generate-boat-note', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
         body: JSON.stringify({ cusdec_id: selCusdec, cdn_ids: selCdns }),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error)
       setBoatNotes(d.boat_notes || [])
       setCusdecNo(d.cusdec_no || '')
-      setStatus(`✓ ${d.boat_notes.length} boat note(s) ready`)
+      // Generate PDF from Google Sheets template
+      const pdfRes = await fetch('/api/doc-generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ document_type: 'boat_note', cusdec_id: selCusdec, cdn_ids: selCdns }),
+      })
+      const pdfD = await pdfRes.json()
+      if (!pdfRes.ok) throw new Error(pdfD.error || 'Template PDF generate failed')
+      setBnPdf({ base64: pdfD.base64, fileName: pdfD.fileName })
+      setStatus(`✓ ${d.boat_notes.length} container(s) — PDF ready`)
     } catch (e: any) { setStatus(`✗ ${e.message}`) }
     finally { setGen(false) }
   }
@@ -719,9 +729,12 @@ function BoatNoteContent() {
   }
 
   async function downloadPdf() {
-    if (!boatNotes.length) return
-    const doc = await buildBoatNotePdf(boatNotes, cusdecNo)
-    doc.save(boatNoteFileName('pdf'))
+    if (!bnPdf) return
+    const bytes = Uint8Array.from(atob(bnPdf.base64), c => c.charCodeAt(0))
+    const blob = new Blob([bytes], { type: 'application/pdf' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = bnPdf.fileName; a.click()
+    URL.revokeObjectURL(url)
     setStatus('✓ PDF downloaded')
   }
 
@@ -752,26 +765,23 @@ function BoatNoteContent() {
   // auto-download, for when this is being filed rather than handed to
   // someone right now.
   async function saveOnly() {
-    if (!boatNotes.length || !selCusdec) return
+    if (!bnPdf || !selCusdec) return
     setSavingOnly(true); setStatus('')
     try {
-      const doc = await buildBoatNotePdf(boatNotes, cusdecNo)
-      const base64 = await fileToBase64FromBlob(doc.output('blob'))
-      const fileName = boatNoteFileName('pdf')
+      const h = await authHeader()
       const dr = await fetch('/api/upload-to-drive', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ base64, fileName, mimeType: 'application/pdf', docType: 'boat_note' }),
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ base64: bnPdf.base64, fileName: bnPdf.fileName, mimeType: 'application/pdf', docType: 'boat_note' }),
       })
       const dd = await dr.json()
       if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
-
       const res = await fetch('/api/save-boat-note', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ cusdec_id: selCusdec, drive_url: dd.driveLink, file_name: fileName }),
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ cusdec_id: selCusdec, drive_url: dd.driveLink, file_name: bnPdf.fileName }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setStatus(`✓ Saved to database — ${fileName} (no download)`)
+      setStatus(`✓ Saved — ${bnPdf.fileName} (no download)`)
     } catch (e: any) {
       setStatus(`✗ ${e.message}`)
     } finally {
@@ -1076,21 +1086,25 @@ function BoatNoteContent() {
                 </div>
 
                 <div className="flex gap-2 mb-2">
-                  <button onClick={downloadPdf}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium"
-                    style={{ background: '#1B3A5C' }}>
-                    <FileDown size={14}/> PDF
-                  </button>
+                  {bnPdf && (
+                    <button onClick={downloadPdf}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium"
+                      style={{ background: '#1B3A5C' }}>
+                      <FileDown size={14}/> PDF
+                    </button>
+                  )}
                   <button onClick={downloadExcel}
                     className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium"
                     style={{ background: '#22A87A' }}>
                     <FileDown size={14}/> Excel
                   </button>
                 </div>
-                <button onClick={saveOnly} disabled={savingOnly}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 mb-3 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
-                  {savingOnly ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>} Save Only (no download)
-                </button>
+                {bnPdf && (
+                  <button onClick={saveOnly} disabled={savingOnly}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 mb-3 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                    {savingOnly ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>} Save Only (no download)
+                  </button>
+                )}
 
                 <div className="border-t border-gray-100 pt-3 space-y-2">
                   <p className="text-xs font-medium text-gray-600">Send Email</p>
