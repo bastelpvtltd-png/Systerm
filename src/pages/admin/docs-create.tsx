@@ -1960,7 +1960,11 @@ function PartiesCopyPanel() {
   const selectedCdns = selected ? cdns.filter(c => c.cusdec_number === selected.number) : []
   const capNum = Number(selected?.cap || 0)
   const cdnCount = selectedCdns.length
-  const eligible = selected && capNum > 0 && capNum === cdnCount && !selected.export_release_passed
+  // No longer blocked by CAP-mismatch or Export Release (Green/Blue) status —
+  // generation should always be possible once a CUSDEC is selected. The
+  // CAP/CDN-count and release-status info still shows below as a heads-up,
+  // just non-blocking now.
+  const eligible = !!selected
 
   async function generate() {
     if (!selected || !eligible) return
@@ -2064,13 +2068,13 @@ function PartiesCopyPanel() {
                 <div><p className="text-gray-400">Discharge Port</p><p className="font-medium">{selected.discharge_port || '—'}</p></div>
               </div>
 
-              {!eligible && (
+              {(capNum === 0 || capNum !== cdnCount || selected.export_release_passed) && (
                 <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 mb-4">
                   <AlertTriangle size={13} className="mt-0.5 flex-shrink-0"/>
                   <div>
                     {capNum === 0 && <p>CAP not set on this CUSDEC.</p>}
-                    {capNum > 0 && capNum !== cdnCount && <p>CAP ({capNum}) ≠ CDN count ({cdnCount}). All containers must be entered before generating.</p>}
-                    {selected.export_release_passed && <p>Export release already passed — Party's Copy locked.</p>}
+                    {capNum > 0 && capNum !== cdnCount && <p>CAP ({capNum}) ≠ CDN count ({cdnCount}) — generating anyway.</p>}
+                    {selected.export_release_passed && <p>Export release already passed — generating anyway.</p>}
                   </div>
                 </div>
               )}
