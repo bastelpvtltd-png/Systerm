@@ -44,6 +44,7 @@ function DocsCreateContent() {
 
   // ── Boat Note specific ─────────────────────────────────────────────────────
   const [tplFields, setTplFields]             = useState<TplField[]>([])
+  const [tplLoadError, setTplLoadError]       = useState("")
   const [formValues, setFormValues]           = useState<Record<string, string[]>>({})
   const [cusdecList, setCusdecList]           = useState<CusdecFull[]>([])
   const [cusdecListLoading, setCusdecListLoading] = useState(false)
@@ -62,22 +63,34 @@ function DocsCreateContent() {
   useEffect(() => {
     async function checkTemplate() {
       setTemplateExists(null)
-      const h = await authHeader()
-      const res = await fetch("/api/doc-templates", { headers: h })
-      if (!res.ok) { setTemplateExists(false); return }
-      const d = await res.json()
-      const tpl = (d.templates || []).find((t: any) => t.document_type === docType)
-      setTemplateExists(!!tpl)
-      if (docType === "boat_note" && tpl) {
-        const fields: TplField[] = (tpl.template_mappings || []).map((m: any) => ({
-          field_label: m.field_label,
-          is_repeating: !!m.is_repeating,
-        }))
-        setTplFields(fields)
-        const init: Record<string, string[]> = {}
-        fields.forEach(f => { init[f.field_label] = [""] })
-        setFormValues(init)
-      } else {
+      setTplLoadError("")
+      try {
+        const h = await authHeader()
+        const res = await fetch("/api/doc-templates", { headers: h })
+        if (!res.ok) {
+          setTemplateExists(false)
+          setTplLoadError(`Failed to load templates (HTTP ${res.status})`)
+          return
+        }
+        const d = await res.json()
+        const tpl = (d.templates || []).find((t: any) => t.document_type === docType)
+        setTemplateExists(!!tpl)
+        if (docType === "boat_note" && tpl) {
+          const fields: TplField[] = (tpl.template_mappings || []).map((m: any) => ({
+            field_label: m.field_label,
+            is_repeating: !!m.is_repeating,
+          }))
+          setTplFields(fields)
+          const init: Record<string, string[]> = {}
+          fields.forEach(f => { init[f.field_label] = [""] })
+          setFormValues(init)
+        } else {
+          setTplFields([])
+          setFormValues({})
+        }
+      } catch (e: any) {
+        setTemplateExists(false)
+        setTplLoadError(e.message || "Failed to load templates")
         setTplFields([])
         setFormValues({})
       }
@@ -279,7 +292,11 @@ function DocsCreateContent() {
               Manual Entry
               <span className="text-xs text-gray-400 font-normal">— fill template fields</span>
             </h2>
-            {tplFields.length === 0 ? (
+            {tplLoadError ? (
+              <p className="text-xs text-red-500 flex items-center gap-1">
+                <AlertTriangle size={12}/>Could not load template fields: {tplLoadError}
+              </p>
+            ) : tplFields.length === 0 ? (
               <p className="text-xs text-gray-400">
                 No template fields configured.{" "}
                 <a href="/admin/templates" className="underline text-blue-500">Add template mappings</a> first.
