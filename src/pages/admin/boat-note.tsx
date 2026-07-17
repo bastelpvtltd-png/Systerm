@@ -129,6 +129,58 @@ function BoatNoteContent() {
   const [savedBnUrl, setSavedBnUrl] = useState('')
   const [sendModalBnOpen, setSendModalBnOpen] = useState(false)
 
+  // ── Boat Note: Manual Entry sub-tab (no CUSDEC — type the template
+  // fields by hand, generate the same Google Sheets template PDF, then
+  // download/mail only — nothing gets saved to Drive since there's no
+  // CUSDEC record to attach the link to) ─────────────────────────────────
+  const [bnEntryMode, setBnEntryMode] = useState<'cusdec' | 'manual'>('cusdec')
+  const [bnTplFields, setBnTplFields] = useState<{ field_label: string; is_repeating: boolean }[]>([])
+  const [bnTplLoadError, setBnTplLoadError] = useState('')
+  const [bnFormValues, setBnFormValues] = useState<Record<string, string[]>>({})
+  const [bnManualGenerating, setBnManualGenerating] = useState(false)
+
+  useEffect(() => {
+    async function loadBnTemplateFields() {
+      setBnTplLoadError('')
+      try {
+        const h = await authHeader()
+        const res = await fetch('/api/doc-templates', { headers: h })
+        if (!res.ok) { setBnTplLoadError(`Failed to load template (HTTP ${res.status})`); return }
+        const d = await res.json()
+        const tpl = (d.templates || []).find((t: any) => t.document_type === 'boat_note')
+        if (!tpl) { setBnTplLoadError('No Boat Note template configured — set one up in Templates first'); return }
+        const fields = (tpl.template_mappings || []).map((m: any) => ({
+          field_label: m.field_label, is_repeating: !!m.is_repeating,
+        }))
+        setBnTplFields(fields)
+        const init: Record<string, string[]> = {}
+        fields.forEach((f: { field_label: string }) => { init[f.field_label] = [''] })
+        setBnFormValues(init)
+      } catch (e: any) {
+        setBnTplLoadError(e.message || 'Failed to load template')
+      }
+    }
+    loadBnTemplateFields()
+  }, [])
+
+  async function generateManualBn() {
+    setBnManualGenerating(true); setStatus(''); setBnPdf(null); setSavedBnUrl(''); setBnReason(''); setBoatNotes([]); setCusdecNo('')
+    try {
+      const manual: Record<string, string> = {}
+      Object.entries(bnFormValues).forEach(([label, rows]) => { manual[label] = rows.join('\n') })
+      const h = await authHeader()
+      const res = await fetch('/api/doc-generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ document_type: 'boat_note', manual_values: manual }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Generate failed')
+      setBnPdf({ base64: d.base64, fileName: d.fileName })
+      setStatus('✓ PDF ready — download or send below')
+    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+    finally { setBnManualGenerating(false) }
+  }
+
   // ── Boat Note: Quick Upload (CUSDEC XML + PDF, ephemeral) ─────────────
   // Admin-only per spec. Nothing here ever reaches Supabase/Drive — the
   // XML is parsed in-memory server-side (parse-cusdec-xml.ts) purely to
@@ -1013,11 +1065,95 @@ function BoatNoteContent() {
 
         {subTab === 'boat-note' && canBoatNote && (
         <>
-        <p className="text-gray-500 text-sm mb-4 -mt-2">SHIPPING NOTE / BOAT NOTE – Exp 3a format · Select CUSDEC → CDNs → Generate → Download / Email</p>
+        <p className="text-gray-500 text-sm mb-3 -mt-2">SHIPPING NOTE / BOAT NOTE – Exp 3a format · Select CUSDEC → CDNs → Generate → Download / Email</p>
+
+        <div className="flex gap-1.5 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
+          <button onClick={() => { setBnEntryMode('cusdec'); setBnPdf(null); setBoatNotes([]); setStatus(''); setSavedBnUrl(''); setBnReason('') }}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${bnEntryMode === 'cusdec' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+            From CUSDEC
+          </button>
+          <button onClick={() => { setBnEntryMode('manual'); setBnPdf(null); setBoatNotes([]); setStatus(''); setSavedBnUrl(''); setBnReason('') }}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${bnEntryMode === 'manual' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+            Manual Entry
+          </button>
+        </div>
+
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
 
+          {/* Manual Entry — no CUSDEC/CDN needed, fill template fields by hand */}
+          {bnEntryMode === 'manual' && (
+          <div className="card xl:col-span-2">
+            <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Template Fields</h2>
+            {bnTplLoadError ? (
+              <p className="text-xs text-red-500 flex items-center gap-1">
+                <AlertTriangle size={12}/>{bnTplLoadError}
+              </p>
+            ) : bnTplFields.length === 0 ? (
+              <p className="text-xs text-gray-400">Loading template fields…</p>
+            ) : (
+              <div className="space-y-3">
+                {bnTplFields.map(f => {
+                  const rows = bnFormValues[f.field_label] || ['']
+                  return (
+                    <div key={f.field_label}>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-medium text-gray-600">{f.field_label}</label>
+                        {f.is_repeating && (
+                          <button
+                            onClick={() => setBnFormValues(p => ({ ...p, [f.field_label]: [...(p[f.field_label] || ['']), ''] }))}
+                            className="flex items-center gap-1 text-[11px] text-blue-600 hover:underline">
+                            <Plus size={11}/>Add Row
+                          </button>
+                        )}
+                      </div>
+                      {f.is_repeating ? (
+                        <div className="space-y-1.5">
+                          {rows.map((val, ri) => (
+                            <div key={ri} className="flex gap-1.5">
+                              <input
+                                value={val}
+                                onChange={e => setBnFormValues(p => {
+                                  const arr = [...(p[f.field_label] || [])]
+                                  arr[ri] = e.target.value
+                                  return { ...p, [f.field_label]: arr }
+                                })}
+                                className="input text-xs flex-1"
+                                placeholder={`Row ${ri + 1}`}/>
+                              {rows.length > 1 && (
+                                <button
+                                  onClick={() => setBnFormValues(p => {
+                                    const arr = (p[f.field_label] || []).filter((_, ii) => ii !== ri)
+                                    return { ...p, [f.field_label]: arr }
+                                  })}
+                                  className="text-gray-300 hover:text-red-500">
+                                  <X size={13}/>
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <input
+                          value={rows[0] || ''}
+                          onChange={e => setBnFormValues(p => ({ ...p, [f.field_label]: [e.target.value] }))}
+                          className="input text-xs w-full"/>
+                      )}
+                    </div>
+                  )
+                })}
+                <button onClick={generateManualBn} disabled={bnManualGenerating}
+                  className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
+                  style={{ background: '#3b82f6' }}>
+                  {bnManualGenerating ? <Loader size={14} className="animate-spin"/> : <Anchor size={14}/>}
+                  Generate Boat Note
+                </button>
+              </div>
+            )}
+          </div>
+          )}
+
           {/* Step 1 — CUSDEC */}
-          {canSelectCusdec && (
+          {bnEntryMode === 'cusdec' && canSelectCusdec && (
           <div className="card">
             <div className="flex items-center justify-between mb-1.5">
               <h2 className="font-semibold text-gray-900 text-sm">1 · Select CUSDEC</h2>
@@ -1054,7 +1190,7 @@ function BoatNoteContent() {
           )}
 
           {/* Step 2 — CDNs */}
-          {canSelectCdn && (
+          {bnEntryMode === 'cusdec' && canSelectCdn && (
           <div className="card">
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-semibold text-gray-900 text-sm">2 · Select Containers (CDN)</h2>
@@ -1110,21 +1246,23 @@ function BoatNoteContent() {
 
             {status && <p className={`text-xs mb-3 font-medium ${statusColor}`}>{status}</p>}
 
-            {boatNotes.length > 0 ? (
+            {bnPdf ? (
               <>
-                {/* Container summary */}
-                <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4">
-                  <p className="text-xs font-bold text-green-700 mb-1.5">
-                    CUSDEC E {cusdecNo} · {boatNotes.length} container{boatNotes.length !== 1 ? 's' : ''}
-                  </p>
-                  <div className="space-y-0.5">
-                    {boatNotes.map((bn, i) => (
-                      <p key={i} className="text-xs text-green-700">
-                        {i+1}. {bn.container_no} · CDN {bn.cdn_no} · {bn.gross_mass} Kg
-                      </p>
-                    ))}
+                {/* Container summary — CUSDEC mode only */}
+                {boatNotes.length > 0 && (
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4">
+                    <p className="text-xs font-bold text-green-700 mb-1.5">
+                      CUSDEC E {cusdecNo} · {boatNotes.length} container{boatNotes.length !== 1 ? 's' : ''}
+                    </p>
+                    <div className="space-y-0.5">
+                      {boatNotes.map((bn, i) => (
+                        <p key={i} className="text-xs text-green-700">
+                          {i+1}. {bn.container_no} · CDN {bn.cdn_no} · {bn.gross_mass} Kg
+                        </p>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Download + Send */}
                 {bnPdf && (
@@ -1134,7 +1272,7 @@ function BoatNoteContent() {
                       style={{ background: '#1B3A5C' }}>
                       <FileDown size={14}/> Download
                     </button>
-                    {!(curIsGreen && curHasBnUrl) && (
+                    {(bnEntryMode === 'manual' || !(curIsGreen && curHasBnUrl)) && (
                       <button onClick={() => setSendModalBnOpen(true)}
                         className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 hover:bg-gray-50">
                         <Send size={14}/> Send
@@ -1143,8 +1281,8 @@ function BoatNoteContent() {
                   </div>
                 )}
 
-                {/* Save panel — status-based */}
-                {bnPdf && !(curIsGreen && curHasBnUrl) && (
+                {/* Save panel — status-based, CUSDEC mode only (Manual Entry has no CUSDEC to save against) */}
+                {bnEntryMode === 'cusdec' && bnPdf && !(curIsGreen && curHasBnUrl) && (
                   <div className="border-t border-gray-100 pt-3">
                     <h3 className="text-xs font-semibold text-gray-700 mb-2">Save to System</h3>
                     {savedBnUrl ? (
@@ -1204,7 +1342,9 @@ function BoatNoteContent() {
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <Anchor size={32} className="text-gray-200 mb-3"/>
-                <p className="text-sm text-gray-400">Select CUSDEC + containers<br/>then click Generate</p>
+                <p className="text-sm text-gray-400">
+                  {bnEntryMode === 'cusdec' ? <>Select CUSDEC + containers<br/>then click Generate</> : <>Fill in the template fields<br/>then click Generate</>}
+                </p>
               </div>
             )}
           </div>
