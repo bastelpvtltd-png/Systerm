@@ -138,7 +138,7 @@ function WordTemplatesContent() {
                 className={`flex items-center justify-between p-2.5 rounded-lg border text-xs cursor-pointer ${selectedId === t.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
                 <div>
                   <p className="font-medium text-gray-800">{t.name}</p>
-                  <p className="text-gray-400">{t.placeholders.length} tag{t.placeholders.length === 1 ? '' : 's'}</p>
+                  <p className="text-gray-400">{t.placeholders?.length ?? 0} tag{(t.placeholders?.length ?? 0) === 1 ? '' : 's'}</p>
                 </div>
                 <button onClick={e => { e.stopPropagation(); handleDelete(t.id) }} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
               </div>
