@@ -15,7 +15,7 @@ export interface SendResultFile { fileName: string; driveLink: string; docType?:
 // everything in one message.
 const REASON_OPTIONS = ['', 'CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Other']
 
-export default function SendModal({ label, uploaderName, docType, onSave, onGetDriveLinks, onClose, onDone }: {
+export default function SendModal({ label, uploaderName, docType, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason }: {
   label: string
   uploaderName?: string
   docType?: string
@@ -23,6 +23,11 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
   onGetDriveLinks: () => Promise<SendResultFile[]>
   onClose: () => void
   onDone: () => void
+  // Lets a caller with its own business rules (e.g. Party's Copy: no
+  // notifying once the CUSDEC is Green/Blue, or once a link is already
+  // saved) lock Notify off without forking this modal.
+  notifyDisabled?: boolean
+  notifyDisabledReason?: string
 }) {
   const [save, setSave] = useState(true)
   const [mail, setMail] = useState(false)
@@ -84,7 +89,7 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
       // CUSDEC Passed always saves — is_saved_to_db must be true so the
       // document is never treated as temporary and never gets deleted on pick.
       const effectiveSave = save || isCusdecPassed
-      const effectiveNotify = notify || isCusdecPassed
+      const effectiveNotify = (notify || isCusdecPassed) && !notifyDisabled
       let matchedReference: string | undefined
       if (effectiveSave && isCusdecPassed && reference.trim()) {
         try {
@@ -160,13 +165,14 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
             <Mail size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Mail</span>
           </label>
-          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${isCusdecPassed ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
-            <input type="checkbox" checked={notify || isCusdecPassed} disabled={isCusdecPassed} onChange={e => setNotifyChecked(e.target.checked)} className="w-4 h-4"/>
+          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${(isCusdecPassed || notifyDisabled) ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
+            <input type="checkbox" checked={(notify || isCusdecPassed) && !notifyDisabled} disabled={isCusdecPassed || notifyDisabled} onChange={e => setNotifyChecked(e.target.checked)} className="w-4 h-4"/>
             <Bell size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Notify (everyone's Dashboard)</span>
           </label>
-          {notify && !isCusdecPassed && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
-          {isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Notify always on. Save is ticked by default; untick only if you want Drive-only (temporary) upload.</p>}
+          {notifyDisabled && <p className="text-[11px] text-amber-600 -mt-1">{notifyDisabledReason || 'Notify is not available for this item.'}</p>}
+          {!notifyDisabled && notify && !isCusdecPassed && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
+          {!notifyDisabled && isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Notify always on. Save is ticked by default; untick only if you want Drive-only (temporary) upload.</p>}
 
           <div className="pt-1">
             <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>

@@ -1893,28 +1893,30 @@ function CdnTextPanel() {
 }
 
 // ── Party's Copy Tab ──────────────────────────────────────────────────────
-interface PartiesCopyCusdec extends CusdecRec { cap?: string }
+interface PartiesCopyCusdec extends CusdecRec { cap?: string; party_copy_url?: string }
 
 function PartiesCopyPanel() {
   const [cusdecs, setCusdecs] = useState<PartiesCopyCusdec[]>([])
   const [cdns, setCdns] = useState<CdnRec[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [search, setSearch] = useState('')
-  const [generating, setGenerating] = useState(false)
   const [proGenerating, setProGenerating] = useState(false)
   const [status, setStatus] = useState('')
   const [entryMode, setEntryMode] = useState<'cusdec' | 'manual'>('cusdec')
+  const [proPdf, setProPdf] = useState<{ base64: string; fileName: string } | null>(null)
+  const [sendModalOpen, setSendModalOpen] = useState(false)
+  const [savedPartyUrl, setSavedPartyUrl] = useState('')
 
   // A Google Sheets template saved under a "Party's Copy"-ish document_type
   // (see isPartiesCopySlug) — Generate always produces this template's PDF;
   // there's no built-in jsPDF fallback layout anymore.
   const [tplDocType, setTplDocType] = useState('')
 
+  function load() {
+    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+  }
   useEffect(() => {
-    function load() {
-      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
-      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
-    }
     load()
     const t = setInterval(load, 20000)
     return () => clearInterval(t)
@@ -1946,35 +1948,16 @@ function PartiesCopyPanel() {
   // CAP/CDN-count and release-status info still shows below as a heads-up,
   // just non-blocking now.
   const eligible = !!selected
-
-  async function generate() {
-    if (!selected || !eligible || !tplDocType) return
-    setGenerating(true); setStatus('')
-    try {
-      const h = await authHeader()
-      const res = await fetch('/api/doc-generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify({ document_type: tplDocType, cusdec_id: selected.id }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error || 'Generate failed')
-      const digits = (selected.number || '').replace(/\D/g, '') || selected.number
-      const fileName = `P${digits}.pdf`
-      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
-      const a = document.createElement('a'); a.href = url; a.download = fileName; a.click()
-      URL.revokeObjectURL(url)
-      setStatus(`✓ ${fileName} downloaded`)
-    } catch (e: any) { setStatus(`✗ ${e.message}`) }
-    finally { setGenerating(false) }
-  }
+  const curIsBlue = !!selected?.export_release_passed
+  const curIsGreen = !!selected && !curIsBlue && capNum > 0 && cdnCount >= capNum && selectedCdns.every(c => c.boat_note_passed)
+  const curHasPartyUrl = !!(savedPartyUrl || selected?.party_copy_url)
 
   // "Generate Pro" — the real Party's Copy: the original CUSDEC PDF
   // (cusdec.pdf_url) followed by the filled-in template page(s), merged
   // into one PDF, CUSDEC pages first.
   async function generatePro() {
     if (!selected || !eligible || !tplDocType) return
-    setProGenerating(true); setStatus('')
+    setProGenerating(true); setStatus(''); setProPdf(null); setSavedPartyUrl('')
     try {
       const h = await authHeader()
       const res = await fetch('/api/generate-parties-copy-pro', {
@@ -1983,13 +1966,47 @@ function PartiesCopyPanel() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Generate failed')
-      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
-      const a = document.createElement('a'); a.href = url; a.download = d.fileName; a.click()
-      URL.revokeObjectURL(url)
-      setStatus(`✓ ${d.fileName} downloaded`)
+      setProPdf({ base64: d.base64, fileName: d.fileName })
+      setStatus('✓ Ready — download or send below')
     } catch (e: any) { setStatus(`✗ ${e.message}`) }
     finally { setProGenerating(false) }
+  }
+
+  function downloadProPdf() {
+    if (!proPdf) return
+    const bytes = Uint8Array.from(atob(proPdf.base64), c => c.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+    const a = document.createElement('a'); a.href = url; a.download = proPdf.fileName; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function onSaveProModal(): Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }> {
+    if (!proPdf || !selected) return { ok: false, error: 'No PDF generated' }
+    if (selected.party_copy_url && !window.confirm("Party's Copy link mekata dhanma save wela tiyenawa. Replace karannada?"))
+      return { ok: false, error: 'Save cancelled — existing link kept as-is.' }
+    try {
+      const h = await authHeader()
+      const dr = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64: proPdf.base64, fileName: proPdf.fileName, mimeType: 'application/pdf', docType: 'party_copy' }),
+      })
+      const dd = await dr.json()
+      if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
+      const saveRes = await fetch('/api/save-parties-copy', {
+        method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cusdec_id: selected.id, drive_url: dd.driveLink, file_name: proPdf.fileName }),
+      })
+      const saveData = await saveRes.json()
+      if (!saveRes.ok) throw new Error(saveData.error)
+      setSavedPartyUrl(dd.driveLink)
+      load()
+      return { ok: true, results: [{ fileName: proPdf.fileName, driveLink: dd.driveLink, docType: 'party_copy' }] }
+    } catch (e: any) { return { ok: false, error: e.message } }
+  }
+  async function onGetDriveLinksProModal(): Promise<SendResultFile[]> {
+    if (savedPartyUrl && proPdf) return [{ fileName: proPdf.fileName, driveLink: savedPartyUrl, docType: 'party_copy' }]
+    const res = await onSaveProModal()
+    return res.results || []
   }
 
   return (
@@ -2088,21 +2105,50 @@ function PartiesCopyPanel() {
                   <AlertTriangle size={12}/>No Party's Copy template configured yet — set one up in Templates first.
                 </p>
               )}
-              <div className="flex gap-2 flex-wrap">
-                <button onClick={generate} disabled={!eligible || generating || !tplDocType}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-                  style={{ background: '#8b5cf6' }}>
-                  {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-                  Generate
-                </button>
-                <button onClick={generatePro} disabled={!eligible || proGenerating || !tplDocType}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-                  style={{ background: '#1B3A5C' }}>
-                  {proGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-                  Generate Pro
-                </button>
-              </div>
-              <p className="text-[11px] text-gray-400 mt-2">In-memory only — PDF is downloaded directly, not saved anywhere. Generate Pro merges the original CUSDEC PDF with the template output (CUSDEC pages first).</p>
+              <button onClick={generatePro} disabled={!eligible || proGenerating || !tplDocType}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+                style={{ background: '#1B3A5C' }}>
+                {proGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                Generate Pro
+              </button>
+              <p className="text-[11px] text-gray-400 mt-2">Merges the original CUSDEC PDF with the template output (CUSDEC pages first).</p>
+
+              {proPdf && (
+                <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
+                  <div className="flex gap-2">
+                    <button onClick={downloadProPdf}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium" style={{ background: '#1B3A5C' }}>
+                      <FileDown size={14}/> Download
+                    </button>
+                    <button onClick={() => setSendModalOpen(true)}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 hover:bg-gray-50">
+                      <Send size={14}/> Send
+                    </button>
+                  </div>
+                  {curHasPartyUrl && (
+                    <p className="text-xs text-green-600 flex items-center gap-1">
+                      <CheckCircle size={13}/>Saved{" "}
+                      <a href={savedPartyUrl || selected?.party_copy_url} target="_blank" rel="noreferrer" className="underline ml-1">View in Drive</a>
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {sendModalOpen && proPdf && (
+                <SendModal
+                  label={proPdf.fileName}
+                  docType="party_copy"
+                  onSave={onSaveProModal}
+                  onGetDriveLinks={onGetDriveLinksProModal}
+                  onClose={() => setSendModalOpen(false)}
+                  onDone={() => setSendModalOpen(false)}
+                  notifyDisabled={curIsGreen || curIsBlue || curHasPartyUrl}
+                  notifyDisabledReason={
+                    curHasPartyUrl ? "Already saved — Notify isn't available for a replace." :
+                    (curIsGreen || curIsBlue) ? 'Notify is not available once this CUSDEC is Green/Blue.' : undefined
+                  }
+                />
+              )}
             </div>
           </div>
         )}

@@ -59,7 +59,7 @@ export async function deleteDriveFileByUrl(url: string | null | undefined): Prom
 }
 
 // Maps our doc_type values to the Drive sub-folder name they belong in.
-// Types not listed here (party_copy, bill, unknown) upload to the main folder.
+// Types not listed here (bill, unknown) upload to the main folder.
 export const DOC_TYPE_FOLDER_NAMES: Record<string, string> = {
   cdn: 'CDN',
   cusdec: 'CUSDEC',
@@ -68,6 +68,7 @@ export const DOC_TYPE_FOLDER_NAMES: Record<string, string> = {
   invoice: 'Invoice',
   packing_list: 'Packing List',
   template: 'Templates',
+  party_copy: "Party's Copy",
 }
 
 // Two-level path: mainFolder/Bills/{cusdecNumber}/
