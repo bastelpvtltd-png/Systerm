@@ -210,7 +210,7 @@ function BoatNoteContent() {
       .then(r => r.json()).then(d => setExcelTemplates(d.templates || [])).catch(() => {})
   }, [])
   const templateKeyword = subTab === 'invoice' ? 'inv' : 'pl'
-  const matchingTemplates = templates.filter(t => t.name.toLowerCase().includes(templateKeyword))
+  const matchingTemplates = templates.filter(t => t.name?.toLowerCase().includes(templateKeyword))
   useEffect(() => { setSelectedTemplateId('') }, [subTab])
   const selectedTemplate = matchingTemplates.find(t => t.id === selectedTemplateId) || null
 
