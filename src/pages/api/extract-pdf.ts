@@ -4,7 +4,7 @@ import { detectType } from '@/lib/extractors'
 import { ocrPdf } from '@/lib/ocr'
 import { extractByGrid } from '@/lib/gridExtract'
 import { extractBoxes } from '@/lib/boxExtract'
-import { applyTextRules, cleanContainerNo } from '@/lib/textClean'
+import { applyTextRules, cleanContainerNo, cleanGrossMass } from '@/lib/textClean'
 import { DOC_TYPE_TABLE, getTableColumns } from '@/lib/docTables'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
@@ -111,8 +111,13 @@ function extractCdnFields(text: string): Record<string, string> {
       if (k > 3) {
         const wLine = lines[k - 3]
         const wClean = wLine.replace(/KG/gi, '').trim().split(/\s+/)
-        if (wClean.length >= 2) data.gross_mass = wClean[wClean.length - 2]
-        data.goods_description = data.gross_mass ? wLine.split(data.gross_mass)[0].trim() : wLine
+        if (wClean.length >= 2) {
+          const rawMass = wClean[wClean.length - 2]
+          data.gross_mass = cleanGrossMass(rawMass)
+          data.goods_description = wLine.split(rawMass)[0].trim()
+        } else {
+          data.goods_description = wLine
+        }
       }
     }
 
@@ -240,7 +245,7 @@ function extractCusdecFields(text: string): Record<string, string> {
 
   // Gross / Net mass
   const tM = text.match(/36\s*Preference[\s\S]*?a\s*LK\s*b\s*([\d,.]+)/i)
-  if (tM) data.gross_mass = tM[1]
+  if (tM) data.gross_mass = cleanGrossMass(tM[1])
 
   const uM = text.match(/39\s*Quota\s*Containers\s*No\(s\)\s+[\d.]+\s+[\d.]+\s+([\d,.]+)/)
   if (uM) data.net_mass = uM[1]
@@ -285,7 +290,7 @@ function extractBarcodeFields(text: string): Record<string, string> {
   if (sealM) data.seal_no = sealM[1]
 
   const grossM = text.match(/gross\s*(?:mass|weight)\s*[:\-]?\s*([\d,.]+)/i)
-  if (grossM) data.gross_mass = grossM[1]
+  if (grossM) data.gross_mass = cleanGrossMass(grossM[1])
 
   const tareM = text.match(/tare\s*(?:mass|weight)\s*[:\-]?\s*([\d,.]+)/i)
   if (tareM) data.tare_mass = tareM[1]
@@ -320,7 +325,7 @@ function extractBoatNoteFields(text: string): Record<string, string> {
   if (sealM) data.seal_no = sealM[1]
 
   const grossM = text.match(/gross\s*(?:mass|weight)\s*(?:\(kg\))?\s*[:\-]?\s*([\d,.]+)/i)
-  if (grossM) data.gross_mass = grossM[1]
+  if (grossM) data.gross_mass = cleanGrossMass(grossM[1])
 
   const blM = text.match(/\b(CMB[A-Z0-9]+|MAEU[0-9]+|[A-Z]{3,4}\d{8,})\b/)
   if (blM) data.bl_no = blM[1]

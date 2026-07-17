@@ -2,6 +2,8 @@
 // Supports: CUSDEC · CDN (Exp 3b) · Barcode/Gate Pass · Boat Note (Exp 3a) · Party's Copy
 // Used by: /api/smart-detect (doc-check tab) and individual doc tabs
 
+import { cleanGrossMass } from './textClean'
+
 export type DocType = 'cusdec' | 'cdn' | 'barcode' | 'boatnote' | 'partycopy' | 'unknown'
 
 export interface ExtractedField {
@@ -101,7 +103,7 @@ export function extractCusdec(text: string): ExtractedField[] {
     },
     {
       key: 'gross_mass', label: 'Gross Mass (Kg)',
-      value: findVal(text, /Gross\s*Mass[:\s]+([\d,]+\.?\d*)/i, /([\d,]+\.00)\s*ISFTA/i),
+      value: cleanGrossMass(findVal(text, /Gross\s*Mass[:\s]+([\d,]+\.?\d*)/i, /([\d,]+\.00)\s*ISFTA/i)),
       region: { x: 62, y: 42, w: 28, h: 4 },
     },
     {
@@ -238,10 +240,10 @@ export function extractCdn(text: string): ExtractedField[] {
     },
     {
       key: 'gross_mass', label: 'Gross Weight (Kg)',
-      value: findVal(text,
+      value: cleanGrossMass(findVal(text,
         /Gross\s*Weight[,.\s]+([\d,]+\.?\d*)/i,
         /([\d,]+\.\d{2})\s*(?:KG|BL)/i,
-      ),
+      )),
       region: { x: 58, y: 68, w: 28, h: 8 },
     },
     {
@@ -381,10 +383,10 @@ export function extractBoatNote(text: string): ExtractedField[] {
     },
     {
       key: 'gross_weight', label: 'Gross Weight (Kg)',
-      value: findVal(text,
+      value: cleanGrossMass(findVal(text,
         /(?:19\s*a\s*Gross|Gross\s*W[^\n]*)[^\d]*([\d,]+\.00)/i,
         /([\d,]+\.00)\s*KGS/i,
-      ),
+      )),
       region: { x: 62, y: 62, w: 25, h: 8 },
     },
     {
@@ -424,10 +426,10 @@ export function extractPartysCopy(text: string): ExtractedField[] {
     },
     {
       key: 'short_gross', label: 'Short Shipment Gross Mass (Kg)',
-      value: findVal(text,
+      value: cleanGrossMass(findVal(text,
         /GROSS\s*MASS\s*WEIGHT[\s\S]{1,50}?(\d{4,6})\s*KG/i,
         /(\d{4,6})\s*KG\b[\s\S]{1,20}?NET/i,
-      ),
+      )),
       region: { x: 8, y: 25, w: 20, h: 10 },
     },
     {

@@ -77,17 +77,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const startRow = parseInt(rangeMatch[2])
           const endRow = parseInt(rangeMatch[4])
           const sourceRows = m.data_source === 'cdn' ? cdnRows : cusdecRow ? [cusdecRow] : []
-          sourceRows.slice(0, endRow - startRow + 1).forEach((row, i) => {
-            updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: row[m.column_name] ?? '' })
-          })
+          if (sourceRows.length) {
+            sourceRows.slice(0, endRow - startRow + 1).forEach((row, i) => {
+              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: row[m.column_name] ?? '' })
+            })
+          } else if ((manual_values || {})[m.field_label]) {
+            // No CUSDEC/CDN row to source from (pure manual entry) — fall back
+            // to the newline-joined rows typed into the Manual Entry tab.
+            const manualRows = manual_values![m.field_label].split('\n').filter(Boolean)
+            manualRows.slice(0, endRow - startRow + 1).forEach((val, i) => {
+              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: val })
+            })
+          }
         }
         continue
       }
 
       let value: string | number | null = ''
       if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
-      else if (m.data_source === 'cusdec') value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ''
-      else if (m.data_source === 'cdn') value = cdnRows[0] ? (cdnRows[0][m.column_name] ?? '') : ''
+      else if (m.data_source === 'cusdec') value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
+      else if (m.data_source === 'cdn') value = cdnRows[0] ? (cdnRows[0][m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
       updates.push({ range: `${sheetPrefix}${m.target_cell_or_range.toUpperCase()}`, value })
     }
 
