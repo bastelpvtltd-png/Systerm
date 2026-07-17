@@ -1902,12 +1902,12 @@ function PartiesCopyPanel() {
   const [search, setSearch] = useState('')
   const [generating, setGenerating] = useState(false)
   const [status, setStatus] = useState('')
+  const [entryMode, setEntryMode] = useState<'cusdec' | 'manual'>('cusdec')
 
   // A Google Sheets template saved under a "Party's Copy"-ish document_type
-  // (see isPartiesCopySlug) — when present, offers a second Generate button
-  // that produces the template PDF instead of the built-in jsPDF layout.
+  // (see isPartiesCopySlug) — Generate always produces this template's PDF;
+  // there's no built-in jsPDF fallback layout anymore.
   const [tplDocType, setTplDocType] = useState('')
-  const [tplGenerating, setTplGenerating] = useState(false)
 
   useEffect(() => {
     function load() {
@@ -1933,26 +1933,6 @@ function PartiesCopyPanel() {
     findTemplate()
   }, [])
 
-  async function generateFromTemplate() {
-    if (!selected || !eligible || !tplDocType) return
-    setTplGenerating(true); setStatus('')
-    try {
-      const h = await authHeader()
-      const res = await fetch('/api/doc-generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify({ document_type: tplDocType, cusdec_id: selected.id }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error || 'Generate failed')
-      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
-      const a = document.createElement('a'); a.href = url; a.download = d.fileName; a.click()
-      URL.revokeObjectURL(url)
-      setStatus(`✓ ${d.fileName} downloaded`)
-    } catch (e: any) { setStatus(`✗ ${e.message}`) }
-    finally { setTplGenerating(false) }
-  }
-
   const filtered = cusdecs.filter(c =>
     !search || c.number?.toLowerCase().includes(search.toLowerCase()) || c.exporter?.toLowerCase().includes(search.toLowerCase())
   )
@@ -1967,63 +1947,45 @@ function PartiesCopyPanel() {
   const eligible = !!selected
 
   async function generate() {
-    if (!selected || !eligible) return
+    if (!selected || !eligible || !tplDocType) return
     setGenerating(true); setStatus('')
     try {
-      const { jsPDF } = await import('jspdf')
-      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-      const PW = 210, M = 15
-      let y = M
-
-      doc.setFontSize(13).setFont('helvetica', 'bold')
-      doc.text("PARTY'S COPY", PW / 2, y, { align: 'center' }); y += 7
-      doc.setFontSize(9).setFont('helvetica', 'normal')
-      doc.text('PRIYANTHI AGENCY', PW / 2, y, { align: 'center' }); y += 10
-
-      const row = (label: string, value: string) => {
-        doc.setFont('helvetica', 'bold').setFontSize(8)
-        doc.text(label, M, y)
-        doc.setFont('helvetica', 'normal')
-        doc.text(value || '—', M + 45, y)
-        y += 6
-      }
-
-      row('CUSDEC No.:', `E ${selected.number}`)
-      row('Exporter:', selected.exporter)
-      row('Consignee:', selected.consignee)
-      row('Vessel:', selected.vessel)
-      row('Voyage:', selected.voyage_no)
-      row('B/L No.:', selected.bl_no)
-      row('Gross Mass:', selected.gross_mass ? `${selected.gross_mass} Kg` : '')
-      row('Net Mass:', selected.net_mass ? `${selected.net_mass} Kg` : '')
-      row('Discharge Port:', selected.discharge_port)
-      row('Location of Goods:', selected.location_of_goods)
-      row('CAP:', selected.cap || '')
-      y += 4
-
-      doc.setFont('helvetica', 'bold').setFontSize(8)
-      doc.text('Containers (CDN):', M, y); y += 6
-      doc.setFont('helvetica', 'normal').setFontSize(7)
-      selectedCdns.forEach((cdn, i) => {
-        doc.text(`${i + 1}. ${cdn.container_no || '—'}  CDN: ${cdn.cdn_no || '—'}  Seal: ${cdn.seal_no || '—'}  ${cdn.gross_mass || ''} Kg`, M + 3, y)
-        y += 5
+      const h = await authHeader()
+      const res = await fetch('/api/doc-generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ document_type: tplDocType, cusdec_id: selected.id }),
       })
-
-      y += 6
-      doc.setFontSize(7).setTextColor(150)
-      doc.text(`Generated: ${new Date().toLocaleString('en-GB')}`, M, y)
-      doc.setTextColor(0)
-
-      doc.save(`P${selected.number}.pdf`)
-      setStatus(`✓ P${selected.number}.pdf downloaded`)
-    } catch (e: any) {
-      setStatus(`✗ ${e.message}`)
-    } finally {
-      setGenerating(false)
-    }
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Generate failed')
+      const digits = (selected.number || '').replace(/\D/g, '') || selected.number
+      const fileName = `P${digits}.pdf`
+      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      const a = document.createElement('a'); a.href = url; a.download = fileName; a.click()
+      URL.revokeObjectURL(url)
+      setStatus(`✓ ${fileName} downloaded`)
+    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+    finally { setGenerating(false) }
   }
 
   return (
+    <div className="space-y-4">
+      <div className="flex gap-1.5 bg-gray-100 rounded-lg p-1 w-fit">
+        <button onClick={() => { setEntryMode('cusdec'); setStatus('') }}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${entryMode === 'cusdec' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+          From CUSDEC
+        </button>
+        <button onClick={() => { setEntryMode('manual'); setStatus('') }}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${entryMode === 'manual' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+          Manual Entry
+        </button>
+      </div>
+
+      {entryMode === 'manual' ? (
+        tplDocType
+          ? <CustomDocPanel documentType={tplDocType} label="Party's Copy"/>
+          : <p className="text-xs text-amber-600 flex items-center gap-1"><AlertTriangle size={12}/>No Party's Copy template configured yet — set one up in Templates first.</p>
+      ) : (
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
       <div className="card xl:col-span-1">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CUSDEC</h2>
@@ -2097,27 +2059,24 @@ function PartiesCopyPanel() {
 
               {status && <p className={`text-xs mb-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
 
-              <div className="flex gap-2 flex-wrap">
-                <button onClick={generate} disabled={!eligible || generating}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-                  style={{ background: '#8b5cf6' }}>
-                  {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-                  Generate P{selected.number}.pdf
-                </button>
-                {tplDocType && (
-                  <button onClick={generateFromTemplate} disabled={!eligible || tplGenerating}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-                    style={{ background: '#1B3A5C' }}>
-                    {tplGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-                    Generate from Template
-                  </button>
-                )}
-              </div>
+              {!tplDocType && (
+                <p className="text-xs text-amber-600 flex items-center gap-1 mb-2">
+                  <AlertTriangle size={12}/>No Party's Copy template configured yet — set one up in Templates first.
+                </p>
+              )}
+              <button onClick={generate} disabled={!eligible || generating || !tplDocType}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+                style={{ background: '#8b5cf6' }}>
+                {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                Generate
+              </button>
               <p className="text-[11px] text-gray-400 mt-2">In-memory only — PDF is downloaded directly, not saved anywhere.</p>
             </div>
           </div>
         )}
       </div>
+    </div>
+      )}
     </div>
   )
 }
