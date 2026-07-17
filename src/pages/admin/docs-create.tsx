@@ -17,7 +17,7 @@ const MANUAL_FIELDS = ["Date", "Reference No", "Description", "Quantity", "Weigh
 interface CusdecRow { id: string; code: string; number: string; exporter: string; vessel: string }
 interface CusdecFull {
   id: string; code: string; number: string; exporter: string; vessel: string
-  boat_note_passed: boolean; export_release_passed: boolean; boat_note_url?: string
+  export_release_passed: boolean; boat_note_url?: string
 }
 interface TplField { field_label: string; is_repeating: boolean }
 
@@ -89,7 +89,7 @@ function DocsCreateContent() {
     try {
       const { data } = await supabase
         .from("cusdec")
-        .select("id,code,number,exporter,vessel,boat_note_passed,export_release_passed,boat_note_url")
+        .select("id,code,number,exporter,vessel,export_release_passed,boat_note_url")
         .order("created_at", { ascending: false })
         .limit(60)
       setCusdecList((data || []) as CusdecFull[])
@@ -170,7 +170,7 @@ function DocsCreateContent() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || "Generate failed")
-      const hasStatus = !!cusdec.boat_note_passed || !!cusdec.export_release_passed
+      const hasStatus = !!cusdec.export_release_passed || !!cusdec.boat_note_url
       setBnResult({ fileName: d.fileName, base64: d.base64, cusdec, hasStatus })
     } catch (e: any) { setError(e.message) }
     finally { setGeneratingCusdecId(null) }
@@ -374,7 +374,7 @@ function DocsCreateContent() {
                   </thead>
                   <tbody>
                     {filteredCusdecs.map(c => {
-                      const hasStatus = !!c.boat_note_passed || !!c.export_release_passed
+                      const hasStatus = !!c.export_release_passed || !!c.boat_note_url
                       const isGenThis = generatingCusdecId === c.id
                       return (
                         <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50">
@@ -386,8 +386,8 @@ function DocsCreateContent() {
                               {c.export_release_passed && (
                                 <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded font-medium">Export Released</span>
                               )}
-                              {c.boat_note_passed && (
-                                <span className="text-[10px] bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded font-medium">BN Passed</span>
+                              {c.boat_note_url && (
+                                <span className="text-[10px] bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded font-medium">BN Saved</span>
                               )}
                               {!hasStatus && (
                                 <span className="text-[10px] text-gray-400">Pending</span>
