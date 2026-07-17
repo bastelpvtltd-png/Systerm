@@ -42,16 +42,19 @@ export function cleanContainerNo(text: string): string {
   return m ? `${m[1]}${m[2]}` : (text || '').trim()
 }
 
-// Weight fields (Gross Mass etc.) are typed into the source form with an
-// inconsistent thousands separator — comma, space, or even a second dot —
-// but always end in a 2-digit decimal, e.g. "21,810.00", "21 350.00",
-// "27.870.00" should all become "21810.00", "21350.00", "27870.00". A value
-// with no decimal at all ("21810") gets ".00" appended, matching how every
-// other value in this column is stored.
+// CDN Gross Mass is typed into the source form with an inconsistent
+// separator before the decimal — comma, space, or even a second dot — but
+// always ends in a 2-digit decimal, e.g. "21,810.00", "21 350.00",
+// "27.870.00", "3125 00" should all become "21810.00", "21350.00",
+// "27870.00", "3125.00". Only the LAST separator (right before the final
+// 2 digits) is treated as the decimal point; everything before it is a
+// thousands separator and gets stripped. A value with no decimal at all
+// ("21810") gets ".00" appended, matching how every other value in this
+// column is stored.
 export function cleanGrossMass(text: string): string {
   const raw = (text || '').trim()
   if (!raw) return raw
-  const m = raw.match(/^([\d,.\s]+?)\.(\d{2})$/)
+  const m = raw.match(/^([\d,.\s]+?)[.,\s](\d{2})$/)
   const intPart = (m ? m[1] : raw).replace(/[^\d]/g, '')
   if (!intPart) return raw
   const decPart = m ? m[2] : '00'
