@@ -367,8 +367,11 @@ function DocTemplatesContent() {
               </div>
             )}
             {sheetsWarn && sheetNames.length === 0 && (
-              <p className="text-[11px] text-amber-600 mt-1.5 flex items-center gap-1">
+              <p className="text-[11px] text-amber-600 mt-1.5 flex items-center gap-1 flex-wrap">
                 <AlertTriangle size={11}/>{sheetsWarn}
+                {sheetsWarn.toLowerCase().includes('unauthorized') && (
+                  <a href="/admin/google-reauth" className="underline text-blue-600 ml-1">Re-authorize Google →</a>
+                )}
               </p>
             )}
             {templateUrl && sheetNames.length === 0 && !sheetsWarn && !sheetsLoading && (
