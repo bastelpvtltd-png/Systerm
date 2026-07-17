@@ -76,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const col = rangeMatch[1].toUpperCase()
           const startRow = parseInt(rangeMatch[2])
           const endRow = parseInt(rangeMatch[4])
-          const sourceRows = m.data_source === 'cdn' ? cdnRows : cusdecRow ? [cusdecRow] : []
+          const sourceRows = m.data_source === 'manual' ? [] : m.data_source === 'cdn' ? cdnRows : cusdecRow ? [cusdecRow] : []
           if (sourceRows.length) {
             sourceRows.slice(0, endRow - startRow + 1).forEach((row, i) => {
               updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: row[m.column_name] ?? '' })

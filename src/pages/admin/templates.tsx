@@ -178,7 +178,7 @@ function WordTemplatesContent() {
 
 // ── Google Sheets Templates — fixed doc types, relational mappings ─────────
 interface TemplateMapping {
-  id?: string; field_label: string; data_source: 'cusdec' | 'cdn'
+  id?: string; field_label: string; data_source: 'cusdec' | 'cdn' | 'manual'
   column_name: string; is_repeating: boolean; target_cell_or_range: string
   sheet_name: string
 }
@@ -350,7 +350,7 @@ function DocTemplatesContent() {
     try {
       const url = templateUrl.trim() || urlInput.trim()
       if (!url) throw new Error('Google Sheets URL required — paste the spreadsheet URL above')
-      const valid = mappings.filter(m => m.field_label && m.column_name && m.target_cell_or_range)
+      const valid = mappings.filter(m => m.field_label && (m.data_source === 'manual' || m.column_name) && m.target_cell_or_range)
       for (const m of valid) {
         if (m.is_repeating && !m.target_cell_or_range.includes(':'))
           throw new Error(`"${m.field_label}" is repeating — cell range required (e.g. A10:A25)`)
@@ -476,16 +476,21 @@ function DocTemplatesContent() {
                       placeholder="e.g. Invoice No" className="input text-xs w-full"/>
                   </td>
                   <td className="py-1.5 pr-2">
-                    <select value={m.data_source} onChange={e => updateRow(i, { data_source: e.target.value as 'cusdec' | 'cdn', column_name: '' })} className="input text-xs">
+                    <select value={m.data_source} onChange={e => updateRow(i, { data_source: e.target.value as 'cusdec' | 'cdn' | 'manual', column_name: '' })} className="input text-xs">
                       <option value="cusdec">cusdec</option>
                       <option value="cdn">cdn</option>
+                      <option value="manual">manual</option>
                     </select>
                   </td>
                   <td className="py-1.5 pr-2">
-                    <select value={m.column_name} onChange={e => updateRow(i, { column_name: e.target.value })} className="input text-xs">
-                      <option value="">— pick —</option>
-                      {cols(m.data_source).map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    {m.data_source === 'manual' ? (
+                      <span className="text-[11px] text-gray-400 italic">typed at generation time</span>
+                    ) : (
+                      <select value={m.column_name} onChange={e => updateRow(i, { column_name: e.target.value })} className="input text-xs">
+                        <option value="">— pick —</option>
+                        {cols(m.data_source).map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    )}
                   </td>
                   <td className="py-1.5 pr-2 text-center">
                     <input type="checkbox" checked={m.is_repeating}
