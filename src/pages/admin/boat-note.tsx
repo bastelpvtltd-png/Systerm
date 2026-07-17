@@ -519,10 +519,7 @@ function BoatNoteContent() {
         setStatus(`⛔ Only ${ownCdns.length} CDN(s) loaded but CAP is ${cap} — all containers must be present before generating the Boat Note`)
         return
       }
-      if (ownCdns.length > 0 && ownCdns.every(d => d.boat_note_passed)) {
-        setStatus('⛔ All containers already marked Boat Note Passed (Blue) — nothing left to generate')
-        return
-      }
+
     }
 
     setGen(true); setBoatNotes([])
