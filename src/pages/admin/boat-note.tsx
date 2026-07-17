@@ -5,7 +5,10 @@ import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileSta
 import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
 import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
 
-type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note' | 'done-boat-note' | 'cusdec-xml' | 'cdn-text' | 'parties-copy'
+// Custom document types (from Templates → "+ Add New Document Type") get a
+// dynamically-added tab id of the form `custom:${document_type}` — string
+// keeps that open-ended rather than a fixed union.
+type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note' | 'done-boat-note' | 'cusdec-xml' | 'cdn-text' | 'parties-copy' | string
 
 interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean; boat_note_url?: string }
 interface CdnRec    { id: string; code?: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; boat_note_passed?: boolean; shipper?: string; consignee?: string }
@@ -99,6 +102,31 @@ function BoatNoteContent() {
   const canCusdecXml  = has('section:boat-note.cusdec-xml')
   const canCdnText    = has('section:boat-note.cdn-text')
   const canPartiesCopy = has('section:boat-note.parties-copy')
+
+  // Custom document types created via Templates → "+ Add New Document
+  // Type" (anything not one of the built-in tabs below) get their own
+  // dynamically-added tab, gated on the same permission as the rest of
+  // this page since there's no dedicated permission key for them yet.
+  const [customDocTypes, setCustomDocTypes] = useState<{ value: string; label: string }[]>([])
+  useEffect(() => {
+    async function loadCustomTypes() {
+      try {
+        const h = await authHeader()
+        const res = await fetch('/api/doc-templates', { headers: h })
+        if (!res.ok) return
+        const d = await res.json()
+        const built_in = new Set(['boat_note', 'invoice', 'packing_list'])
+        const extras = ((d.templates || []) as any[])
+          .map(t => t.document_type as string)
+          .filter(v => v && !built_in.has(v))
+          .filter((v, i, arr) => arr.indexOf(v) === i)
+          .map(v => ({ value: v, label: v.split('_').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') }))
+        setCustomDocTypes(extras)
+      } catch {}
+    }
+    loadCustomTypes()
+  }, [])
+
   const subTabs = ([
     ['invoice',       Receipt,       'Invoice',       canInvoice],
     ['packing-list',  Package,       'Packing List',  canPackingList],
@@ -106,6 +134,7 @@ function BoatNoteContent() {
     ['cusdec-xml',    FileCode,      'Cusdec XML',    canCusdecXml],
     ['cdn-text',      ScanText,      'CDN Text',      canCdnText],
     ['parties-copy',  Copy,          "Party's Copy",  canPartiesCopy],
+    ...customDocTypes.map(d => [`custom:${d.value}`, FileStack, d.label, canBoatNote] as const),
   ] as const).filter(([, , , can]) => can)
   const [subTab, setSubTab] = useState<DocsCreateTab>(subTabs[0]?.[0] || 'boat-note')
   const [cusdecs, setCusdecs]   = useState<CusdecRec[]>([])
@@ -1362,6 +1391,11 @@ function BoatNoteContent() {
         {subTab === 'cusdec-xml' && canCusdecXml && <CusdecXmlPanel/>}
         {subTab === 'cdn-text' && canCdnText && <CdnTextPanel/>}
         {subTab === 'parties-copy' && canPartiesCopy && <PartiesCopyPanel/>}
+        {subTab.startsWith('custom:') && canBoatNote && (() => {
+          const value = subTab.slice('custom:'.length)
+          const d = customDocTypes.find(c => c.value === value)
+          return d ? <CustomDocPanel documentType={d.value} label={d.label}/> : null
+        })()}
       </div>
   )
 }
@@ -2018,6 +2052,170 @@ function PartiesCopyPanel() {
               <p className="text-[11px] text-gray-400 mt-2">In-memory only — PDF is downloaded directly, not saved anywhere.</p>
             </div>
           </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Custom Doc Type Panel — dynamically-added tab for any document_type
+// created via Templates → "+ Add New Document Type". Manual field entry
+// only (no CUSDEC link), generates the Google Sheets template PDF, and
+// only offers Download/Send — there's no CUSDEC record to save a Drive
+// link against, same reasoning as the Boat Note tab's Manual Entry mode.
+function CustomDocPanel({ documentType, label }: { documentType: string; label: string }) {
+  const [tplFields, setTplFields] = useState<{ field_label: string; is_repeating: boolean }[]>([])
+  const [tplLoadError, setTplLoadError] = useState('')
+  const [formValues, setFormValues] = useState<Record<string, string[]>>({})
+  const [generating, setGenerating] = useState(false)
+  const [status, setStatus] = useState('')
+  const [pdf, setPdf] = useState<{ base64: string; fileName: string } | null>(null)
+  const [sendModalOpen, setSendModalOpen] = useState(false)
+
+  useEffect(() => {
+    async function load() {
+      setTplLoadError('')
+      try {
+        const h = await authHeader()
+        const res = await fetch('/api/doc-templates', { headers: h })
+        if (!res.ok) { setTplLoadError(`Failed to load template (HTTP ${res.status})`); return }
+        const d = await res.json()
+        const tpl = (d.templates || []).find((t: any) => t.document_type === documentType)
+        if (!tpl) { setTplLoadError('No template configured for this document type yet'); return }
+        const fields = (tpl.template_mappings || []).map((m: any) => ({ field_label: m.field_label, is_repeating: !!m.is_repeating }))
+        setTplFields(fields)
+        const init: Record<string, string[]> = {}
+        fields.forEach((f: { field_label: string }) => { init[f.field_label] = [''] })
+        setFormValues(init)
+      } catch (e: any) {
+        setTplLoadError(e.message || 'Failed to load template')
+      }
+    }
+    load()
+  }, [documentType])
+
+  async function generate() {
+    setGenerating(true); setStatus(''); setPdf(null)
+    try {
+      const manual: Record<string, string> = {}
+      Object.entries(formValues).forEach(([lbl, rows]) => { manual[lbl] = rows.join('\n') })
+      const h = await authHeader()
+      const res = await fetch('/api/doc-generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ document_type: documentType, manual_values: manual }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Generate failed')
+      setPdf({ base64: d.base64, fileName: d.fileName })
+      setStatus('✓ PDF ready — download or send below')
+    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+    finally { setGenerating(false) }
+  }
+
+  function downloadPdf() {
+    if (!pdf) return
+    const bytes = Uint8Array.from(atob(pdf.base64), c => c.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+    const a = document.createElement('a'); a.href = url; a.download = pdf.fileName; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function onSaveModal(): Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }> {
+    if (!pdf) return { ok: false, error: 'No PDF generated' }
+    try {
+      const h = await authHeader()
+      const dr = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64: pdf.base64, fileName: pdf.fileName, mimeType: 'application/pdf', docType: documentType }),
+      })
+      const dd = await dr.json()
+      if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
+      return { ok: true, results: [{ fileName: pdf.fileName, driveLink: dd.driveLink, docType: documentType }] }
+    } catch (e: any) { return { ok: false, error: e.message } }
+  }
+  async function onGetDriveLinksModal(): Promise<SendResultFile[]> {
+    const res = await onSaveModal()
+    return res.results || []
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-gray-500 text-sm -mt-2">{label} — fill in the template fields, generate, then download or send. Not saved to the system.</p>
+      <div className="card max-w-xl">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Template Fields</h2>
+        {tplLoadError ? (
+          <p className="text-xs text-red-500 flex items-center gap-1"><AlertTriangle size={12}/>{tplLoadError}</p>
+        ) : tplFields.length === 0 ? (
+          <p className="text-xs text-gray-400">Loading template fields…</p>
+        ) : (
+          <div className="space-y-3">
+            {tplFields.map(f => {
+              const rows = formValues[f.field_label] || ['']
+              return (
+                <div key={f.field_label}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-gray-600">{f.field_label}</label>
+                    {f.is_repeating && (
+                      <button onClick={() => setFormValues(p => ({ ...p, [f.field_label]: [...(p[f.field_label] || ['']), ''] }))}
+                        className="flex items-center gap-1 text-[11px] text-blue-600 hover:underline">
+                        <Plus size={11}/>Add Row
+                      </button>
+                    )}
+                  </div>
+                  {f.is_repeating ? (
+                    <div className="space-y-1.5">
+                      {rows.map((val, ri) => (
+                        <div key={ri} className="flex gap-1.5">
+                          <input value={val} onChange={e => setFormValues(p => {
+                              const arr = [...(p[f.field_label] || [])]; arr[ri] = e.target.value
+                              return { ...p, [f.field_label]: arr }
+                            })} className="input text-xs flex-1" placeholder={`Row ${ri + 1}`}/>
+                          {rows.length > 1 && (
+                            <button onClick={() => setFormValues(p => ({ ...p, [f.field_label]: (p[f.field_label] || []).filter((_, ii) => ii !== ri) }))}
+                              className="text-gray-300 hover:text-red-500"><X size={13}/></button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <input value={rows[0] || ''} onChange={e => setFormValues(p => ({ ...p, [f.field_label]: [e.target.value] }))} className="input text-xs w-full"/>
+                  )}
+                </div>
+              )
+            })}
+            <button onClick={generate} disabled={generating}
+              className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
+              style={{ background: '#3b82f6' }}>
+              {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+              Generate {label}
+            </button>
+          </div>
+        )}
+
+        {status && <p className={`text-xs mt-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
+
+        {pdf && (
+          <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+            <button onClick={downloadPdf}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium" style={{ background: '#1B3A5C' }}>
+              <FileDown size={14}/> Download
+            </button>
+            <button onClick={() => setSendModalOpen(true)}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 hover:bg-gray-50">
+              <Send size={14}/> Send
+            </button>
+          </div>
+        )}
+
+        {sendModalOpen && pdf && (
+          <SendModal
+            label={pdf.fileName}
+            docType={documentType}
+            onSave={onSaveModal}
+            onGetDriveLinks={onGetDriveLinksModal}
+            onClose={() => setSendModalOpen(false)}
+            onDone={() => setSendModalOpen(false)}
+          />
         )}
       </div>
     </div>

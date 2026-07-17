@@ -197,6 +197,17 @@ const DOC_TYPES = [
   { value: 'pytho',        label: 'Phyto (Phytosanitary)' },
 ]
 
+// Slug used as the document_type value (DB column + /api/doc-generate key) —
+// the label shown everywhere else (this dropdown, the Docs Create tab) is
+// derived from it via titleCaseSlug() below, since doc_templates has no
+// separate display-name column.
+function slugifyDocType(label: string): string {
+  return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+export function titleCaseSlug(slug: string): string {
+  return slug.split('_').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ')
+}
+
 const emptyRow = (): TemplateMapping => ({
   field_label: '', data_source: 'cusdec', column_name: '',
   is_repeating: false, target_cell_or_range: '', sheet_name: '',
@@ -224,6 +235,10 @@ function DocTemplatesContent() {
   const [sheetsLoading, setSheetsLoading] = useState(false)
   const [sheetsWarn, setSheetsWarn]   = useState('')
   const lastFetchedUrl = useRef('')  // avoid double-fetch when loadTemplate sets urlInput
+  const [extraDocTypes, setExtraDocTypes] = useState<{ value: string; label: string }[]>([])
+  const [addingNewType, setAddingNewType] = useState(false)
+  const [newTypeLabel, setNewTypeLabel]   = useState('')
+  const allDocTypes = [...DOC_TYPES, ...extraDocTypes.filter(e => !DOC_TYPES.some(d => d.value === e.value))]
 
   // Load cusdec/cdn columns once
   useEffect(() => {
@@ -237,6 +252,35 @@ function DocTemplatesContent() {
     }
     loadCols()
   }, [])
+
+  // Custom document types created previously (anything already saved that
+  // isn't one of the 5 built-in ones) — so re-opening this page still shows
+  // them in the dropdown instead of only being reachable right after creation.
+  useEffect(() => {
+    async function loadExtraTypes() {
+      const h = await authHeader()
+      const res = await fetch('/api/doc-templates', { headers: h })
+      if (!res.ok) return
+      const d = await res.json()
+      const known = new Set(DOC_TYPES.map(t => t.value))
+      const extras = ((d.templates || []) as GSheet[])
+        .map(t => t.document_type)
+        .filter(v => v && !known.has(v))
+        .filter((v, i, arr) => arr.indexOf(v) === i)
+        .map(v => ({ value: v, label: titleCaseSlug(v) }))
+      setExtraDocTypes(extras)
+    }
+    loadExtraTypes()
+  }, [])
+
+  function confirmNewType() {
+    const slug = slugifyDocType(newTypeLabel)
+    if (!slug) return
+    setExtraDocTypes(prev => prev.some(e => e.value === slug) ? prev : [...prev, { value: slug, label: newTypeLabel.trim() }])
+    setDocType(slug)
+    setAddingNewType(false)
+    setNewTypeLabel('')
+  }
 
   useEffect(() => { loadTemplate() }, [docType]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -345,9 +389,28 @@ function DocTemplatesContent() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Document Type</label>
-            <select value={docType} onChange={e => setDocType(e.target.value)} className="input">
-              {DOC_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
+            {addingNewType ? (
+              <div className="flex gap-1.5">
+                <input value={newTypeLabel} onChange={e => setNewTypeLabel(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') confirmNewType(); if (e.key === 'Escape') setAddingNewType(false) }}
+                  placeholder="e.g. Delivery Note" autoFocus
+                  className="input flex-1 text-xs"/>
+                <button onClick={confirmNewType} disabled={!newTypeLabel.trim()}
+                  className="px-2.5 rounded-lg text-xs font-medium text-white disabled:opacity-40" style={{ background: '#22A87A' }}>
+                  <Save size={13}/>
+                </button>
+                <button onClick={() => { setAddingNewType(false); setNewTypeLabel('') }}
+                  className="px-2.5 rounded-lg text-xs text-gray-400 hover:text-red-500 border border-gray-200"><X size={13}/></button>
+              </div>
+            ) : (
+              <select value={docType} onChange={e => {
+                if (e.target.value === '__new__') { setAddingNewType(true); return }
+                setDocType(e.target.value)
+              }} className="input">
+                {allDocTypes.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                <option value="__new__">+ Add New Document Type</option>
+              </select>
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Google Sheets URL</label>
