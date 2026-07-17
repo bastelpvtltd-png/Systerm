@@ -1,180 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { FileStack, Trash2, FileDown, AlertTriangle, Loader, Plus, X, Save, Upload } from 'lucide-react'
-
-// ── Word {{tag}} templates ────────────────────────────────────────────────
-interface WordTemplate { id: string; name: string; file_name: string; drive_url: string | null; raw_text: string; placeholders: string[]; created_at: string }
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve((reader.result as string).split(',')[1])
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-function WordTemplatesContent() {
-  const [templates, setTemplates] = useState<WordTemplate[]>([])
-  const [uploading, setUploading] = useState(false)
-  const [templateName, setTemplateName] = useState('')
-  const [file, setFile] = useState<File | null>(null)
-  const [error, setError] = useState('')
-  const [status, setStatus] = useState('')
-  const [selectedId, setSelectedId] = useState<string>('')
-  const [values, setValues] = useState<Record<string, string>>({})
-
-  async function loadTemplates() {
-    const res = await fetch('/api/list-templates')
-    const d = await res.json()
-    if (res.ok) setTemplates(d.templates || [])
-  }
-  useEffect(() => {
-    loadTemplates()
-    const t = setInterval(loadTemplates, 20000)
-    return () => clearInterval(t)
-  }, [])
-
-  const selected = templates.find(t => t.id === selectedId) || null
-  useEffect(() => { setValues({}) }, [selectedId])
-
-  async function handleUpload() {
-    setError('')
-    if (!file) { setError('Choose a .docx file first'); return }
-    setUploading(true)
-    try {
-      const base64 = await fileToBase64(file)
-      let driveUrl = ''
-      try {
-        const dr = await fetch('/api/upload-to-drive', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-          body: JSON.stringify({ base64, fileName: file.name, mimeType: file.type, docType: 'template' }),
-        })
-        const dd = await dr.json()
-        if (dr.ok && dd.driveLink) driveUrl = dd.driveLink
-      } catch {}
-      const res = await fetch('/api/upload-template', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ base64, fileName: file.name, name: templateName || file.name, driveUrl }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error || 'Upload failed')
-      setStatus(`✓ Template saved — ${d.template.placeholders.length} placeholder(s) detected`)
-      setFile(null); setTemplateName('')
-      await loadTemplates()
-    } catch (e: any) { setError(e.message) }
-    finally { setUploading(false) }
-  }
-
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this template?')) return
-    await fetch(`/api/list-templates?id=${id}`, { method: 'DELETE' })
-    if (selectedId === id) setSelectedId('')
-    await loadTemplates()
-  }
-
-  async function generatePdf() {
-    if (!selected) return
-    const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-    const M = 15; let y = M
-    const filled = selected.raw_text.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => values[key] ?? '')
-    doc.setFont('helvetica', 'normal').setFontSize(10)
-    for (const paragraph of filled.split('\n')) {
-      const lines = doc.splitTextToSize(paragraph || ' ', 210 - M * 2)
-      for (const line of lines) {
-        if (y > 280) { doc.addPage(); y = M }
-        doc.text(line, M, y); y += 5.5
-      }
-    }
-    doc.save(`${selected.name.replace(/[^\w.-]+/g, '_')}.pdf`)
-  }
-
-  const [generatingWord, setGeneratingWord] = useState(false)
-  async function generateWord() {
-    if (!selected) return
-    setError(''); setGeneratingWord(true)
-    try {
-      const res = await fetch('/api/generate-template-docx', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ template_id: selected.id, values }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error || 'Generate failed')
-      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
-      const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a'); a.href = url; a.download = d.fileName; a.click()
-      URL.revokeObjectURL(url)
-    } catch (e: any) { setError(e.message) }
-    finally { setGeneratingWord(false) }
-  }
-
-  return (
-    <>
-      {error && <div className="mb-4 flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3"><AlertTriangle size={16}/>{error}</div>}
-      {status && <p className="text-sm text-green-600 mb-4">{status}</p>}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="card">
-          <h2 className="font-semibold text-gray-900 text-sm mb-3">Upload Template</h2>
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Template Name</label>
-              <input value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="e.g. Certificate of Origin" className="input"/>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">.docx File</label>
-              <input type="file" accept=".docx" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm"/>
-            </div>
-            <button onClick={handleUpload} disabled={uploading} className="btn-primary flex items-center gap-2">
-              {uploading ? <Loader size={14} className="animate-spin"/> : <Upload size={14}/>}Upload Template
-            </button>
-          </div>
-          <h2 className="font-semibold text-gray-900 text-sm mt-6 mb-3">Saved Templates</h2>
-          <div className="space-y-1 max-h-64 overflow-y-auto">
-            {templates.map(t => (
-              <div key={t.id} onClick={() => setSelectedId(t.id)}
-                className={`flex items-center justify-between p-2.5 rounded-lg border text-xs cursor-pointer ${selectedId === t.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
-                <div>
-                  <p className="font-medium text-gray-800">{t.name}</p>
-                  <p className="text-gray-400">{t.placeholders?.length ?? 0} tag{(t.placeholders?.length ?? 0) === 1 ? '' : 's'}</p>
-                </div>
-                <button onClick={e => { e.stopPropagation(); handleDelete(t.id) }} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
-              </div>
-            ))}
-            {templates.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No templates uploaded yet</p>}
-          </div>
-        </div>
-        <div className="card">
-          <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill & Generate</h2>
-          {!selected ? (
-            <p className="text-xs text-gray-400 text-center py-12">Select a template to fill in its tags</p>
-          ) : selected.placeholders.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-12">No {'{{'+'tags'+'}}'} were detected in this template</p>
-          ) : (
-            <>
-              <div className="space-y-3 mb-4">
-                {selected.placeholders.map(p => (
-                  <div key={p}>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">{'{{' + p + '}}'}</label>
-                    <input value={values[p] || ''} onChange={e => setValues(v => ({ ...v, [p]: e.target.value }))} className="input"/>
-                  </div>
-                ))}
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={generatePdf} className="btn-primary flex items-center gap-2"><FileDown size={14}/>Generate PDF</button>
-                <button onClick={generateWord} disabled={generatingWord} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50" style={{ background: '#2563eb' }}>
-                  {generatingWord ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}Generate Word
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </>
-  )
-}
+import { FileStack, AlertTriangle, Loader, Plus, X, Save } from 'lucide-react'
 
 // ── Google Sheets Templates — fixed doc types, relational mappings ─────────
 interface TemplateMapping {
@@ -204,7 +31,17 @@ const DOC_TYPES = [
   { value: 'packing_list', label: 'Packing List' },
   { value: 'co',           label: 'CO (Certificate of Origin)' },
   { value: 'pytho',        label: 'Phyto (Phytosanitary)' },
+  { value: 'cusdec_xml',   label: 'Cusdec XML' },
+  { value: 'cdn_text',     label: 'CDN Text' },
 ]
+
+// Picking these two document types only makes sense with one template
+// format each — auto-select it so the mapping UI below (Sheet columns vs.
+// the {{tag}} textarea) matches without an extra manual step.
+const DOC_TYPE_DEFAULT_FORMAT: Partial<Record<string, TemplateFormat>> = {
+  cusdec_xml: 'xml',
+  cdn_text: 'text',
+}
 
 // Slug used as the document_type value (DB column + /api/doc-generate key) —
 // the label shown everywhere else (this dropdown, the Docs Create tab) is
@@ -303,7 +140,7 @@ function DocTemplatesContent() {
     const d = await res.json()
     const found: GSheet | null = (d.templates || []).find((t: GSheet) => t.document_type === docType) || null
     const url = found?.template_url || ''
-    const format = found?.template_format || 'google_sheet'
+    const format = found?.template_format || DOC_TYPE_DEFAULT_FORMAT[docType] || 'google_sheet'
     setTemplateFormat(format)
     setTemplateContent(found?.template_content || '')
     setTemplateUrl(url)
@@ -640,7 +477,6 @@ function DocTemplatesContent() {
 function TemplatesContent() {
   const { has } = usePermission()
   const canUse = has('section:templates.manage')
-  const [mode, setMode] = useState<'word' | 'sheets'>('word')
 
   if (!canUse) return <div className="p-6 text-gray-400 text-sm">You don&apos;t have access to this page.</div>
 
@@ -648,13 +484,9 @@ function TemplatesContent() {
     <div className="p-6">
       <div className="mb-5">
         <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><FileStack size={20} className="text-[#3b82f6]"/>Templates</h1>
-        <p className="text-gray-500 text-sm mt-0.5">Word {'{{'+'tag'+'}}'} templates · Google Sheet / XML / Text templates</p>
+        <p className="text-gray-500 text-sm mt-0.5">Google Sheet / XML / Text templates</p>
       </div>
-      <div className="flex gap-1 mb-5 bg-gray-100 p-1 rounded-xl w-fit">
-        <button onClick={() => setMode('word')} className={`px-4 py-2 rounded-lg text-sm font-medium ${mode === 'word' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>Word ({'{{'+'tags'+'}}'})</button>
-        <button onClick={() => setMode('sheets')} className={`px-4 py-2 rounded-lg text-sm font-medium ${mode === 'sheets' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>Sheet / XML / Text</button>
-      </div>
-      {mode === 'sheets' ? <DocTemplatesContent/> : <WordTemplatesContent/>}
+      <DocTemplatesContent/>
     </div>
   )
 }
