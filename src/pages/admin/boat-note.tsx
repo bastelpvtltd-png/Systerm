@@ -513,10 +513,6 @@ function BoatNoteContent() {
     // Pre-flight constraints before calling the expensive generate API
     const cur = cusdecs.find(c => c.id === selCusdec)
     if (cur) {
-      if (cur.export_release_passed) {
-        setStatus('⛔ Export Release already passed (Green) — Boat Note cannot be regenerated for a released CUSDEC')
-        return
-      }
       const ownCdns = allCdns.filter(d => d.code === cur.code && d.cusdec_number === cur.number)
       const cap = parseInt(cur.cap || '', 10)
       if (cap && ownCdns.length < cap) {
