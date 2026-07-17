@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react'
 import { authHeader } from '@/lib/supabase'
 
 // Same CUSDEC -> CDN -> Boat Note generation logic as Docs Create's Boat Note
-// tab (src/pages/admin/boat-note.tsx) — pulled into a hook so the Automation
+// tab (src/pages/admin/docs-create.tsx) — pulled into a hook so the Automation
 // tab's "Boat Note Create" option can offer the identical workflow without
-// forking the PDF-layout code (which stays authored once, in boat-note.tsx,
+// forking the PDF-layout code (which stays authored once, in docs-create.tsx,
 // and is imported from there for the actual PDF drawing).
 export interface CusdecRec { id: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string }
 export interface CdnRec { id: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string }

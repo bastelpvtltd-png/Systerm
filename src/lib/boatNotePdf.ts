@@ -1,7 +1,7 @@
 import type { BoatNote } from '@/lib/useBoatNoteCreator'
 
 // Exact same Exp 3a PDF layout as Docs Create's Boat Note tab
-// (src/pages/admin/boat-note.tsx's downloadPdf) — shared so the Automation
+// (src/pages/admin/docs-create.tsx's downloadPdf) — shared so the Automation
 // tab's Boat Note Create option produces an identical document instead of a
 // second, drifting copy of the box layout.
 const COMPANY = {

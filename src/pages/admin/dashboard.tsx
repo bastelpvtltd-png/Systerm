@@ -177,7 +177,7 @@ function DashboardContent() {
                             </p>
                           )}
                         </div>
-                        <a href={`/admin/drive-files?invoiceNumber=${encodeURIComponent(s.invoice_number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                        <a href={`/admin/shipment-overview?invoiceNumber=${encodeURIComponent(s.invoice_number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                       </div>
                       {docs.length > 0 && (
                         <div className="flex items-center gap-3 mt-1.5 flex-wrap">
@@ -209,7 +209,7 @@ function DashboardContent() {
                         <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                       </div>
                       <span className="font-medium text-purple-700">{c.cdnCount}/{c.cap} CDN <span className="text-red-500">({c.cap - c.cdnCount} remaining)</span></span>
-                      <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                      <a href={`/admin/shipment-overview?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                     </div>
                     <VesselContainerList containers={c.containers}/>
                   </div>
@@ -234,7 +234,7 @@ function DashboardContent() {
                         <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                       </div>
                       <span className="font-medium text-blue-700">{c.passedCount}/{c.cdnCount} passed</span>
-                      <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                      <a href={`/admin/shipment-overview?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                     </div>
                     <VesselContainerList containers={c.containers}/>
                   </div>
@@ -257,7 +257,7 @@ function DashboardContent() {
                       <p className="font-medium text-gray-800">E {c.number}</p>
                       <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                     </div>
-                    <a href={`/admin/drive-files?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                    <a href={`/admin/shipment-overview?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                   </div>
                 ))}
               </div>
@@ -279,7 +279,7 @@ function DashboardContent() {
                       <p className="font-medium text-gray-800">{c.containerNo || '—'} <span className="text-gray-400 font-normal">· E {c.cusdecNumber}</span></p>
                       <p className="text-gray-500">{c.vessel} / {c.voyage} · Closing: {c.closingTime}</p>
                     </div>
-                    <a href={`/admin/drive-files?containerNo=${encodeURIComponent(c.containerNo || '')}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                    <a href={`/admin/shipment-overview?containerNo=${encodeURIComponent(c.containerNo || '')}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                   </div>
                 ))}
               </div>
