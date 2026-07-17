@@ -222,6 +222,7 @@ function DocTemplatesContent() {
   const [columnsBySource, setColumnsBySource] = useState<{ cusdec: string[]; cdn: string[] }>({ cusdec: CUSDEC_FALLBACK, cdn: CDN_FALLBACK })
   const [sheetNames, setSheetNames]   = useState<string[]>([])
   const [sheetsLoading, setSheetsLoading] = useState(false)
+  const [sheetsWarn, setSheetsWarn]   = useState('')  // amber warning when auto-load fails
 
   // Load cusdec/cdn columns once
   useEffect(() => {
@@ -260,20 +261,33 @@ function DocTemplatesContent() {
 
   async function fetchSheets(url: string) {
     if (!url.includes('spreadsheets')) { setSheetNames([]); return }
-    setSheetsLoading(true); setError('')
+    // Always accept the URL regardless of whether sheet names load
+    setTemplateUrl(url)
+    setSheetsWarn('')
+    setSheetsLoading(true)
     try {
       const h = await authHeader()
       const res = await fetch('/api/excel-template-sheets?sheet_url=' + encodeURIComponent(url), { headers: h })
       const d = await res.json()
       const names = (d.sheets || []).map((s: { title: string }) => s.title)
-      if (!names.length && d.error) throw new Error(d.error)
-      setSheetNames(names)
-      setTemplateUrl(url)
-    } catch (e: any) { setError('Sheet fetch failed: ' + e.message); setSheetNames([]) }
+      if (names.length) {
+        setSheetNames(names)
+      } else {
+        setSheetNames([])
+        setSheetsWarn(d.error ? `Sheet auto-load failed: ${d.error}` : 'No sheets found — enter sheet names manually')
+      }
+    } catch {
+      setSheetNames([])
+      setSheetsWarn('Could not connect to Google Sheets — enter sheet names manually below')
+    }
     finally { setSheetsLoading(false) }
   }
 
-  function handleDone() { fetchSheets(urlInput.trim()) }
+  function handleDone() {
+    const url = urlInput.trim()
+    if (!url) return
+    fetchSheets(url)
+  }
 
   function updateRow(i: number, patch: Partial<TemplateMapping>) {
     setMappings(prev => prev.map((m, idx) => idx === i ? { ...m, ...patch } : m))
@@ -346,6 +360,14 @@ function DocTemplatesContent() {
                   <span key={s} className="text-[11px] bg-green-50 text-green-700 border border-green-200 rounded px-1.5 py-0.5 font-medium">{s}</span>
                 ))}
               </div>
+            )}
+            {sheetsWarn && sheetNames.length === 0 && (
+              <p className="text-[11px] text-amber-600 mt-1.5 flex items-center gap-1">
+                <AlertTriangle size={11}/>{sheetsWarn}
+              </p>
+            )}
+            {templateUrl && (
+              <p className="text-[11px] text-green-600 mt-1">✓ URL accepted — sheet names can be typed manually below</p>
             )}
           </div>
         </div>
