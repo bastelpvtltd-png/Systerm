@@ -59,15 +59,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sheetsList = await getSheetsList(copyId)
     const firstSheetTitle = sheetsList[0]?.title || 'Sheet1'
 
-    // Build cell updates from mappings
-    const mappings: Array<{ field_label: string; data_source: string; column_name: string; is_repeating: boolean; target_cell_or_range: string }> = tpl.template_mappings || []
+    // Build cell updates from mappings — each mapping can target a specific sheet
+    const mappings: Array<{ field_label: string; data_source: string; column_name: string; is_repeating: boolean; target_cell_or_range: string; sheet_name?: string }> = tpl.template_mappings || []
     const updates: Array<{ range: string; value: string | number | null }> = []
 
     for (const m of mappings) {
-      const sheetPrefix = `${firstSheetTitle}!`
+      const sheetForField = m.sheet_name || firstSheetTitle
+      const sheetPrefix = `${sheetForField}!`
 
       if (m.is_repeating && m.target_cell_or_range.includes(':')) {
-        // Array range — fill one row per CDN entry
         const rangeMatch = m.target_cell_or_range.replace(/\s/g, '').match(/^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$/)
         if (rangeMatch) {
           const col = rangeMatch[1].toUpperCase()
@@ -81,7 +81,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue
       }
 
-      // Single cell
       let value: string | number | null = ''
       if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
       else if (m.data_source === 'cusdec') value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ''
@@ -91,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (updates.length) await batchWriteValues(copyId, updates)
 
-    // Export PDF from copy using saved print settings
+    // Export PDF — fit_to_page shrinks content to fit the page
     const printSheetName = tpl.print_sheet_name || firstSheetTitle
     const matchedSheet = sheetsList.find(s => s.title === printSheetName) || sheetsList[0]
     const pdfBuffer = await exportSheetAsPdf(copyId, {
@@ -99,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       range: tpl.print_range || undefined,
       landscape: (tpl.orientation || 'Portrait').toLowerCase() === 'landscape',
       paperSize: tpl.paper_size || 'A4',
-      scale: 4,
+      scale: tpl.fit_to_page !== false ? 4 : 2,
     })
 
     // Delete the copy

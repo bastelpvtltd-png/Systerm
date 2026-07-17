@@ -28,9 +28,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { document_type, template_url, print_sheet_name, print_range, paper_size, orientation, mappings } = req.body
       if (!document_type || !template_url) return res.status(400).json({ error: 'document_type and template_url required' })
 
+      const { fit_to_page } = req.body
+
       // Upsert template
       const { data: tpl, error: tplErr } = await sb.from('doc_templates')
-        .upsert({ document_type, template_url, print_sheet_name: print_sheet_name || null, print_range: print_range || null, paper_size: paper_size || 'A4', orientation: orientation || 'Portrait', updated_at: new Date().toISOString() }, { onConflict: 'document_type' })
+        .upsert({
+          document_type, template_url,
+          print_sheet_name: print_sheet_name || null,
+          print_range: print_range || null,
+          paper_size: paper_size || 'A4',
+          orientation: orientation || 'Portrait',
+          fit_to_page: fit_to_page !== false,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'document_type' })
         .select().single()
       if (tplErr) throw tplErr
 
@@ -38,7 +48,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (Array.isArray(mappings)) {
         await sb.from('template_mappings').delete().eq('template_id', tpl.id)
         if (mappings.length > 0) {
-          const rows = mappings.map((m: any) => ({ template_id: tpl.id, field_label: m.field_label, data_source: m.data_source, column_name: m.column_name, is_repeating: m.is_repeating || false, target_cell_or_range: m.target_cell_or_range }))
+          const rows = mappings.map((m: any) => ({
+            template_id: tpl.id,
+            field_label: m.field_label,
+            data_source: m.data_source,
+            column_name: m.column_name,
+            is_repeating: m.is_repeating || false,
+            target_cell_or_range: m.target_cell_or_range,
+            sheet_name: m.sheet_name || null,
+          }))
           const { error: mapErr } = await sb.from('template_mappings').insert(rows)
           if (mapErr) throw mapErr
         }

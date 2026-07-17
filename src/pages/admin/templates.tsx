@@ -177,8 +177,17 @@ function WordTemplatesContent() {
 }
 
 // ── Google Sheets Templates — fixed doc types, relational mappings ─────────
-interface TemplateMapping { id?: string; field_label: string; data_source: 'cusdec' | 'cdn'; column_name: string; is_repeating: boolean; target_cell_or_range: string }
-interface GSheet { id: string; document_type: string; template_url: string; print_sheet_name: string | null; print_range: string | null; paper_size: string; orientation: string; template_mappings: TemplateMapping[] }
+interface TemplateMapping {
+  id?: string; field_label: string; data_source: 'cusdec' | 'cdn'
+  column_name: string; is_repeating: boolean; target_cell_or_range: string
+  sheet_name: string
+}
+interface GSheet {
+  id: string; document_type: string; template_url: string
+  print_sheet_name: string | null; print_range: string | null
+  paper_size: string; orientation: string; fit_to_page: boolean
+  template_mappings: TemplateMapping[]
+}
 
 const DOC_TYPES = [
   { value: 'boat_note',    label: 'Boat Note' },
@@ -188,31 +197,41 @@ const DOC_TYPES = [
   { value: 'pytho',        label: 'Phyto (Phytosanitary)' },
 ]
 
-const emptyRow = (): TemplateMapping => ({ field_label: '', data_source: 'cusdec', column_name: '', is_repeating: false, target_cell_or_range: '' })
+const emptyRow = (): TemplateMapping => ({
+  field_label: '', data_source: 'cusdec', column_name: '',
+  is_repeating: false, target_cell_or_range: '', sheet_name: '',
+})
+
+// Known columns per table — loaded from /api/table-columns
+const CUSDEC_FALLBACK = ['code','number','date','exporter','consignee','vessel','voyage_no','bl_no','gross_mass','net_mass','cap','hs_code','amount','invoice_number','boat_note_link']
+const CDN_FALLBACK    = ['code','cusdec_number','shipper','consignee','container_no','goods_description','vessel','voyage','bl_no','slpa_no','lorry_no','cdn_no']
 
 function DocTemplatesContent() {
-  const [docType, setDocType] = useState('boat_note')
+  const [docType, setDocType]         = useState('boat_note')
   const [templateUrl, setTemplateUrl] = useState('')
-  const [mappings, setMappings] = useState<TemplateMapping[]>([emptyRow()])
-  const [printSheet, setPrintSheet] = useState('')
-  const [printRange, setPrintRange] = useState('')
-  const [paperSize, setPaperSize] = useState('A4')
+  const [urlInput, setUrlInput]       = useState('')   // raw input before "Done"
+  const [mappings, setMappings]       = useState<TemplateMapping[]>([emptyRow()])
+  const [printSheet, setPrintSheet]   = useState('')
+  const [printRange, setPrintRange]   = useState('')
+  const [paperSize, setPaperSize]     = useState('A4')
   const [orientation, setOrientation] = useState('Portrait')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [status, setStatus] = useState('')
-  const [columnsBySource, setColumnsBySource] = useState<{ cusdec: string[]; cdn: string[] }>({ cusdec: [], cdn: [] })
-  const [sheetNames, setSheetNames] = useState<string[]>([])
+  const [fitToPage, setFitToPage]     = useState(true)
+  const [saving, setSaving]           = useState(false)
+  const [error, setError]             = useState('')
+  const [status, setStatus]           = useState('')
+  const [columnsBySource, setColumnsBySource] = useState<{ cusdec: string[]; cdn: string[] }>({ cusdec: CUSDEC_FALLBACK, cdn: CDN_FALLBACK })
+  const [sheetNames, setSheetNames]   = useState<string[]>([])
   const [sheetsLoading, setSheetsLoading] = useState(false)
 
+  // Load cusdec/cdn columns once
   useEffect(() => {
     async function loadCols() {
       const h = await authHeader()
       const [cr, dr] = await Promise.all([
-        fetch('/api/table-columns?table=cusdec', { headers: h }).then(r => r.json()).catch(() => ({ columns: [] })),
-        fetch('/api/table-columns?table=cdn', { headers: h }).then(r => r.json()).catch(() => ({ columns: [] })),
+        fetch('/api/table-columns?table=cusdec', { headers: h }).then(r => r.json()).catch(() => ({ columns: CUSDEC_FALLBACK })),
+        fetch('/api/table-columns?table=cdn',    { headers: h }).then(r => r.json()).catch(() => ({ columns: CDN_FALLBACK })),
       ])
-      setColumnsBySource({ cusdec: cr.columns || [], cdn: dr.columns || [] })
+      setColumnsBySource({ cusdec: cr.columns?.length ? cr.columns : CUSDEC_FALLBACK, cdn: dr.columns?.length ? dr.columns : CDN_FALLBACK })
     }
     loadCols()
   }, [])
@@ -226,27 +245,35 @@ function DocTemplatesContent() {
     if (!res.ok) return
     const d = await res.json()
     const found: GSheet | null = (d.templates || []).find((t: GSheet) => t.document_type === docType) || null
-    setTemplateUrl(found?.template_url || '')
-    setMappings(found?.template_mappings?.length ? found.template_mappings : [emptyRow()])
+    const url = found?.template_url || ''
+    setTemplateUrl(url)
+    setUrlInput(url)
+    setMappings(found?.template_mappings?.length ? found.template_mappings.map(m => ({ ...m, sheet_name: m.sheet_name || '' })) : [emptyRow()])
     setPrintSheet(found?.print_sheet_name || '')
     setPrintRange(found?.print_range || '')
     setPaperSize(found?.paper_size || 'A4')
     setOrientation(found?.orientation || 'Portrait')
-    if (found?.template_url) fetchSheets(found.template_url)
+    setFitToPage(found?.fit_to_page !== false)
+    if (url) fetchSheets(url)
     else setSheetNames([])
   }
 
   async function fetchSheets(url: string) {
     if (!url.includes('spreadsheets')) { setSheetNames([]); return }
-    setSheetsLoading(true)
+    setSheetsLoading(true); setError('')
     try {
       const h = await authHeader()
-      const res = await fetch(`/api/excel-template-sheets?sheet_url=${encodeURIComponent(url)}`, { headers: h })
+      const res = await fetch('/api/excel-template-sheets?sheet_url=' + encodeURIComponent(url), { headers: h })
       const d = await res.json()
-      setSheetNames((d.sheets || []).map((s: { title: string }) => s.title))
-    } catch { setSheetNames([]) }
+      const names = (d.sheets || []).map((s: { title: string }) => s.title)
+      if (!names.length && d.error) throw new Error(d.error)
+      setSheetNames(names)
+      setTemplateUrl(url)
+    } catch (e: any) { setError('Sheet fetch failed: ' + e.message); setSheetNames([]) }
     finally { setSheetsLoading(false) }
   }
+
+  function handleDone() { fetchSheets(urlInput.trim()) }
 
   function updateRow(i: number, patch: Partial<TemplateMapping>) {
     setMappings(prev => prev.map((m, idx) => idx === i ? { ...m, ...patch } : m))
@@ -255,8 +282,8 @@ function DocTemplatesContent() {
   async function save() {
     setSaving(true); setError('')
     try {
-      const url = templateUrl.trim()
-      if (!url) throw new Error('Google Sheets URL required')
+      const url = templateUrl.trim() || urlInput.trim()
+      if (!url) throw new Error('Google Sheets URL required — paste URL and click Done first')
       const valid = mappings.filter(m => m.field_label && m.column_name && m.target_cell_or_range)
       for (const m of valid) {
         if (m.is_repeating && !m.target_cell_or_range.includes(':'))
@@ -265,7 +292,12 @@ function DocTemplatesContent() {
       const h = await authHeader()
       const res = await fetch('/api/doc-templates', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify({ document_type: docType, template_url: url, print_sheet_name: printSheet || null, print_range: printRange || null, paper_size: paperSize, orientation, mappings: valid }),
+        body: JSON.stringify({
+          document_type: docType, template_url: url,
+          print_sheet_name: printSheet || null, print_range: printRange || null,
+          paper_size: paperSize, orientation, fit_to_page: fitToPage,
+          mappings: valid,
+        }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
@@ -279,10 +311,10 @@ function DocTemplatesContent() {
 
   return (
     <div className="space-y-5">
-      {error && <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3"><AlertTriangle size={16}/>{error}</div>}
+      {error && <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3"><AlertTriangle size={16}/><span>{error}</span></div>}
       {status && <p className="text-sm text-green-600">{status}</p>}
 
-      {/* Step 1 */}
+      {/* Step 1 — Doc type + URL */}
       <div className="card">
         <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
           <span className="w-5 h-5 bg-blue-600 text-white rounded-full text-[11px] flex items-center justify-center font-bold">1</span>
@@ -298,33 +330,48 @@ function DocTemplatesContent() {
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Google Sheets URL</label>
             <div className="flex gap-2">
-              <input value={templateUrl} onChange={e => { setTemplateUrl(e.target.value); fetchSheets(e.target.value) }}
-                placeholder="https://docs.google.com/spreadsheets/d/..." className="input flex-1 text-xs font-mono"/>
-              {sheetsLoading && <Loader size={14} className="animate-spin text-blue-500 mt-2.5 flex-shrink-0"/>}
+              <input value={urlInput} onChange={e => setUrlInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleDone()}
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                className="input flex-1 text-xs font-mono"/>
+              <button onClick={handleDone} disabled={sheetsLoading}
+                className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-medium text-white flex-shrink-0 disabled:opacity-50"
+                style={{ background: '#1B3A5C' }}>
+                {sheetsLoading ? <Loader size={12} className="animate-spin"/> : null}Done
+              </button>
             </div>
-            {sheetNames.length > 0 && <p className="text-[11px] text-green-600 mt-1">{sheetNames.join(', ')}</p>}
+            {sheetNames.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {sheetNames.map(s => (
+                  <span key={s} className="text-[11px] bg-green-50 text-green-700 border border-green-200 rounded px-1.5 py-0.5 font-medium">{s}</span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Step 2 */}
+      {/* Step 2 — Field Mappings */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
             <span className="w-5 h-5 bg-blue-600 text-white rounded-full text-[11px] flex items-center justify-center font-bold">2</span>
             Field Mappings
           </h2>
-          <button onClick={() => setMappings(p => [...p, emptyRow()])} className="flex items-center gap-1 text-xs text-blue-600 hover:underline"><Plus size={13}/>Add Row</button>
+          <button onClick={() => setMappings(p => [...p, emptyRow()])} className="flex items-center gap-1 text-xs text-blue-600 hover:underline">
+            <Plus size={13}/>Add Row
+          </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+          <table className="w-full text-xs min-w-[700px]">
             <thead>
               <tr className="border-b border-gray-100 text-left text-gray-500">
-                <th className="pb-2 font-medium pr-2">Field Label</th>
-                <th className="pb-2 font-medium pr-2">Source</th>
-                <th className="pb-2 font-medium pr-2">Column</th>
-                <th className="pb-2 font-medium pr-2 text-center">Repeat</th>
-                <th className="pb-2 font-medium pr-2">Cell / Range</th>
+                <th className="pb-2 font-medium pr-2 w-28">Field Label</th>
+                <th className="pb-2 font-medium pr-2 w-20">Source</th>
+                <th className="pb-2 font-medium pr-2 w-36">Column</th>
+                <th className="pb-2 font-medium pr-2 w-16 text-center">Repeat</th>
+                <th className="pb-2 font-medium pr-2 w-28">Sheet</th>
+                <th className="pb-2 font-medium pr-2 w-24">Cell / Range</th>
                 <th className="pb-2 w-6"></th>
               </tr>
             </thead>
@@ -332,7 +379,8 @@ function DocTemplatesContent() {
               {mappings.map((m, i) => (
                 <tr key={i} className="border-b border-gray-50">
                   <td className="py-1.5 pr-2">
-                    <input value={m.field_label} onChange={e => updateRow(i, { field_label: e.target.value })} placeholder="e.g. Invoice No" className="input text-xs w-full"/>
+                    <input value={m.field_label} onChange={e => updateRow(i, { field_label: e.target.value })}
+                      placeholder="e.g. Invoice No" className="input text-xs w-full"/>
                   </td>
                   <td className="py-1.5 pr-2">
                     <select value={m.data_source} onChange={e => updateRow(i, { data_source: e.target.value as 'cusdec' | 'cdn', column_name: '' })} className="input text-xs">
@@ -342,19 +390,33 @@ function DocTemplatesContent() {
                   </td>
                   <td className="py-1.5 pr-2">
                     <select value={m.column_name} onChange={e => updateRow(i, { column_name: e.target.value })} className="input text-xs">
-                      <option value="">Pick...</option>
+                      <option value="">— pick —</option>
                       {cols(m.data_source).map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </td>
                   <td className="py-1.5 pr-2 text-center">
-                    <input type="checkbox" checked={m.is_repeating} onChange={e => updateRow(i, { is_repeating: e.target.checked, target_cell_or_range: '' })} className="cursor-pointer"/>
+                    <input type="checkbox" checked={m.is_repeating}
+                      onChange={e => updateRow(i, { is_repeating: e.target.checked, target_cell_or_range: '' })}
+                      className="cursor-pointer"/>
                   </td>
                   <td className="py-1.5 pr-2">
-                    <input value={m.target_cell_or_range} onChange={e => updateRow(i, { target_cell_or_range: e.target.value.toUpperCase() })}
-                      placeholder={m.is_repeating ? 'e.g. A10:A25' : 'e.g. B5'}
+                    {sheetNames.length > 0 ? (
+                      <select value={m.sheet_name} onChange={e => updateRow(i, { sheet_name: e.target.value })} className="input text-xs">
+                        <option value="">— first sheet —</option>
+                        {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    ) : (
+                      <input value={m.sheet_name} onChange={e => updateRow(i, { sheet_name: e.target.value })}
+                        placeholder="Sheet name" className="input text-xs w-full"/>
+                    )}
+                  </td>
+                  <td className="py-1.5 pr-2">
+                    <input value={m.target_cell_or_range}
+                      onChange={e => updateRow(i, { target_cell_or_range: e.target.value.toUpperCase() })}
+                      placeholder={m.is_repeating ? 'A10:A25' : 'B5'}
                       className={`input text-xs font-mono w-full ${m.is_repeating && m.target_cell_or_range && !m.target_cell_or_range.includes(':') ? 'border-red-300' : ''}`}/>
                     {m.is_repeating && m.target_cell_or_range && !m.target_cell_or_range.includes(':') && (
-                      <p className="text-[10px] text-red-500 mt-0.5">Range required (e.g. A10:A25)</p>
+                      <p className="text-[10px] text-red-500 mt-0.5">Range needed</p>
                     )}
                   </td>
                   <td className="py-1.5">
@@ -368,7 +430,7 @@ function DocTemplatesContent() {
         </div>
       </div>
 
-      {/* Step 3 */}
+      {/* Step 3 — Print Settings */}
       <div className="card">
         <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
           <span className="w-5 h-5 bg-blue-600 text-white rounded-full text-[11px] flex items-center justify-center font-bold">3</span>
@@ -376,19 +438,21 @@ function DocTemplatesContent() {
         </h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Target Tab Name</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Print Tab (sheet)</label>
             {sheetNames.length > 0 ? (
               <select value={printSheet} onChange={e => setPrintSheet(e.target.value)} className="input text-xs">
-                <option value="">— First sheet —</option>
+                <option value="">— first sheet —</option>
                 {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             ) : (
-              <input value={printSheet} onChange={e => setPrintSheet(e.target.value)} placeholder="e.g. Print" className="input text-xs font-mono"/>
+              <input value={printSheet} onChange={e => setPrintSheet(e.target.value)}
+                placeholder="e.g. Print" className="input text-xs font-mono"/>
             )}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Print Range</label>
-            <input value={printRange} onChange={e => setPrintRange(e.target.value)} placeholder="e.g. A1:K50" className="input text-xs font-mono"/>
+            <input value={printRange} onChange={e => setPrintRange(e.target.value)}
+              placeholder="e.g. A1:K50" className="input text-xs font-mono"/>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Paper Size</label>
@@ -403,6 +467,10 @@ function DocTemplatesContent() {
             </select>
           </div>
         </div>
+        <label className="flex items-center gap-2 text-xs text-gray-700 mb-4 cursor-pointer select-none">
+          <input type="checkbox" checked={fitToPage} onChange={e => setFitToPage(e.target.checked)} className="cursor-pointer"/>
+          <span>Fit to page (shrink content to fit paper — recommended)</span>
+        </label>
         <button onClick={save} disabled={saving} className="btn-primary flex items-center gap-2">
           {saving ? <Loader size={14} className="animate-spin"/> : <Save size={14}/>}Save Template
         </button>
