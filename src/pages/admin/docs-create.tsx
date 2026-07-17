@@ -51,6 +51,7 @@ function DocsCreateContent() {
   const [generatingCusdecId, setGeneratingCusdecId] = useState<string | null>(null)
   const [bnResult, setBnResult] = useState<{
     fileName: string; base64: string; cusdec: CusdecFull | null; hasStatus: boolean
+    hasSavedUrl: boolean; hasExportReleased: boolean
   } | null>(null)
   const [saving, setSaving]           = useState(false)
   const [savedDriveUrl, setSavedDriveUrl] = useState("")
@@ -154,7 +155,7 @@ function DocsCreateContent() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || "Generate failed")
       // manual = download/mail only, no save
-      setBnResult({ fileName: d.fileName, base64: d.base64, cusdec: null, hasStatus: true })
+      setBnResult({ fileName: d.fileName, base64: d.base64, cusdec: null, hasStatus: true, hasExportReleased: true, hasSavedUrl: false })
       setSavedDriveUrl("")
     } catch (e: any) { setError(e.message) }
     finally { setGenerating(false) }
@@ -171,8 +172,12 @@ function DocsCreateContent() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || "Generate failed")
-      const hasStatus = !!cusdec.export_release_passed || !!cusdec.boat_note_url
-      setBnResult({ fileName: d.fileName, base64: d.base64, cusdec, hasStatus })
+      const hasExportReleased = !!cusdec.export_release_passed
+      const hasSavedUrl = !!cusdec.boat_note_url
+      const hasStatus = hasExportReleased || hasSavedUrl
+      const cusdecNum = (cusdec.number || '').replace(/\D/g, '') || cusdec.number || 'UNKNOWN'
+      const fileName = `B${cusdecNum}.pdf`
+      setBnResult({ fileName, base64: d.base64, cusdec, hasStatus, hasExportReleased, hasSavedUrl })
     } catch (e: any) { setError(e.message) }
     finally { setGeneratingCusdecId(null) }
   }
@@ -434,8 +439,8 @@ function DocsCreateContent() {
                 </button>
               </div>
 
-              {/* Save to System — only for cusdec rows WITHOUT status */}
-              {bnResult.cusdec && !bnResult.hasStatus && (
+              {/* Save to System — hidden only when already saved AND export released */}
+              {bnResult.cusdec && !(bnResult.hasSavedUrl && bnResult.hasExportReleased) && (
                 <div className="border-t border-gray-100 pt-3">
                   <h3 className="text-xs font-semibold text-gray-700 mb-2">Save to System</h3>
                   {savedDriveUrl ? (
