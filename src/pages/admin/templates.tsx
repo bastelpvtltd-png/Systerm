@@ -187,7 +187,16 @@ interface GSheet {
   print_sheet_name: string | null; print_range: string | null
   paper_size: string; orientation: string; fit_to_page: boolean
   template_mappings: TemplateMapping[]
+  template_format?: 'google_sheet' | 'xml' | 'text'
+  template_content?: string | null
 }
+
+const TEMPLATE_FORMATS = [
+  { value: 'google_sheet', label: 'Google Sheet' },
+  { value: 'xml',          label: 'XML' },
+  { value: 'text',         label: 'Text Template' },
+] as const
+type TemplateFormat = typeof TEMPLATE_FORMATS[number]['value']
 
 const DOC_TYPES = [
   { value: 'boat_note',    label: 'Boat Note' },
@@ -219,6 +228,8 @@ const CDN_FALLBACK    = ['code','cusdec_number','shipper','consignee','container
 
 function DocTemplatesContent() {
   const [docType, setDocType]         = useState('boat_note')
+  const [templateFormat, setTemplateFormat] = useState<TemplateFormat>('google_sheet')
+  const [templateContent, setTemplateContent] = useState('')
   const [templateUrl, setTemplateUrl] = useState('')
   const [urlInput, setUrlInput]       = useState('')
   const [mappings, setMappings]       = useState<TemplateMapping[]>([emptyRow()])
@@ -292,6 +303,9 @@ function DocTemplatesContent() {
     const d = await res.json()
     const found: GSheet | null = (d.templates || []).find((t: GSheet) => t.document_type === docType) || null
     const url = found?.template_url || ''
+    const format = found?.template_format || 'google_sheet'
+    setTemplateFormat(format)
+    setTemplateContent(found?.template_content || '')
     setTemplateUrl(url)
     setUrlInput(url)
     setMappings(found?.template_mappings?.length ? found.template_mappings.map(m => ({ ...m, sheet_name: m.sheet_name || '' })) : [emptyRow()])
@@ -300,7 +314,7 @@ function DocTemplatesContent() {
     setPaperSize(found?.paper_size || 'A4')
     setOrientation(found?.orientation || 'Portrait')
     setFitToPage(found?.fit_to_page !== false)
-    if (url) fetchSheets(url)
+    if (format === 'google_sheet' && url) fetchSheets(url)
     else setSheetNames([])
   }
 
@@ -348,22 +362,38 @@ function DocTemplatesContent() {
   async function save() {
     setSaving(true); setError('')
     try {
-      const url = templateUrl.trim() || urlInput.trim()
-      if (!url) throw new Error('Google Sheets URL required — paste the spreadsheet URL above')
-      const valid = mappings.filter(m => m.field_label && (m.data_source === 'manual' || m.column_name) && m.target_cell_or_range)
-      for (const m of valid) {
-        if (m.is_repeating && !m.target_cell_or_range.includes(':'))
-          throw new Error(`"${m.field_label}" is repeating — cell range required (e.g. A10:A25)`)
-      }
       const h = await authHeader()
-      const res = await fetch('/api/doc-templates', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify({
-          document_type: docType, template_url: url,
+      let body: Record<string, unknown>
+
+      if (templateFormat === 'google_sheet') {
+        const url = templateUrl.trim() || urlInput.trim()
+        if (!url) throw new Error('Google Sheets URL required — paste the spreadsheet URL above')
+        const valid = mappings.filter(m => m.field_label && (m.data_source === 'manual' || m.column_name) && m.target_cell_or_range)
+        for (const m of valid) {
+          if (m.is_repeating && !m.target_cell_or_range.includes(':'))
+            throw new Error(`"${m.field_label}" is repeating — cell range required (e.g. A10:A25)`)
+        }
+        body = {
+          document_type: docType, template_format: templateFormat, template_url: url, template_content: null,
           print_sheet_name: printSheet || null, print_range: printRange || null,
           paper_size: paperSize, orientation, fit_to_page: fitToPage,
           mappings: valid,
-        }),
+        }
+      } else {
+        // XML / Text — no spreadsheet, no cell/range: the raw {{field_label}}
+        // template body is typed directly here and stored as-is.
+        if (!templateContent.trim()) throw new Error('Template content required — type the {{field_label}} template above')
+        const valid = mappings.filter(m => m.field_label && (m.data_source === 'manual' || m.column_name))
+        body = {
+          document_type: docType, template_format: templateFormat, template_url: null, template_content: templateContent,
+          print_sheet_name: null, print_range: null, paper_size: 'A4', orientation: 'Portrait', fit_to_page: true,
+          mappings: valid.map(m => ({ ...m, target_cell_or_range: '', sheet_name: '' })),
+        }
+      }
+
+      const res = await fetch('/api/doc-templates', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify(body),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
@@ -413,6 +443,15 @@ function DocTemplatesContent() {
             )}
           </div>
           <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Template Format</label>
+            <select value={templateFormat} onChange={e => setTemplateFormat(e.target.value as TemplateFormat)} className="input">
+              {TEMPLATE_FORMATS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {templateFormat === 'google_sheet' ? (
+          <div className="mt-3">
             <label className="block text-xs font-medium text-gray-600 mb-1">Google Sheets URL</label>
             <div className="relative">
               <input value={urlInput} onChange={e => setUrlInput(e.target.value)}
@@ -441,7 +480,19 @@ function DocTemplatesContent() {
               <p className="text-[11px] text-green-600 mt-1">✓ URL accepted — sheet names can be typed manually below</p>
             )}
           </div>
-        </div>
+        ) : (
+          <div className="mt-3">
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              {templateFormat === 'xml' ? 'XML Template' : 'Text Template'}
+              <span className="text-gray-400 font-normal"> — type the raw {templateFormat === 'xml' ? 'XML' : 'text'} with {'{{field_label}}'} tags where a mapped field should be filled in</span>
+            </label>
+            <textarea value={templateContent} onChange={e => setTemplateContent(e.target.value)} rows={10}
+              placeholder={templateFormat === 'xml'
+                ? '<Declaration>\n  <Number>{{Reference No}}</Number>\n  <Exporter>{{Exporter}}</Exporter>\n</Declaration>'
+                : 'CDN No: {{CDN No}}\nContainer: {{Container No}}\nGross Mass: {{Gross Mass}}'}
+              className="w-full font-mono text-xs border border-gray-200 rounded-lg p-3"/>
+          </div>
+        )}
       </div>
 
       {/* Step 2 — Field Mappings */}
@@ -463,8 +514,8 @@ function DocTemplatesContent() {
                 <th className="pb-2 font-medium pr-2 w-20">Source</th>
                 <th className="pb-2 font-medium pr-2 w-36">Column</th>
                 <th className="pb-2 font-medium pr-2 w-16 text-center">Repeat</th>
-                <th className="pb-2 font-medium pr-2 w-28">Sheet</th>
-                <th className="pb-2 font-medium pr-2 w-24">Cell / Range</th>
+                {templateFormat === 'google_sheet' && <th className="pb-2 font-medium pr-2 w-28">Sheet</th>}
+                {templateFormat === 'google_sheet' && <th className="pb-2 font-medium pr-2 w-24">Cell / Range</th>}
                 <th className="pb-2 w-6"></th>
               </tr>
             </thead>
@@ -497,26 +548,30 @@ function DocTemplatesContent() {
                       onChange={e => updateRow(i, { is_repeating: e.target.checked, target_cell_or_range: '' })}
                       className="cursor-pointer"/>
                   </td>
-                  <td className="py-1.5 pr-2">
-                    {sheetNames.length > 0 ? (
-                      <select value={m.sheet_name} onChange={e => updateRow(i, { sheet_name: e.target.value })} className="input text-xs">
-                        <option value="">— first sheet —</option>
-                        {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    ) : (
-                      <input value={m.sheet_name} onChange={e => updateRow(i, { sheet_name: e.target.value })}
-                        placeholder="Sheet name" className="input text-xs w-full"/>
-                    )}
-                  </td>
-                  <td className="py-1.5 pr-2">
-                    <input value={m.target_cell_or_range}
-                      onChange={e => updateRow(i, { target_cell_or_range: e.target.value.toUpperCase() })}
-                      placeholder={m.is_repeating ? 'A10:A25' : 'B5'}
-                      className={`input text-xs font-mono w-full ${m.is_repeating && m.target_cell_or_range && !m.target_cell_or_range.includes(':') ? 'border-red-300' : ''}`}/>
-                    {m.is_repeating && m.target_cell_or_range && !m.target_cell_or_range.includes(':') && (
-                      <p className="text-[10px] text-red-500 mt-0.5">Range needed</p>
-                    )}
-                  </td>
+                  {templateFormat === 'google_sheet' && (
+                    <td className="py-1.5 pr-2">
+                      {sheetNames.length > 0 ? (
+                        <select value={m.sheet_name} onChange={e => updateRow(i, { sheet_name: e.target.value })} className="input text-xs">
+                          <option value="">— first sheet —</option>
+                          {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      ) : (
+                        <input value={m.sheet_name} onChange={e => updateRow(i, { sheet_name: e.target.value })}
+                          placeholder="Sheet name" className="input text-xs w-full"/>
+                      )}
+                    </td>
+                  )}
+                  {templateFormat === 'google_sheet' && (
+                    <td className="py-1.5 pr-2">
+                      <input value={m.target_cell_or_range}
+                        onChange={e => updateRow(i, { target_cell_or_range: e.target.value.toUpperCase() })}
+                        placeholder={m.is_repeating ? 'A10:A25' : 'B5'}
+                        className={`input text-xs font-mono w-full ${m.is_repeating && m.target_cell_or_range && !m.target_cell_or_range.includes(':') ? 'border-red-300' : ''}`}/>
+                      {m.is_repeating && m.target_cell_or_range && !m.target_cell_or_range.includes(':') && (
+                        <p className="text-[10px] text-red-500 mt-0.5">Range needed</p>
+                      )}
+                    </td>
+                  )}
                   <td className="py-1.5">
                     <button onClick={() => setMappings(p => p.filter((_, idx) => idx !== i))} className="text-gray-300 hover:text-red-500"><X size={13}/></button>
                   </td>
@@ -528,47 +583,51 @@ function DocTemplatesContent() {
         </div>
       </div>
 
-      {/* Step 3 — Print Settings */}
+      {/* Step 3 — Print Settings (Google Sheets only — XML/Text have no page layout) */}
       <div className="card">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
-          <span className="w-5 h-5 bg-blue-600 text-white rounded-full text-[11px] flex items-center justify-center font-bold">3</span>
-          Print Settings
-        </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Print Tab (sheet)</label>
-            {sheetNames.length > 0 ? (
-              <select value={printSheet} onChange={e => setPrintSheet(e.target.value)} className="input text-xs">
-                <option value="">— first sheet —</option>
-                {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            ) : (
-              <input value={printSheet} onChange={e => setPrintSheet(e.target.value)}
-                placeholder="e.g. Print" className="input text-xs font-mono"/>
-            )}
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Print Range</label>
-            <input value={printRange} onChange={e => setPrintRange(e.target.value)}
-              placeholder="e.g. A1:K50" className="input text-xs font-mono"/>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Paper Size</label>
-            <select value={paperSize} onChange={e => setPaperSize(e.target.value)} className="input text-xs">
-              <option>A4</option><option>Letter</option><option>A3</option><option>Legal</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Orientation</label>
-            <select value={orientation} onChange={e => setOrientation(e.target.value)} className="input text-xs">
-              <option>Portrait</option><option>Landscape</option>
-            </select>
-          </div>
-        </div>
-        <label className="flex items-center gap-2 text-xs text-gray-700 mb-4 cursor-pointer select-none">
-          <input type="checkbox" checked={fitToPage} onChange={e => setFitToPage(e.target.checked)} className="cursor-pointer"/>
-          <span>Fit to page (shrink content to fit paper — recommended)</span>
-        </label>
+        {templateFormat === 'google_sheet' && (
+          <>
+            <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
+              <span className="w-5 h-5 bg-blue-600 text-white rounded-full text-[11px] flex items-center justify-center font-bold">3</span>
+              Print Settings
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Print Tab (sheet)</label>
+                {sheetNames.length > 0 ? (
+                  <select value={printSheet} onChange={e => setPrintSheet(e.target.value)} className="input text-xs">
+                    <option value="">— first sheet —</option>
+                    {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                ) : (
+                  <input value={printSheet} onChange={e => setPrintSheet(e.target.value)}
+                    placeholder="e.g. Print" className="input text-xs font-mono"/>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Print Range</label>
+                <input value={printRange} onChange={e => setPrintRange(e.target.value)}
+                  placeholder="e.g. A1:K50" className="input text-xs font-mono"/>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Paper Size</label>
+                <select value={paperSize} onChange={e => setPaperSize(e.target.value)} className="input text-xs">
+                  <option>A4</option><option>Letter</option><option>A3</option><option>Legal</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Orientation</label>
+                <select value={orientation} onChange={e => setOrientation(e.target.value)} className="input text-xs">
+                  <option>Portrait</option><option>Landscape</option>
+                </select>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-gray-700 mb-4 cursor-pointer select-none">
+              <input type="checkbox" checked={fitToPage} onChange={e => setFitToPage(e.target.checked)} className="cursor-pointer"/>
+              <span>Fit to page (shrink content to fit paper — recommended)</span>
+            </label>
+          </>
+        )}
         <button onClick={save} disabled={saving} className="btn-primary flex items-center gap-2">
           {saving ? <Loader size={14} className="animate-spin"/> : <Save size={14}/>}Save Template
         </button>
@@ -589,11 +648,11 @@ function TemplatesContent() {
     <div className="p-6">
       <div className="mb-5">
         <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><FileStack size={20} className="text-[#3b82f6]"/>Templates</h1>
-        <p className="text-gray-500 text-sm mt-0.5">Word {'{{'+'tag'+'}}'} templates · Google Sheets cell-mapping templates</p>
+        <p className="text-gray-500 text-sm mt-0.5">Word {'{{'+'tag'+'}}'} templates · Google Sheet / XML / Text templates</p>
       </div>
       <div className="flex gap-1 mb-5 bg-gray-100 p-1 rounded-xl w-fit">
         <button onClick={() => setMode('word')} className={`px-4 py-2 rounded-lg text-sm font-medium ${mode === 'word' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>Word ({'{{'+'tags'+'}}'})</button>
-        <button onClick={() => setMode('sheets')} className={`px-4 py-2 rounded-lg text-sm font-medium ${mode === 'sheets' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>Google Sheets</button>
+        <button onClick={() => setMode('sheets')} className={`px-4 py-2 rounded-lg text-sm font-medium ${mode === 'sheets' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>Sheet / XML / Text</button>
       </div>
       {mode === 'sheets' ? <DocTemplatesContent/> : <WordTemplatesContent/>}
     </div>

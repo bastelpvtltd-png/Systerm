@@ -33,9 +33,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { data: tpl } = await sb.from('doc_templates').select('*, template_mappings(*)').eq('document_type', document_type).maybeSingle()
     if (!tpl) return res.status(404).json({ error: 'No template configured for this document type' })
 
-    const spreadsheetId = spreadsheetIdFromUrl(tpl.template_url)
-    if (!spreadsheetId) return res.status(400).json({ error: 'Invalid Google Sheets URL in template' })
-
     // Load CUSDEC + CDN data
     let cusdecRow: Record<string, any> | null = null
     let cdnRows: Record<string, any>[] = []
@@ -49,6 +46,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         cdnRows = cdns || []
       }
     }
+
+    // XML / Text templates — no spreadsheet at all: resolve each mapping's
+    // value the same way as the Sheets path below, then substitute
+    // {{field_label}} tags directly into the typed template body.
+    if (tpl.template_format && tpl.template_format !== 'google_sheet') {
+      const mappings: Array<{ field_label: string; data_source: string; column_name: string; is_repeating: boolean }> = tpl.template_mappings || []
+      let content: string = tpl.template_content || ''
+      for (const m of mappings) {
+        let value = ''
+        if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
+        else if (m.data_source === 'cusdec') {
+          value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
+        } else if (m.data_source === 'cdn') {
+          if (m.is_repeating && cdnRows.length) value = cdnRows.map(r => r[m.column_name] ?? '').join('\n')
+          else value = cdnRows[0] ? (cdnRows[0][m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
+        }
+        const escaped = m.field_label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        content = content.replace(new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, 'g'), String(value))
+      }
+      const ext = tpl.template_format === 'xml' ? 'xml' : 'txt'
+      const fileName = `${document_type}_${new Date().toISOString().slice(0, 10)}.${ext}`
+      return res.json({
+        fileName,
+        base64: Buffer.from(content, 'utf-8').toString('base64'),
+        mimeType: tpl.template_format === 'xml' ? 'application/xml' : 'text/plain',
+        content,
+      })
+    }
+
+    const spreadsheetId = spreadsheetIdFromUrl(tpl.template_url)
+    if (!spreadsheetId) return res.status(400).json({ error: 'Invalid Google Sheets URL in template' })
 
     // Copy the template so the original stays clean
     const drive = getDriveClient()

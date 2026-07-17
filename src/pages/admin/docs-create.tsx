@@ -2129,8 +2129,9 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const [formValues, setFormValues] = useState<Record<string, string[]>>({})
   const [generating, setGenerating] = useState(false)
   const [status, setStatus] = useState('')
-  const [pdf, setPdf] = useState<{ base64: string; fileName: string } | null>(null)
+  const [pdf, setPdf] = useState<{ base64: string; fileName: string; mimeType?: string; content?: string } | null>(null)
   const [sendModalOpen, setSendModalOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -2166,8 +2167,9 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Generate failed')
-      setPdf({ base64: d.base64, fileName: d.fileName })
-      setStatus('✓ PDF ready — download or send below')
+      setPdf({ base64: d.base64, fileName: d.fileName, mimeType: d.mimeType, content: d.content })
+      setCopied(false)
+      setStatus('✓ Ready — download or send below')
     } catch (e: any) { setStatus(`✗ ${e.message}`) }
     finally { setGenerating(false) }
   }
@@ -2175,9 +2177,14 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   function downloadPdf() {
     if (!pdf) return
     const bytes = Uint8Array.from(atob(pdf.base64), c => c.charCodeAt(0))
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+    const url = URL.createObjectURL(new Blob([bytes], { type: pdf.mimeType || 'application/pdf' }))
     const a = document.createElement('a'); a.href = url; a.download = pdf.fileName; a.click()
     URL.revokeObjectURL(url)
+  }
+
+  function copyContent() {
+    if (!pdf?.content) return
+    navigator.clipboard.writeText(pdf.content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
   }
 
   async function onSaveModal(): Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }> {
@@ -2186,7 +2193,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
       const h = await authHeader()
       const dr = await fetch('/api/upload-to-drive', {
         method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64: pdf.base64, fileName: pdf.fileName, mimeType: 'application/pdf', docType: documentType }),
+        body: JSON.stringify({ base64: pdf.base64, fileName: pdf.fileName, mimeType: pdf.mimeType || 'application/pdf', docType: documentType }),
       })
       const dd = await dr.json()
       if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
@@ -2264,6 +2271,19 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 hover:bg-gray-50">
               <Send size={14}/> Send
             </button>
+          </div>
+        )}
+
+        {/* XML/Text templates also get a copy/paste preview, matching CDN Text tab's UX */}
+        {pdf?.content && (
+          <div className="mt-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-medium text-gray-600">Text Output</label>
+              <button onClick={copyContent} className="btn-secondary flex items-center gap-1.5 text-[11px] px-2 py-1">
+                <Copy size={12}/>{copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+            <textarea readOnly value={pdf.content} rows={10} className="w-full font-mono text-xs border border-gray-200 rounded-lg p-3 bg-gray-50"/>
           </div>
         )}
 

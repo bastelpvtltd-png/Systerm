@@ -25,15 +25,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
-      const { document_type, template_url, print_sheet_name, print_range, paper_size, orientation, mappings } = req.body
-      if (!document_type || !template_url) return res.status(400).json({ error: 'document_type and template_url required' })
+      const { document_type, template_url, template_format, template_content, print_sheet_name, print_range, paper_size, orientation, mappings } = req.body
+      const format = template_format || 'google_sheet'
+      if (!document_type) return res.status(400).json({ error: 'document_type required' })
+      if (format === 'google_sheet' && !template_url) return res.status(400).json({ error: 'template_url required for Google Sheet templates' })
+      if (format !== 'google_sheet' && !template_content) return res.status(400).json({ error: 'template_content required for XML/Text templates' })
 
       const { fit_to_page } = req.body
 
       // Upsert template
       const { data: tpl, error: tplErr } = await sb.from('doc_templates')
         .upsert({
-          document_type, template_url,
+          document_type, template_url: template_url || null,
+          template_format: format, template_content: template_content || null,
           print_sheet_name: print_sheet_name || null,
           print_range: print_range || null,
           paper_size: paper_size || 'A4',
