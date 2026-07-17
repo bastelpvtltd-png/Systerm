@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { FileStack, Trash2, FileDown, AlertTriangle, Loader, Plus, X, Save, Upload } from 'lucide-react'
@@ -209,7 +209,7 @@ const CDN_FALLBACK    = ['code','cusdec_number','shipper','consignee','container
 function DocTemplatesContent() {
   const [docType, setDocType]         = useState('boat_note')
   const [templateUrl, setTemplateUrl] = useState('')
-  const [urlInput, setUrlInput]       = useState('')   // raw input before "Done"
+  const [urlInput, setUrlInput]       = useState('')
   const [mappings, setMappings]       = useState<TemplateMapping[]>([emptyRow()])
   const [printSheet, setPrintSheet]   = useState('')
   const [printRange, setPrintRange]   = useState('')
@@ -222,7 +222,8 @@ function DocTemplatesContent() {
   const [columnsBySource, setColumnsBySource] = useState<{ cusdec: string[]; cdn: string[] }>({ cusdec: CUSDEC_FALLBACK, cdn: CDN_FALLBACK })
   const [sheetNames, setSheetNames]   = useState<string[]>([])
   const [sheetsLoading, setSheetsLoading] = useState(false)
-  const [sheetsWarn, setSheetsWarn]   = useState('')  // amber warning when auto-load fails
+  const [sheetsWarn, setSheetsWarn]   = useState('')
+  const lastFetchedUrl = useRef('')  // avoid double-fetch when loadTemplate sets urlInput
 
   // Load cusdec/cdn columns once
   useEffect(() => {
@@ -261,7 +262,7 @@ function DocTemplatesContent() {
 
   async function fetchSheets(url: string) {
     if (!url.includes('spreadsheets')) { setSheetNames([]); return }
-    // Always accept the URL regardless of whether sheet names load
+    lastFetchedUrl.current = url
     setTemplateUrl(url)
     setSheetsWarn('')
     setSheetsLoading(true)
@@ -283,11 +284,18 @@ function DocTemplatesContent() {
     finally { setSheetsLoading(false) }
   }
 
-  function handleDone() {
+  // Auto-fetch sheets when URL is pasted or typed (700ms debounce)
+  useEffect(() => {
     const url = urlInput.trim()
-    if (!url) return
-    fetchSheets(url)
-  }
+    if (!url || !url.includes('spreadsheets')) {
+      if (url && url !== templateUrl) { setTemplateUrl(url); lastFetchedUrl.current = url }
+      if (!url) { setSheetNames([]); setSheetsWarn('') }
+      return
+    }
+    if (url === lastFetchedUrl.current) return
+    const timer = setTimeout(() => fetchSheets(url), 700)
+    return () => clearTimeout(timer)
+  }, [urlInput]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateRow(i: number, patch: Partial<TemplateMapping>) {
     setMappings(prev => prev.map((m, idx) => idx === i ? { ...m, ...patch } : m))
@@ -297,7 +305,7 @@ function DocTemplatesContent() {
     setSaving(true); setError('')
     try {
       const url = templateUrl.trim() || urlInput.trim()
-      if (!url) throw new Error('Google Sheets URL required — paste URL and click Done first')
+      if (!url) throw new Error('Google Sheets URL required — paste the spreadsheet URL above')
       const valid = mappings.filter(m => m.field_label && m.column_name && m.target_cell_or_range)
       for (const m of valid) {
         if (m.is_repeating && !m.target_cell_or_range.includes(':'))
@@ -343,16 +351,13 @@ function DocTemplatesContent() {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Google Sheets URL</label>
-            <div className="flex gap-2">
+            <div className="relative">
               <input value={urlInput} onChange={e => setUrlInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleDone()}
                 placeholder="https://docs.google.com/spreadsheets/d/..."
-                className="input flex-1 text-xs font-mono"/>
-              <button onClick={handleDone} disabled={sheetsLoading}
-                className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-medium text-white flex-shrink-0 disabled:opacity-50"
-                style={{ background: '#1B3A5C' }}>
-                {sheetsLoading ? <Loader size={12} className="animate-spin"/> : null}Done
-              </button>
+                className="input w-full text-xs font-mono pr-8"/>
+              {sheetsLoading && (
+                <Loader size={12} className="animate-spin absolute right-2.5 top-1/2 -translate-y-1/2 text-blue-500 pointer-events-none"/>
+              )}
             </div>
             {sheetNames.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-2">
@@ -366,7 +371,7 @@ function DocTemplatesContent() {
                 <AlertTriangle size={11}/>{sheetsWarn}
               </p>
             )}
-            {templateUrl && (
+            {templateUrl && sheetNames.length === 0 && !sheetsWarn && !sheetsLoading && (
               <p className="text-[11px] text-green-600 mt-1">✓ URL accepted — sheet names can be typed manually below</p>
             )}
           </div>
