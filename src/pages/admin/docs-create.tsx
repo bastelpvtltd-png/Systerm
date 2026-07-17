@@ -1901,6 +1901,7 @@ function PartiesCopyPanel() {
   const [selectedId, setSelectedId] = useState('')
   const [search, setSearch] = useState('')
   const [generating, setGenerating] = useState(false)
+  const [proGenerating, setProGenerating] = useState(false)
   const [status, setStatus] = useState('')
   const [entryMode, setEntryMode] = useState<'cusdec' | 'manual'>('cusdec')
 
@@ -1966,6 +1967,29 @@ function PartiesCopyPanel() {
       setStatus(`✓ ${fileName} downloaded`)
     } catch (e: any) { setStatus(`✗ ${e.message}`) }
     finally { setGenerating(false) }
+  }
+
+  // "Generate Pro" — the real Party's Copy: the original CUSDEC PDF
+  // (cusdec.pdf_url) followed by the filled-in template page(s), merged
+  // into one PDF, CUSDEC pages first.
+  async function generatePro() {
+    if (!selected || !eligible || !tplDocType) return
+    setProGenerating(true); setStatus('')
+    try {
+      const h = await authHeader()
+      const res = await fetch('/api/generate-parties-copy-pro', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ document_type: tplDocType, cusdec_id: selected.id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Generate failed')
+      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      const a = document.createElement('a'); a.href = url; a.download = d.fileName; a.click()
+      URL.revokeObjectURL(url)
+      setStatus(`✓ ${d.fileName} downloaded`)
+    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+    finally { setProGenerating(false) }
   }
 
   return (
@@ -2064,13 +2088,21 @@ function PartiesCopyPanel() {
                   <AlertTriangle size={12}/>No Party's Copy template configured yet — set one up in Templates first.
                 </p>
               )}
-              <button onClick={generate} disabled={!eligible || generating || !tplDocType}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-                style={{ background: '#8b5cf6' }}>
-                {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-                Generate
-              </button>
-              <p className="text-[11px] text-gray-400 mt-2">In-memory only — PDF is downloaded directly, not saved anywhere.</p>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={generate} disabled={!eligible || generating || !tplDocType}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+                  style={{ background: '#8b5cf6' }}>
+                  {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                  Generate
+                </button>
+                <button onClick={generatePro} disabled={!eligible || proGenerating || !tplDocType}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+                  style={{ background: '#1B3A5C' }}>
+                  {proGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                  Generate Pro
+                </button>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-2">In-memory only — PDF is downloaded directly, not saved anywhere. Generate Pro merges the original CUSDEC PDF with the template output (CUSDEC pages first).</p>
             </div>
           </div>
         )}
