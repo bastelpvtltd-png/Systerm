@@ -7,7 +7,7 @@ import {
   Upload, FileText, Package, ScanLine, Ship, Copy, Receipt,
   CheckCircle, Loader, Save, ExternalLink, AlertTriangle, X,
   Trash2, Pencil, FileWarning, Eye, RefreshCw, Plus, Lock, Unlock, Mail,
-  CheckSquare, Square, History, Send, Search,
+  CheckSquare, Square, History, Send, Search, ChevronDown,
 } from 'lucide-react'
 import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
 
@@ -2044,8 +2044,19 @@ function BillsPanel() {
                 onFocus={handleSearchFocus}
                 onBlur={handleSearchBlur}
                 placeholder="Number, reference, exporter…"
-                className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 pl-7 pr-7 focus:outline-none focus:border-blue-400"/>
-              {searching && <Loader size={11} className="animate-spin text-gray-400 absolute right-2 top-1/2 -translate-y-1/2"/>}
+                className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 pl-7 pr-14 focus:outline-none focus:border-blue-400"/>
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                {searching
+                  ? <Loader size={11} className="animate-spin text-gray-400"/>
+                  : <button
+                      onMouseDown={e => { e.preventDefault(); handleSearchFocus() }}
+                      className="text-gray-400 hover:text-blue-500 p-0.5"
+                      tabIndex={-1}
+                      title="Show all">
+                      <ChevronDown size={13}/>
+                    </button>
+                }
+              </div>
             </div>
           </div>
 
