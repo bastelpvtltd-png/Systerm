@@ -10,6 +10,16 @@ import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXm
 // keeps that open-ended rather than a fixed union.
 type DocsCreateTab = 'invoice' | 'packing-list' | 'boat-note' | 'done-boat-note' | 'cusdec-xml' | 'cdn-text' | 'parties-copy' | string
 
+// A document_type slug typed on Templates ("Party's Copy" → "party_s_copy",
+// "Parties Copy" → "parties_copy", etc.) should attach to the existing
+// Party's Copy tab rather than spawn a duplicate custom tab — matched by
+// normalized substring rather than an exact slug since the exact wording
+// typed into "+ Add New Document Type" can vary.
+function isPartiesCopySlug(slug: string): boolean {
+  const norm = slug.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return norm.includes('party') && norm.includes('copy')
+}
+
 interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean; boat_note_url?: string }
 interface CdnRec    { id: string; code?: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; boat_note_passed?: boolean; shipper?: string; consignee?: string }
 
@@ -118,7 +128,7 @@ function BoatNoteContent() {
         const built_in = new Set(['boat_note', 'invoice', 'packing_list'])
         const extras = ((d.templates || []) as any[])
           .map(t => t.document_type as string)
-          .filter(v => v && !built_in.has(v))
+          .filter(v => v && !built_in.has(v) && !isPartiesCopySlug(v))
           .filter((v, i, arr) => arr.indexOf(v) === i)
           .map(v => ({ value: v, label: v.split('_').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') }))
         setCustomDocTypes(extras)
@@ -1893,6 +1903,12 @@ function PartiesCopyPanel() {
   const [generating, setGenerating] = useState(false)
   const [status, setStatus] = useState('')
 
+  // A Google Sheets template saved under a "Party's Copy"-ish document_type
+  // (see isPartiesCopySlug) — when present, offers a second Generate button
+  // that produces the template PDF instead of the built-in jsPDF layout.
+  const [tplDocType, setTplDocType] = useState('')
+  const [tplGenerating, setTplGenerating] = useState(false)
+
   useEffect(() => {
     function load() {
       fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
@@ -1902,6 +1918,40 @@ function PartiesCopyPanel() {
     const t = setInterval(load, 20000)
     return () => clearInterval(t)
   }, [])
+
+  useEffect(() => {
+    async function findTemplate() {
+      try {
+        const h = await authHeader()
+        const res = await fetch('/api/doc-templates', { headers: h })
+        if (!res.ok) return
+        const d = await res.json()
+        const tpl = ((d.templates || []) as any[]).find(t => isPartiesCopySlug(t.document_type))
+        setTplDocType(tpl?.document_type || '')
+      } catch {}
+    }
+    findTemplate()
+  }, [])
+
+  async function generateFromTemplate() {
+    if (!selected || !eligible || !tplDocType) return
+    setTplGenerating(true); setStatus('')
+    try {
+      const h = await authHeader()
+      const res = await fetch('/api/doc-generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ document_type: tplDocType, cusdec_id: selected.id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Generate failed')
+      const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      const a = document.createElement('a'); a.href = url; a.download = d.fileName; a.click()
+      URL.revokeObjectURL(url)
+      setStatus(`✓ ${d.fileName} downloaded`)
+    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+    finally { setTplGenerating(false) }
+  }
 
   const filtered = cusdecs.filter(c =>
     !search || c.number?.toLowerCase().includes(search.toLowerCase()) || c.exporter?.toLowerCase().includes(search.toLowerCase())
@@ -2043,12 +2093,22 @@ function PartiesCopyPanel() {
 
               {status && <p className={`text-xs mb-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
 
-              <button onClick={generate} disabled={!eligible || generating}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-                style={{ background: '#8b5cf6' }}>
-                {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-                Generate P{selected.number}.pdf
-              </button>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={generate} disabled={!eligible || generating}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+                  style={{ background: '#8b5cf6' }}>
+                  {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                  Generate P{selected.number}.pdf
+                </button>
+                {tplDocType && (
+                  <button onClick={generateFromTemplate} disabled={!eligible || tplGenerating}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+                    style={{ background: '#1B3A5C' }}>
+                    {tplGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                    Generate from Template
+                  </button>
+                )}
+              </div>
               <p className="text-[11px] text-gray-400 mt-2">In-memory only — PDF is downloaded directly, not saved anywhere.</p>
             </div>
           </div>
