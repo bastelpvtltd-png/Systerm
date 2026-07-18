@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search, FileCode, ScanText, Copy, Save, Download, AlertTriangle, CheckCircle, Send } from 'lucide-react'
+import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search, FileCode, ScanText, Copy, Save, Download, AlertTriangle, CheckCircle, Send, Trash2 } from 'lucide-react'
 import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
 import SheetPickerModal from '@/components/admin/SheetPickerModal'
+import EmailPdfModal from '@/components/admin/EmailPdfModal'
 import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
 import { ALWAYS_TAB_TYPES, DEDICATED_TAB_TYPES } from '@/lib/docTypes'
 
@@ -2251,6 +2252,8 @@ function GenerationHistoryPanel({ documentType, refreshKey }: { documentType: st
   const [loading, setLoading] = useState(true)
   const [copyingId, setCopyingId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [mailItem, setMailItem] = useState<HistoryDoc | null>(null)
   const hasLoadedOnce = useRef(false)
 
   useEffect(() => {
@@ -2273,6 +2276,24 @@ function GenerationHistoryPanel({ documentType, refreshKey }: { documentType: st
   }, [documentType, refreshKey])
 
   const isTextFile = (fileName: string) => /\.(txt|xml)$/i.test(fileName)
+
+  async function deleteItem(item: HistoryDoc) {
+    if (!window.confirm(`Delete "${item.file_name}"? This removes it from Drive and unlinks it from the database — it can't be undone.`)) return
+    setDeletingId(item.id)
+    try {
+      const h = await authHeader()
+      const res = await fetch('/api/delete-generation', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ document_id: item.id }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Delete failed')
+      setItems(prev => prev.filter(i => i.id !== item.id))
+    } catch (e: any) {
+      window.alert(e.message)
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   async function copyItem(item: HistoryDoc) {
     setCopyingId(item.id)
@@ -2297,16 +2318,27 @@ function GenerationHistoryPanel({ documentType, refreshKey }: { documentType: st
               <p className="text-gray-400">{new Date(item.created_at).toLocaleString('en-GB')}</p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-              <a href={item.drive_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Open</a>
+              <a href={item.drive_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline" title="View">View</a>
+              <a href={item.drive_url} download={item.file_name} className="text-blue-600 hover:underline" title="Download"><Download size={13}/></a>
+              <button onClick={() => setMailItem(item)} className="text-blue-600 hover:underline" title="Mail"><Mail size={13}/></button>
               {isTextFile(item.file_name) && (
                 <button onClick={() => copyItem(item)} disabled={copyingId === item.id} className="text-blue-600 hover:underline disabled:opacity-50">
                   {copyingId === item.id ? '…' : copiedId === item.id ? 'Copied!' : 'Copy'}
                 </button>
               )}
+              <button onClick={() => deleteItem(item)} disabled={deletingId === item.id} className="text-gray-300 hover:text-red-500 disabled:opacity-50" title="Delete">
+                {deletingId === item.id ? <Loader size={13} className="animate-spin"/> : <Trash2 size={13}/>}
+              </button>
             </div>
           </div>
         ))}
       </div>
+      {mailItem && (
+        <EmailPdfModal
+          attachments={[{ filename: mailItem.file_name, url: mailItem.drive_url }]}
+          onClose={() => setMailItem(null)}
+        />
+      )}
     </div>
   )
 }

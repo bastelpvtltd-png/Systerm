@@ -3,7 +3,7 @@ import { useRouter } from 'next/router'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { yearOf } from '@/lib/flexibleDate'
-import SendModal from '@/components/admin/SendModal'
+import EmailPdfModal from '@/components/admin/EmailPdfModal'
 import {
   Zap, Barcode as BarcodeIcon, Truck, RefreshCw,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Plus, Trash2,
@@ -428,12 +428,14 @@ function AutoCreatePanel({ panel, apiPath, title, docLabel }: { panel: 'boat_not
 }
 
 // ── Merge PDF ─────────────────────────────────────────────────────────────
-// General-purpose merge: any mix of already-saved Drive links and freshly
-// uploaded local files, under a name of your choosing, then download or
-// mail — independent of any CUSDEC/automation record.
-interface MergeSource { id: string; kind: 'drive' | 'upload'; driveUrl: string; file: File | null; fileName: string }
-function newSource(): MergeSource { return { id: Math.random().toString(36).slice(2), kind: 'drive', driveUrl: '', file: null, fileName: '' } }
-
+// Pick one or more CUSDECs (Add button) — every Drive-hosted PDF already
+// saved under each one (its own CUSDEC PDF, Boat Note, Party's Copy, its
+// CDNs' PDFs, and those CDNs' Barcode PDFs — see /api/cusdec-documents.ts)
+// shows up to tick individually, plus a separate section for uploading any
+// number of local files that aren't in the system at all. Merge is always
+// temporary: Download works straight off the in-memory result, and Mail
+// uploads to Drive only long enough to attach it, deleting that file the
+// moment the mail modal closes.
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -442,35 +444,54 @@ function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file)
   })
 }
+interface CusdecDoc { key: string; label: string; url: string }
+interface CusdecDocGroup { cusdecId: string; number: string; exporter: string; documents: CusdecDoc[] }
 
 function MergePdfPanel() {
-  const [sources, setSources] = useState<MergeSource[]>([newSource(), newSource()])
+  const [cusdecs, setCusdecs] = useState<{ id: string; number: string; exporter: string }[]>([])
+  const [search, setSearch] = useState('')
+  const [selectedCusdecIds, setSelectedCusdecIds] = useState<string[]>([])
+  const [groups, setGroups] = useState<CusdecDocGroup[]>([])
+  const [loadingDocs, setLoadingDocs] = useState(false)
+  const [checkedDocs, setCheckedDocs] = useState<Set<string>>(new Set())
+  const [uploadFiles, setUploadFiles] = useState<File[]>([])
   const [outputName, setOutputName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [merged, setMerged] = useState<{ base64: string; fileName: string } | null>(null)
-  const [sendOpen, setSendOpen] = useState(false)
+  const [mailOpen, setMailOpen] = useState(false)
+  const [mailUploading, setMailUploading] = useState(false)
+  const [tempDriveUrl, setTempDriveUrl] = useState('')
 
-  function updateSource(id: string, patch: Partial<MergeSource>) {
-    setSources(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s))
-  }
-  function removeSource(id: string) {
-    setSources(prev => prev.filter(s => s.id !== id))
+  useEffect(() => {
+    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!selectedCusdecIds.length) { setGroups([]); return }
+    setLoadingDocs(true)
+    authHeader().then(h => fetch(`/api/cusdec-documents?cusdec_ids=${selectedCusdecIds.join(',')}`, { headers: h }))
+      .then(r => r.json()).then(d => setGroups(d.groups || [])).catch(() => {}).finally(() => setLoadingDocs(false))
+  }, [selectedCusdecIds])
+
+  const filteredCusdecs = cusdecs.filter(c =>
+    !selectedCusdecIds.includes(c.id) && search.trim() &&
+    (c.number?.toLowerCase().includes(search.toLowerCase()) || c.exporter?.toLowerCase().includes(search.toLowerCase()))
+  ).slice(0, 8)
+
+  function addCusdec(id: string) { setSelectedCusdecIds(prev => prev.includes(id) ? prev : [...prev, id]); setSearch('') }
+  function removeCusdec(id: string) { setSelectedCusdecIds(prev => prev.filter(x => x !== id)) }
+  function toggleDoc(key: string) {
+    setCheckedDocs(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
   }
 
   async function merge() {
     setBusy(true); setError(''); setMerged(null)
     try {
-      const payload = await Promise.all(sources.map(async s => {
-        if (s.kind === 'drive') {
-          if (!s.driveUrl.trim()) return null
-          return { driveUrl: s.driveUrl.trim() }
-        }
-        if (!s.file) return null
-        return { base64: await fileToBase64(s.file), fileName: s.file.name }
-      }))
-      const valid = payload.filter(Boolean)
-      if (valid.length < 2) throw new Error('Add at least 2 PDFs to merge')
+      const driveSources = groups.flatMap(g => g.documents).filter(d => checkedDocs.has(d.key)).map(d => ({ driveUrl: d.url }))
+      const uploadSources = await Promise.all(uploadFiles.map(async f => ({ base64: await fileToBase64(f), fileName: f.name })))
+      const valid = [...driveSources, ...uploadSources]
+      if (valid.length < 2) throw new Error('Tick or upload at least 2 PDFs to merge')
       const name = outputName.trim() || `Merged_${new Date().toISOString().slice(0, 10)}`
       const res = await fetch('/api/merge-pdfs', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
@@ -494,8 +515,9 @@ function MergePdfPanel() {
     URL.revokeObjectURL(url)
   }
 
-  async function onSaveMergedModal(): Promise<{ ok: boolean; results?: { fileName: string; driveLink: string; docType?: string }[]; error?: string }> {
-    if (!merged) return { ok: false, error: 'Nothing merged yet' }
+  async function openMail() {
+    if (!merged) return
+    setMailUploading(true); setError('')
     try {
       const h = await authHeader()
       const dr = await fetch('/api/upload-to-drive', {
@@ -504,41 +526,93 @@ function MergePdfPanel() {
       })
       const dd = await dr.json()
       if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
-      return { ok: true, results: [{ fileName: merged.fileName, driveLink: dd.driveLink, docType: 'merged_pdf' }] }
-    } catch (e: any) { return { ok: false, error: e.message } }
+      setTempDriveUrl(dd.driveLink)
+      setMailOpen(true)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setMailUploading(false)
+    }
+  }
+
+  async function onMailClosed() {
+    setMailOpen(false)
+    if (tempDriveUrl) {
+      const url = tempDriveUrl
+      setTempDriveUrl('')
+      fetch('/api/delete-temp-merge-file', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ drive_url: url }),
+      }).catch(() => {})
+    }
   }
 
   return (
     <div className="card max-w-2xl">
       <h2 className="font-semibold text-gray-900 text-sm mb-2">Merge PDF</h2>
-      <p className="text-xs text-gray-500 mb-4">Combine any PDFs — a Drive link, or a file uploaded from this computer — into one, under a name you choose.</p>
+      <p className="text-xs text-gray-500 mb-4">Pick CUSDECs to pull their already-saved documents from, and/or upload local PDFs, then merge under a name you choose.</p>
 
-      <div className="space-y-2 mb-3">
-        {sources.map((s, idx) => (
-          <div key={s.id} className="flex items-center gap-2 border border-gray-100 rounded-lg p-2">
-            <span className="text-[11px] text-gray-400 w-4">{idx + 1}</span>
-            <div className="flex gap-1 bg-gray-100 rounded-md p-0.5">
-              <button onClick={() => updateSource(s.id, { kind: 'drive' })}
-                className={`px-2 py-1 rounded text-[11px] font-medium ${s.kind === 'drive' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>Drive Link</button>
-              <button onClick={() => updateSource(s.id, { kind: 'upload' })}
-                className={`px-2 py-1 rounded text-[11px] font-medium ${s.kind === 'upload' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>Upload</button>
-            </div>
-            {s.kind === 'drive' ? (
-              <input value={s.driveUrl} onChange={e => updateSource(s.id, { driveUrl: e.target.value })}
-                placeholder="Paste a Drive PDF link..." className="input text-xs flex-1"/>
-            ) : (
-              <input type="file" accept="application/pdf" onChange={e => updateSource(s.id, { file: e.target.files?.[0] || null })}
-                className="text-xs flex-1"/>
-            )}
-            {sources.length > 2 && (
-              <button onClick={() => removeSource(s.id)} className="text-gray-300 hover:text-red-500"><X size={14}/></button>
-            )}
+      <div className="mb-4">
+        <label className="block text-xs font-medium text-gray-600 mb-1">Add a CUSDEC</label>
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search number or exporter..."
+            className="w-full pl-7 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+        </div>
+        {filteredCusdecs.length > 0 && (
+          <div className="mt-1 border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-40 overflow-y-auto">
+            {filteredCusdecs.map(c => (
+              <button key={c.id} onClick={() => addCusdec(c.id)} className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs hover:bg-gray-50 text-left">
+                <span><span className="font-medium">E {c.number}</span> — <span className="text-gray-500">{c.exporter?.slice(0, 30)}</span></span>
+                <Plus size={13} className="text-blue-600 flex-shrink-0"/>
+              </button>
+            ))}
           </div>
-        ))}
+        )}
       </div>
-      <button onClick={() => setSources(prev => [...prev, newSource()])} className="flex items-center gap-1 text-xs text-blue-600 hover:underline mb-4">
-        <Plus size={13}/>Add another PDF
-      </button>
+
+      {selectedCusdecIds.length > 0 && (
+        <div className="space-y-2 mb-4">
+          {loadingDocs && <p className="text-xs text-gray-400">Loading documents…</p>}
+          {groups.map(g => (
+            <div key={g.cusdecId} className="border border-gray-100 rounded-lg p-2.5">
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-xs font-semibold text-gray-800">E {g.number} — {g.exporter?.slice(0, 30)}</p>
+                <button onClick={() => removeCusdec(g.cusdecId)} className="text-gray-300 hover:text-red-500"><X size={14}/></button>
+              </div>
+              {g.documents.length === 0 ? (
+                <p className="text-[11px] text-gray-400">No saved documents found for this CUSDEC yet</p>
+              ) : (
+                <div className="space-y-1">
+                  {g.documents.map(doc => (
+                    <label key={doc.key} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5">
+                      <input type="checkbox" checked={checkedDocs.has(doc.key)} onChange={() => toggleDoc(doc.key)} className="w-3.5 h-3.5"/>
+                      {doc.label}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mb-4 pt-3 border-t border-gray-100">
+        <label className="block text-xs font-medium text-gray-600 mb-1">Upload local PDFs</label>
+        <input type="file" accept="application/pdf" multiple
+          onChange={e => setUploadFiles(prev => [...prev, ...Array.from(e.target.files || [])])}
+          className="text-xs"/>
+        {uploadFiles.length > 0 && (
+          <div className="mt-1.5 space-y-1">
+            {uploadFiles.map((f, i) => (
+              <div key={i} className="flex items-center justify-between text-xs border border-gray-100 rounded px-2 py-1">
+                <span className="truncate">{f.name}</span>
+                <button onClick={() => setUploadFiles(prev => prev.filter((_, ii) => ii !== i))} className="text-gray-300 hover:text-red-500 flex-shrink-0"><X size={13}/></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <Field label="Output file name">
         <input value={outputName} onChange={e => setOutputName(e.target.value)} placeholder="e.g. Merged Documents" className="input text-sm"/>
@@ -554,19 +628,15 @@ function MergePdfPanel() {
           <button onClick={downloadMerged} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium" style={{ background: '#1B3A5C' }}>
             <Download size={14}/> Download
           </button>
-          <button onClick={() => setSendOpen(true)} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 hover:bg-gray-50">
-            <Mail size={14}/> Mail
+          <button onClick={openMail} disabled={mailUploading} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            {mailUploading ? <Loader size={14} className="animate-spin"/> : <Mail size={14}/>} Mail
           </button>
         </div>
       )}
-      {sendOpen && merged && (
-        <SendModal
-          label={merged.fileName}
-          docType="merged_pdf"
-          onSave={onSaveMergedModal}
-          onGetDriveLinks={async () => (await onSaveMergedModal()).results || []}
-          onClose={() => setSendOpen(false)}
-          onDone={() => setSendOpen(false)}
+      {mailOpen && merged && tempDriveUrl && (
+        <EmailPdfModal
+          attachments={[{ filename: merged.fileName, url: tempDriveUrl }]}
+          onClose={onMailClosed}
         />
       )}
     </div>
