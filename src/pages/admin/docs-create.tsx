@@ -1007,6 +1007,11 @@ function BoatNoteContent() {
                 Temporary (no save, cleared on refresh)
               </button>
             </div>
+
+            <div className="border-t border-gray-100 pt-6">
+              <h2 className="font-semibold text-gray-900 text-sm mb-3">Generate from Template</h2>
+              <CustomDocPanel documentType={subTab === 'invoice' ? 'invoice' : 'packing_list'} label={subTab === 'invoice' ? 'Invoice' : 'Packing List'}/>
+            </div>
           </div>
         ) : null}
 
@@ -1627,6 +1632,7 @@ function CusdecXmlPanel() {
   ]
 
   return (
+    <div className="space-y-6">
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
       <div className="card xl:col-span-1">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CUSDEC</h2>
@@ -1673,6 +1679,12 @@ function CusdecXmlPanel() {
           </>
         )}
       </div>
+    </div>
+
+    <div className="border-t border-gray-100 pt-6">
+      <h2 className="font-semibold text-gray-900 text-sm mb-3">Generate from XML Template</h2>
+      <CustomDocPanel documentType="cusdec_xml" label="Cusdec XML"/>
+    </div>
     </div>
   )
 }
@@ -1750,6 +1762,7 @@ function CdnTextPanel() {
   ]
 
   return (
+    <div className="space-y-6">
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
       <div className="card xl:col-span-1">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CDN</h2>
@@ -1796,6 +1809,12 @@ function CdnTextPanel() {
           </>
         )}
       </div>
+    </div>
+
+    <div className="border-t border-gray-100 pt-6">
+      <h2 className="font-semibold text-gray-900 text-sm mb-3">Generate from Text Template</h2>
+      <CustomDocPanel documentType="cdn_text" label="CDN Text"/>
+    </div>
     </div>
   )
 }
@@ -2072,6 +2091,8 @@ function PartiesCopyPanel() {
 // only (no CUSDEC link), generates the Google Sheets template PDF, and
 // only offers Download/Send — there's no CUSDEC record to save a Drive
 // link against, same reasoning as the Boat Note tab's Manual Entry mode.
+interface TemplateDocCusdec { id: string; number: string; exporter: string; code?: string }
+
 function CustomDocPanel({ documentType, label }: { documentType: string; label: string }) {
   const [tplFields, setTplFields] = useState<{ field_label: string; is_repeating: boolean }[]>([])
   const [tplLoadError, setTplLoadError] = useState('')
@@ -2081,6 +2102,15 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const [pdf, setPdf] = useState<{ base64: string; fileName: string; mimeType?: string; content?: string } | null>(null)
   const [sendModalOpen, setSendModalOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+
+  // "Database" (from a selected CUSDEC) vs. "Manual Entry" (typed by hand) —
+  // same toggle Boat Note/Party's Copy already have. Database mode still
+  // needs tplFields loaded (for is_repeating hints etc.) but drives values
+  // from the picked CUSDEC via cusdec_id instead of manual_values.
+  const [entryMode, setEntryMode] = useState<'cusdec' | 'manual'>('manual')
+  const [cusdecs, setCusdecs] = useState<TemplateDocCusdec[]>([])
+  const [cusdecSearch, setCusdecSearch] = useState('')
+  const [selectedCusdecId, setSelectedCusdecId] = useState('')
 
   useEffect(() => {
     async function load() {
@@ -2104,15 +2134,31 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
     load()
   }, [documentType])
 
+  useEffect(() => {
+    if (entryMode !== 'cusdec' || cusdecs.length) return
+    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+  }, [entryMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filteredCusdecs = cusdecs.filter(c =>
+    !cusdecSearch || c.number?.toLowerCase().includes(cusdecSearch.toLowerCase()) || c.exporter?.toLowerCase().includes(cusdecSearch.toLowerCase())
+  )
+
   async function generate() {
+    if (entryMode === 'cusdec' && !selectedCusdecId) return
     setGenerating(true); setStatus(''); setPdf(null)
     try {
-      const manual: Record<string, string> = {}
-      Object.entries(formValues).forEach(([lbl, rows]) => { manual[lbl] = rows.join('\n') })
       const h = await authHeader()
+      const body: Record<string, unknown> = { document_type: documentType }
+      if (entryMode === 'cusdec') {
+        body.cusdec_id = selectedCusdecId
+      } else {
+        const manual: Record<string, string> = {}
+        Object.entries(formValues).forEach(([lbl, rows]) => { manual[lbl] = rows.join('\n') })
+        body.manual_values = manual
+      }
       const res = await fetch('/api/doc-generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify({ document_type: documentType, manual_values: manual }),
+        body: JSON.stringify(body),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Generate failed')
@@ -2156,7 +2202,47 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
 
   return (
     <div className="space-y-4">
-      <p className="text-gray-500 text-sm -mt-2">{label} — fill in the template fields, generate, then download or send. Not saved to the system.</p>
+      <p className="text-gray-500 text-sm -mt-2">{label} — generate from a CUSDEC's data or fill the template fields by hand, then download or send. Not saved to the system.</p>
+
+      <div className="flex gap-1.5 bg-gray-100 rounded-lg p-1 w-fit">
+        <button onClick={() => { setEntryMode('cusdec'); setPdf(null); setStatus('') }}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${entryMode === 'cusdec' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+          Database
+        </button>
+        <button onClick={() => { setEntryMode('manual'); setPdf(null); setStatus('') }}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${entryMode === 'manual' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+          Manual Entry
+        </button>
+      </div>
+
+      {entryMode === 'cusdec' && (
+        <div className="card max-w-xl">
+          <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CUSDEC</h2>
+          <div className="relative mb-3">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+            <input value={cusdecSearch} onChange={e => setCusdecSearch(e.target.value)} placeholder="Search number or exporter..."
+              className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+          </div>
+          <div className="space-y-1 max-h-64 overflow-y-auto mb-3">
+            {filteredCusdecs.map(c => (
+              <button key={c.id} onClick={() => setSelectedCusdecId(c.id)}
+                className={`w-full text-left p-2.5 rounded-lg border text-xs ${selectedCusdecId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
+                <p className="font-bold text-gray-800">E {c.number}</p>
+                <p className="text-gray-600 truncate">{c.exporter}</p>
+              </button>
+            ))}
+            {filteredCusdecs.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDECs found</p>}
+          </div>
+          <button onClick={generate} disabled={generating || !selectedCusdecId}
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
+            style={{ background: '#3b82f6' }}>
+            {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+            Generate {label}
+          </button>
+        </div>
+      )}
+
+      {entryMode === 'manual' && (
       <div className="card max-w-xl">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Template Fields</h2>
         {tplLoadError ? (
@@ -2207,11 +2293,14 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
             </button>
           </div>
         )}
+      </div>
+      )}
 
-        {status && <p className={`text-xs mt-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
+      {status && <p className={`text-xs font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
 
-        {pdf && (
-          <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+      {pdf && (
+        <div className="card max-w-xl space-y-3">
+          <div className="flex gap-2">
             <button onClick={downloadPdf}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium" style={{ background: '#1B3A5C' }}>
               <FileDown size={14}/> Download
@@ -2221,32 +2310,32 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
               <Send size={14}/> Send
             </button>
           </div>
-        )}
 
-        {/* XML/Text templates also get a copy/paste preview, matching CDN Text tab's UX */}
-        {pdf?.content && (
-          <div className="mt-3">
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-medium text-gray-600">Text Output</label>
-              <button onClick={copyContent} className="btn-secondary flex items-center gap-1.5 text-[11px] px-2 py-1">
-                <Copy size={12}/>{copied ? 'Copied!' : 'Copy'}
-              </button>
+          {/* XML/Text templates also get a copy/paste preview, matching CDN Text tab's UX */}
+          {pdf.content && (
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-medium text-gray-600">Text Output</label>
+                <button onClick={copyContent} className="btn-secondary flex items-center gap-1.5 text-[11px] px-2 py-1">
+                  <Copy size={12}/>{copied ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              <textarea readOnly value={pdf.content} rows={10} className="w-full font-mono text-xs border border-gray-200 rounded-lg p-3 bg-gray-50"/>
             </div>
-            <textarea readOnly value={pdf.content} rows={10} className="w-full font-mono text-xs border border-gray-200 rounded-lg p-3 bg-gray-50"/>
-          </div>
-        )}
+          )}
+        </div>
+      )}
 
-        {sendModalOpen && pdf && (
-          <SendModal
-            label={pdf.fileName}
-            docType={documentType}
-            onSave={onSaveModal}
-            onGetDriveLinks={onGetDriveLinksModal}
-            onClose={() => setSendModalOpen(false)}
-            onDone={() => setSendModalOpen(false)}
-          />
-        )}
-      </div>
+      {sendModalOpen && pdf && (
+        <SendModal
+          label={pdf.fileName}
+          docType={documentType}
+          onSave={onSaveModal}
+          onGetDriveLinks={onGetDriveLinksModal}
+          onClose={() => setSendModalOpen(false)}
+          onDone={() => setSendModalOpen(false)}
+        />
+      )}
     </div>
   )
 }
