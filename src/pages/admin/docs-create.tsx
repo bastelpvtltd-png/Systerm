@@ -4,6 +4,7 @@ import { authHeader } from '@/lib/supabase'
 import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search, FileCode, ScanText, Copy, Save, Download, AlertTriangle, CheckCircle, Send } from 'lucide-react'
 import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
 import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
+import { ALWAYS_TAB_TYPES, DEDICATED_TAB_TYPES } from '@/lib/docTypes'
 
 // Custom document types (from Templates → "+ Add New Document Type") get a
 // dynamically-added tab id of the form `custom:${document_type}` — string
@@ -115,7 +116,7 @@ function BoatNoteContent() {
   // Type" (anything not one of the built-in tabs below) get their own
   // dynamically-added tab, gated on the same permission as the rest of
   // this page since there's no dedicated permission key for them yet.
-  const [customDocTypes, setCustomDocTypes] = useState<{ value: string; label: string }[]>([])
+  const [customDocTypes, setCustomDocTypes] = useState<{ value: string; label: string }[]>(ALWAYS_TAB_TYPES)
   useEffect(() => {
     async function loadCustomTypes() {
       try {
@@ -123,17 +124,16 @@ function BoatNoteContent() {
         const res = await fetch('/api/doc-templates', { headers: h })
         if (!res.ok) return
         const d = await res.json()
-        // cusdec_xml/cdn_text are offered as Document Type options on the
-        // Templates page so their format (XML/Text) auto-selects, but they
-        // map conceptually to the existing hardcoded Cusdec XML/CDN Text
-        // tabs below — excluded here so they don't spawn a duplicate tab.
-        const built_in = new Set(['boat_note', 'invoice', 'packing_list', 'cusdec_xml', 'cdn_text'])
         const extras = ((d.templates || []) as any[])
           .map(t => t.document_type as string)
-          .filter(v => v && !built_in.has(v) && !isPartiesCopySlug(v))
+          .filter(v => v && !DEDICATED_TAB_TYPES.has(v) && !isPartiesCopySlug(v))
           .filter((v, i, arr) => arr.indexOf(v) === i)
+          .filter(v => !ALWAYS_TAB_TYPES.some(t => t.value === v))
           .map(v => ({ value: v, label: v.split('_').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') }))
-        setCustomDocTypes(extras)
+        // ALWAYS_TAB_TYPES (CO, Phyto) show up as tabs even before a
+        // template's been saved for them — merge the dynamically-discovered
+        // extras in alongside, not replacing them.
+        setCustomDocTypes([...ALWAYS_TAB_TYPES, ...extras])
       } catch {}
     }
     loadCustomTypes()

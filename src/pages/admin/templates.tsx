@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { FileStack, AlertTriangle, Loader, Plus, X, Save } from 'lucide-react'
+import { BUILTIN_DOC_TYPES } from '@/lib/docTypes'
 
 // ── Google Sheets Templates — fixed doc types, relational mappings ─────────
 interface TemplateMapping {
@@ -25,15 +26,7 @@ const TEMPLATE_FORMATS = [
 ] as const
 type TemplateFormat = typeof TEMPLATE_FORMATS[number]['value']
 
-const DOC_TYPES = [
-  { value: 'boat_note',    label: 'Boat Note' },
-  { value: 'invoice',      label: 'Invoice' },
-  { value: 'packing_list', label: 'Packing List' },
-  { value: 'co',           label: 'CO (Certificate of Origin)' },
-  { value: 'pytho',        label: 'Phyto (Phytosanitary)' },
-  { value: 'cusdec_xml',   label: 'Cusdec XML' },
-  { value: 'cdn_text',     label: 'CDN Text' },
-]
+const DOC_TYPES = BUILTIN_DOC_TYPES
 
 // Picking these two document types only makes sense with one template
 // format each — auto-select it so the mapping UI below (Sheet columns vs.
