@@ -169,6 +169,7 @@ function BoatNoteContent() {
   const [bnReason, setBnReason] = useState('')
   const [savedBnUrl, setSavedBnUrl] = useState('')
   const [sendModalBnOpen, setSendModalBnOpen] = useState(false)
+  const [bnHistoryRefreshKey, setBnHistoryRefreshKey] = useState(0)
 
   // ── Boat Note: Manual Entry sub-tab (no CUSDEC — type the template
   // fields by hand, generate the same Google Sheets template PDF, then
@@ -1287,11 +1288,11 @@ function BoatNoteContent() {
                     onSave={onSaveBnModal}
                     onGetDriveLinks={onGetDriveLinksBnModal}
                     onClose={() => setSendModalBnOpen(false)}
-                    onDone={() => { setSendModalBnOpen(false); loadCusdecs(true) }}
+                    onDone={() => { setSendModalBnOpen(false); loadCusdecs(true); setBnHistoryRefreshKey(k => k + 1) }}
                   />
                 )}
 
-                <GenerationHistoryPanel documentType="boat_note"/>
+                <GenerationHistoryPanel documentType="boat_note" refreshKey={bnHistoryRefreshKey}/>
               </>
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -1835,6 +1836,7 @@ function PartiesCopyPanel() {
   const [proPdf, setProPdf] = useState<{ base64: string; fileName: string } | null>(null)
   const [sendModalOpen, setSendModalOpen] = useState(false)
   const [savedPartyUrl, setSavedPartyUrl] = useState('')
+  const [partyHistoryRefreshKey, setPartyHistoryRefreshKey] = useState(0)
 
   // A Google Sheets template saved under a "Party's Copy"-ish document_type
   // (see isPartiesCopySlug) — Generate always produces this template's PDF;
@@ -2070,7 +2072,7 @@ function PartiesCopyPanel() {
                   onSave={onSaveProModal}
                   onGetDriveLinks={onGetDriveLinksProModal}
                   onClose={() => setSendModalOpen(false)}
-                  onDone={() => setSendModalOpen(false)}
+                  onDone={() => { setSendModalOpen(false); setPartyHistoryRefreshKey(k => k + 1) }}
                   notifyDisabled={curIsGreen || curIsBlue || curHasPartyUrl}
                   notifyDisabledReason={
                     curHasPartyUrl ? "Already saved — Notify isn't available for a replace." :
@@ -2079,7 +2081,7 @@ function PartiesCopyPanel() {
                 />
               )}
 
-              <GenerationHistoryPanel documentType="party_copy"/>
+              <GenerationHistoryPanel documentType="party_copy" refreshKey={partyHistoryRefreshKey}/>
             </div>
           </div>
         )}
@@ -2106,6 +2108,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const [pdf, setPdf] = useState<{ base64: string; fileName: string; mimeType?: string; content?: string } | null>(null)
   const [sendModalOpen, setSendModalOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0)
 
   // "Database" (from a selected CUSDEC) vs. "Manual Entry" (typed by hand) —
   // same toggle Boat Note/Party's Copy already have. Database mode still
@@ -2379,11 +2382,11 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
           onSave={onSaveModal}
           onGetDriveLinks={onGetDriveLinksModal}
           onClose={() => setSendModalOpen(false)}
-          onDone={() => setSendModalOpen(false)}
+          onDone={() => { setSendModalOpen(false); setHistoryRefreshKey(k => k + 1) }}
         />
       )}
 
-      <GenerationHistoryPanel documentType={documentType}/>
+      <GenerationHistoryPanel documentType={documentType} refreshKey={historyRefreshKey}/>
     </div>
   )
 }
@@ -2397,25 +2400,31 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
 // Send, not on every raw/test Generate click.
 interface HistoryDoc { id: string; doc_type: string; file_name: string; drive_url: string; created_at: string }
 
-function GenerationHistoryPanel({ documentType }: { documentType: string }) {
+function GenerationHistoryPanel({ documentType, refreshKey }: { documentType: string; refreshKey?: number }) {
   const [items, setItems] = useState<HistoryDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [copyingId, setCopyingId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const hasLoadedOnce = useRef(false)
 
   useEffect(() => {
     if (!documentType) return
     async function load() {
-      setLoading(true)
+      if (!hasLoadedOnce.current) setLoading(true)
       try {
         const h = await authHeader()
         const res = await fetch(`/api/list-documents?doc_type=${encodeURIComponent(documentType)}&limit=20`, { headers: h })
         const d = await res.json()
         setItems(d.records || [])
-      } catch {} finally { setLoading(false) }
+      } catch {} finally { setLoading(false); hasLoadedOnce.current = true }
     }
     load()
-  }, [documentType])
+    // Also poll — covers a Save that happened elsewhere (another tab/user)
+    // without needing a manual refresh, on top of the immediate refreshKey
+    // bump right after this tab's own Send finishes.
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
+  }, [documentType, refreshKey])
 
   const isTextFile = (fileName: string) => /\.(txt|xml)$/i.test(fileName)
 
