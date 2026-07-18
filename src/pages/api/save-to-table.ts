@@ -37,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // generate this CUSDEC its own reference if nothing matched.
     let shipmentMatch: { matched: boolean; shipmentId?: string } | undefined
     if (doc_type === 'cusdec' && result.row) {
-      shipmentMatch = await matchAndMergeShipment(result.row)
+      shipmentMatch = await matchAndMergeShipment(result.row, authed.userId)
     }
 
     res.json({ ok: true, shipmentMatch, cusdecId: doc_type === 'cusdec' ? result.row?.id : undefined })

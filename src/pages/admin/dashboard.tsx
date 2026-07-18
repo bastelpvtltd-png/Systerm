@@ -14,7 +14,7 @@ interface PendingGroup<T> { count: number; items: T[] }
 interface VesselContainer { containerNo: string; vessel: string; voyage: string; trigger: { openingTime: string; closingTime: string; etb: string } | null }
 interface Summary {
   pendingCusdecPassed: PendingGroup<{ id: string; file_name: string; reason: string; reason_note: string | null; created_at: string }>
-  shipmentsPending: PendingGroup<{ id: string; reference: string | null; shipper: string; invoice_number: string; packing_number: string | null; new_invoice: string | null; new_packing: string | null; cap: string | null; invoice_drive_url: string | null; packing_drive_url: string | null; license_drive_url: string | null; created_at: string }>
+  shipmentsPending: PendingGroup<{ id: string; reference: string | null; shipper: string; invoice_number: string; packing_number: string | null; new_invoice: string | null; new_packing: string | null; cap: string | null; invoice_drive_url: string | null; packing_drive_url: string | null; license_drive_url: string | null; created_at: string; locked_by?: string | null; locked_by_name?: string | null }>
   cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number; containers: VesselContainer[] }>
   boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number; containers: VesselContainer[] }>
   releasePending: PendingGroup<{ cusdecId: string; number: string; exporter: string }>
@@ -70,28 +70,66 @@ function DashboardContent() {
   // Bumped whenever Incoming's Pick succeeds, so My Picked Tasks re-fetches
   // immediately instead of needing a page refresh to show the new task.
   const [pickRefreshKey, setPickRefreshKey] = useState(0)
+  const [currentUserId, setCurrentUserId] = useState('')
+  const [pickingShipmentId, setPickingShipmentId] = useState<string | null>(null)
+  const [shipmentPickError, setShipmentPickError] = useState('')
+
+  async function load(silent = false) {
+    const res = await fetch('/api/dashboard-summary', { headers: await authHeader() })
+    const d = await res.json()
+    if (res.ok) {
+      setSummary({
+        pendingCusdecPassed: d.pendingCusdecPassed || emptyGroup,
+        shipmentsPending: d.shipmentsPending || emptyGroup,
+        cdnPending: d.cdnPending || emptyGroup,
+        boatNotePending: d.boatNotePending || emptyGroup,
+        releasePending: d.releasePending || emptyGroup,
+        closingPassed: d.closingPassed || emptyGroup,
+      })
+    }
+  }
 
   useEffect(() => {
-    async function load() {
-      const res = await fetch('/api/dashboard-summary', { headers: await authHeader() })
-      const d = await res.json()
-      if (res.ok) {
-        setSummary({
-          pendingCusdecPassed: d.pendingCusdecPassed || emptyGroup,
-          shipmentsPending: d.shipmentsPending || emptyGroup,
-          cdnPending: d.cdnPending || emptyGroup,
-          boatNotePending: d.boatNotePending || emptyGroup,
-          releasePending: d.releasePending || emptyGroup,
-          closingPassed: d.closingPassed || emptyGroup,
-        })
-      }
-    }
     load()
     // Live — the stat cards and their expanded lists stay current without a
     // page refresh, same polling convention as Incoming/My Picked Tasks below.
-    const t = setInterval(load, 15000)
+    const t = setInterval(() => load(true), 15000)
     return () => clearInterval(t)
   }, [])
+
+  useEffect(() => {
+    import('@/lib/supabase').then(({ supabase }) =>
+      supabase.auth.getUser().then(({ data }) => setCurrentUserId(data.user?.id || ''))
+    )
+  }, [])
+
+  async function pickShipment(id: string) {
+    setPickingShipmentId(id); setShipmentPickError('')
+    try {
+      const res = await fetch('/api/pick-shipment', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ shipment_id: id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      await load(true)
+    } catch (e: any) { setShipmentPickError(e.message) }
+    finally { setPickingShipmentId(null) }
+  }
+
+  async function resolveShipment(id: string) {
+    setPickingShipmentId(id); setShipmentPickError('')
+    try {
+      const res = await fetch('/api/release-shipment', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ shipment_id: id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      await load(true)
+    } catch (e: any) { setShipmentPickError(e.message) }
+    finally { setPickingShipmentId(null) }
+  }
 
   const { has } = usePermission()
 
@@ -153,6 +191,8 @@ function DashboardContent() {
         {expanded === 'shipments' && (
           <div className="card mb-4">
             <h2 className="font-semibold text-gray-900 mb-3 text-sm">Shipments opened with no CUSDEC uploaded/matched yet</h2>
+            <p className="text-xs text-gray-400 mb-3">Pick a shipment to work on it exclusively — it disappears from everyone else's list until you Resolve it or its CUSDEC is saved (which clears it automatically).</p>
+            {shipmentPickError && <p className="text-xs text-red-600 mb-3 flex items-center gap-1"><AlertCircle size={12}/>{shipmentPickError}</p>}
             {summary.shipmentsPending.items.length === 0 ? (
               <p className="text-xs text-gray-400 py-4 text-center">None — every open Shipment has a matching CUSDEC</p>
             ) : (
@@ -163,8 +203,10 @@ function DashboardContent() {
                     { label: 'Packing', url: s.packing_drive_url },
                     { label: 'License', url: s.license_drive_url },
                   ].filter(d => d.url)
+                  const pickedByMe = !!s.locked_by && s.locked_by === currentUserId
+                  const busy = pickingShipmentId === s.id
                   return (
-                    <div key={s.id} className="text-xs border border-gray-100 rounded-lg p-2.5">
+                    <div key={s.id} className={`text-xs border rounded-lg p-2.5 ${pickedByMe ? 'border-green-200 bg-green-50' : 'border-gray-100'}`}>
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="font-medium text-gray-800">{s.shipper} · Inv: {s.invoice_number}</p>
@@ -176,8 +218,22 @@ function DashboardContent() {
                               {s.cap && `CAP: ${s.cap}`}
                             </p>
                           )}
+                          {pickedByMe && <p className="text-[11px] text-green-600 mt-0.5 flex items-center gap-1"><UserCheck size={11}/>Picked by you — upload the CUSDEC to complete it</p>}
                         </div>
-                        <a href={`/admin/shipment-overview?invoiceNumber=${encodeURIComponent(s.invoice_number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {pickedByMe ? (
+                            <button onClick={() => resolveShipment(s.id)} disabled={busy}
+                              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                              {busy ? <Loader size={11} className="animate-spin"/> : <Undo2 size={11}/>} Resolve
+                            </button>
+                          ) : (
+                            <button onClick={() => pickShipment(s.id)} disabled={busy}
+                              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                              {busy ? <Loader size={11} className="animate-spin"/> : <UserCheck size={11}/>} Pick
+                            </button>
+                          )}
+                          <a href={`/admin/shipment-overview?invoiceNumber=${encodeURIComponent(s.invoice_number)}`} className="text-blue-600 hover:underline">View →</a>
+                        </div>
                       </div>
                       {docs.length > 0 && (
                         <div className="flex items-center gap-3 mt-1.5 flex-wrap">

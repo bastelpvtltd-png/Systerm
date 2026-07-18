@@ -192,7 +192,7 @@ function generateReference(exporter?: string): string {
   return `${code}-${y}-${rand}`
 }
 
-export async function matchAndMergeShipment(cusdecRow: any): Promise<{ matched: boolean; shipmentId?: string }> {
+export async function matchAndMergeShipment(cusdecRow: any, actingUserId?: string): Promise<{ matched: boolean; shipmentId?: string }> {
   if (!cusdecRow?.id) return { matched: false }
 
   if (cusdecRow.invoice_number) {
@@ -203,7 +203,11 @@ export async function matchAndMergeShipment(cusdecRow: any): Promise<{ matched: 
       .limit(1)
       .maybeSingle()
 
-    if (shipment) {
+    // A shipment picked by someone else is off-limits to auto-merge — it'd
+    // otherwise delete the row (and the pick with it) out from under the
+    // person who's mid-workflow on it. Only the picker's own CUSDEC save
+    // (or an unpicked shipment) can complete the merge.
+    if (shipment && (!shipment.locked_by || shipment.locked_by === actingUserId)) {
       await mergeShipmentIntoCusdec(cusdecRow, shipment)
       return { matched: true, shipmentId: shipment.id }
     }
@@ -222,7 +226,7 @@ export async function matchAndMergeShipment(cusdecRow: any): Promise<{ matched: 
       .limit(1)
       .maybeSingle()
 
-    if (shipment) {
+    if (shipment && (!shipment.locked_by || shipment.locked_by === actingUserId)) {
       await mergeShipmentIntoCusdec(cusdecRow, shipment)
       return { matched: true, shipmentId: shipment.id }
     }

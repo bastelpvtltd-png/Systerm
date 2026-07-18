@@ -40,6 +40,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let query = supabaseAdmin.from('temporary_shipments').select('*').order('created_at', { ascending: false })
       const reference = String(req.query.reference || '').trim()
       if (reference) query = query.eq('reference', reference)
+
+      // A picked row is invisible to everyone except the picker (and admins,
+      // who can always see the full pool) — same "locked out" idea as the
+      // document pick system, applied directly here since this row isn't a
+      // document_uploads row.
+      const { data: prof } = await supabaseAdmin.from('profiles').select('is_admin').eq('id', authed.userId).maybeSingle()
+      if (!prof?.is_admin) query = query.or(`locked_by.is.null,locked_by.eq.${authed.userId}`)
+
       const { data, error } = await query
       if (error) return res.status(400).json({ error: error.message })
       return res.json({ shipments: data || [] })
@@ -144,10 +152,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const id = String(req.body.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })
 
-      const { data: row } = await supabaseAdmin.from('temporary_shipments').select('created_by, invoice_number').eq('id', id).single()
+      const { data: row } = await supabaseAdmin.from('temporary_shipments').select('created_by, invoice_number, locked_by').eq('id', id).single()
       const { data: prof } = await supabaseAdmin.from('profiles').select('is_admin').eq('id', authed.userId).single()
-      if (!prof?.is_admin && row?.created_by !== authed.userId) {
-        return res.status(403).json({ error: 'You can only edit your own entries' })
+      if (!prof?.is_admin) {
+        // Picked rows are locked to the picker only — overrides the normal
+        // "owner can edit their own entry" rule while a pick is active.
+        if (row?.locked_by) {
+          if (row.locked_by !== authed.userId) return res.status(403).json({ error: 'This shipment is picked by someone else' })
+        } else if (row?.created_by !== authed.userId) {
+          return res.status(403).json({ error: 'You can only edit your own entries' })
+        }
       }
 
       const { id: _id, created_at: _ca, created_by: _cb, reference: _ref, ...updates } = req.body

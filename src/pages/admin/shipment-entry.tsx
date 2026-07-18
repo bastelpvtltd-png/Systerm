@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { supabase, authHeader } from '@/lib/supabase'
-import { Plus, Trash2, Ship, AlertTriangle, Copy, FileText, X, Edit2, Save, Link } from 'lucide-react'
+import { Plus, Trash2, Ship, AlertTriangle, Copy, FileText, X, Edit2, Save, Link, UserCheck, Undo2, Loader } from 'lucide-react'
 
 interface TempShipment {
   id: string
@@ -21,6 +21,8 @@ interface TempShipment {
   new_packing: string | null
   created_by: string | null
   created_at: string
+  locked_by: string | null
+  locked_by_name: string | null
 }
 
 const emptyForm = {
@@ -90,6 +92,8 @@ function ShipmentEntryContent() {
   const [divInvoiceFile, setDivInvoiceFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
   const [divPackingFile, setDivPackingFile] = useState<{ url: string | null; uploading: boolean }>({ url: null, uploading: false })
 
+  const [pickingId, setPickingId] = useState<string | null>(null)
+
   async function loadRows() {
     try {
       const res = await fetch('/api/temp-shipments', { headers: await authHeader() })
@@ -99,6 +103,34 @@ function ShipmentEntryContent() {
     } catch (e: any) {
       setError(e.message)
     }
+  }
+
+  async function pickRow(id: string) {
+    setPickingId(id); setError('')
+    try {
+      const res = await fetch('/api/pick-shipment', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ shipment_id: id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      await loadRows()
+    } catch (e: any) { setError(e.message) }
+    finally { setPickingId(null) }
+  }
+
+  async function resolveRow(id: string) {
+    setPickingId(id); setError('')
+    try {
+      const res = await fetch('/api/release-shipment', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ shipment_id: id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      await loadRows()
+    } catch (e: any) { setError(e.message) }
+    finally { setPickingId(null) }
   }
 
   useEffect(() => {
@@ -402,7 +434,7 @@ function ShipmentEntryContent() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                {['Shipper', 'Invoice', 'Packing', 'New Inv', 'New Pkg', 'Real CAP', 'Div CAP', 'Docs', 'Created By', 'Date', 'Actions'].map(h => (
+                {['Shipper', 'Invoice', 'Packing', 'New Inv', 'New Pkg', 'Real CAP', 'Div CAP', 'Docs', 'Created By', 'Picked', 'Date', 'Actions'].map(h => (
                   <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -440,18 +472,39 @@ function ShipmentEntryContent() {
                       </div>
                     </td>
                     <td className="px-3 py-3 text-xs text-gray-600">{r.created_by ? (profileMap[r.created_by] || '—') : '—'}</td>
+                    <td className="px-3 py-3 text-xs">
+                      {r.locked_by ? (
+                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${r.locked_by === currentUserId ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {r.locked_by === currentUserId ? 'You' : (r.locked_by_name || 'Picked')}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-3 text-gray-400 text-xs whitespace-nowrap">{new Date(r.created_at).toLocaleDateString()}</td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-1">
+                        {!r.locked_by && (
+                          <button onClick={() => pickRow(r.id)} disabled={pickingId === r.id} title="Pick (work on this exclusively)"
+                            className="p-1.5 rounded hover:bg-green-50 text-green-600 disabled:opacity-50">
+                            {pickingId === r.id ? <Loader size={13} className="animate-spin"/> : <UserCheck size={13}/>}
+                          </button>
+                        )}
+                        {r.locked_by === currentUserId && (
+                          <button onClick={() => resolveRow(r.id)} disabled={pickingId === r.id} title="Resolve (release pick)"
+                            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-50">
+                            {pickingId === r.id ? <Loader size={13} className="animate-spin"/> : <Undo2 size={13}/>}
+                          </button>
+                        )}
                         {canUse && (
                           <button onClick={() => handleAddSame(r)} title="Add Same (split this invoice)"
                             className="p-1.5 rounded hover:bg-blue-50 text-blue-500"><Copy size={13}/></button>
                         )}
-                        {(isAdmin || r.created_by === currentUserId) && (
+                        {(isAdmin || (r.locked_by ? r.locked_by === currentUserId : r.created_by === currentUserId)) && (
                           <button onClick={() => openEdit(r)} title="Edit"
                             className="p-1.5 rounded hover:bg-green-50 text-green-600"><Edit2 size={13}/></button>
                         )}
-                        {(isAdmin || r.created_by === currentUserId) && (
+                        {(isAdmin || (r.locked_by ? r.locked_by === currentUserId : r.created_by === currentUserId)) && (
                           <button onClick={() => handleDelete(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-500"><Trash2 size={13}/></button>
                         )}
                       </div>

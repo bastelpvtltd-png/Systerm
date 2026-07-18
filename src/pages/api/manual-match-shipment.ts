@@ -26,6 +26,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { data: shipment, error: sErr } = await supabaseAdmin.from('temporary_shipments').select('*').eq('id', shipment_id).single()
     if (sErr || !shipment) return res.status(404).json({ error: 'Shipment entry not found' })
 
+    if (shipment.locked_by && shipment.locked_by !== authed.userId) {
+      const { data: prof } = await supabaseAdmin.from('profiles').select('is_admin').eq('id', authed.userId).maybeSingle()
+      if (!prof?.is_admin) return res.status(403).json({ error: 'This shipment is picked by someone else' })
+    }
+
     await mergeShipmentIntoCusdec(cusdecRow, shipment)
     res.json({ ok: true })
   } catch (err: any) {
