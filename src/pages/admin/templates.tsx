@@ -482,7 +482,6 @@ function DocTemplatesContent() {
                 <th className="pb-2 font-medium pr-2 w-20">Source</th>
                 <th className="pb-2 font-medium pr-2 w-36">Column</th>
                 <th className="pb-2 font-medium pr-2 w-16 text-center">Repeat</th>
-                {templateFormat === 'google_sheet' && <th className="pb-2 font-medium pr-2 w-28">Sheet</th>}
                 {templateFormat === 'google_sheet' && <th className="pb-2 font-medium pr-2 w-24">Cell / Range</th>}
                 <th className="pb-2 w-6"></th>
               </tr>
@@ -518,19 +517,6 @@ function DocTemplatesContent() {
                   </td>
                   {templateFormat === 'google_sheet' && (
                     <td className="py-1.5 pr-2">
-                      {sheetNames.length > 0 ? (
-                        <select value={m.sheet_name} onChange={e => updateRow(i, { sheet_name: e.target.value })} className="input text-xs">
-                          <option value="">— first sheet —</option>
-                          {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      ) : (
-                        <input value={m.sheet_name} onChange={e => updateRow(i, { sheet_name: e.target.value })}
-                          placeholder="Sheet name" className="input text-xs w-full"/>
-                      )}
-                    </td>
-                  )}
-                  {templateFormat === 'google_sheet' && (
-                    <td className="py-1.5 pr-2">
                       <input value={m.target_cell_or_range}
                         onChange={e => updateRow(i, { target_cell_or_range: e.target.value.toUpperCase() })}
                         placeholder={m.is_repeating ? 'A10:A25' : 'B5'}
@@ -557,7 +543,7 @@ function DocTemplatesContent() {
       {templateFormat === 'google_sheet' && sheetsWithGid.length > 0 && (
         <div className="card">
           <h2 className="font-semibold text-gray-900 text-sm mb-1">Sheet Routing <span className="text-gray-400 font-normal">(optional)</span></h2>
-          <p className="text-xs text-gray-400 mb-3">Route different shippers' CUSDECs to different sheet tabs — pick a sheet, then tick which shippers (by TIN VAT) use it. Leave empty to always use the Field Mapping / Print Tab defaults.</p>
+          <p className="text-xs text-gray-400 mb-3">Route different shippers' CUSDECs to different sheet tabs — pick a sheet, then tick which shippers (by TIN VAT) use it. A CUSDEC with no matching route falls back to the spreadsheet's first sheet.</p>
           {routesStatus && <p className={`text-xs mb-3 font-medium ${routesStatus.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{routesStatus}</p>}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <SheetRouteEditor
@@ -583,18 +569,6 @@ function DocTemplatesContent() {
               Print Settings
             </h2>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Print Tab (sheet)</label>
-                {sheetNames.length > 0 ? (
-                  <select value={printSheet} onChange={e => setPrintSheet(e.target.value)} className="input text-xs">
-                    <option value="">— first sheet —</option>
-                    {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                ) : (
-                  <input value={printSheet} onChange={e => setPrintSheet(e.target.value)}
-                    placeholder="e.g. Print" className="input text-xs font-mono"/>
-                )}
-              </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Print Range</label>
                 <input value={printRange} onChange={e => setPrintRange(e.target.value)}
