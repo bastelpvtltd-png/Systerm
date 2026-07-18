@@ -92,10 +92,15 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
       <div className="space-y-2 mb-3">
         {routes.map((r, idx) => {
           const takenElsewhere = assignedElsewhere(idx)
+          // Always show the sheet's CURRENT title (looked up live by gid,
+          // the same stable-ID resolution generation itself uses) — not the
+          // name cached in the DB from whenever this route was first saved,
+          // which goes stale the moment the tab is renamed in Google Sheets.
+          const liveName = sheets.find(s => String(s.sheetId) === r.sheet_gid)?.title || r.sheet_name
           return (
             <div key={r.sheet_gid} className="border border-gray-100 rounded-lg p-2">
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-xs font-medium text-gray-800">{r.sheet_name}</span>
+                <span className="text-xs font-medium text-gray-800">{liveName}</span>
                 <button onClick={() => removeRoute(idx)} className="text-gray-300 hover:text-red-500"><X size={13}/></button>
               </div>
               <button onClick={() => setPickerOpenIdx(pickerOpenIdx === idx ? null : idx)} className="text-[11px] text-blue-600 hover:underline mb-1.5">
