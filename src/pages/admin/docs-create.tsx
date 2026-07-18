@@ -93,7 +93,7 @@ function BoatNoteContent() {
   // Type" (anything not one of the built-in tabs below) get their own
   // dynamically-added tab, gated on the same permission as the rest of
   // this page since there's no dedicated permission key for them yet.
-  const [customDocTypes, setCustomDocTypes] = useState<{ value: string; label: string }[]>(ALWAYS_TAB_TYPES)
+  const [customDocTypes, setCustomDocTypes] = useState<{ value: string; label: string; format?: string }[]>(ALWAYS_TAB_TYPES)
   useEffect(() => {
     async function loadCustomTypes() {
       try {
@@ -102,11 +102,10 @@ function BoatNoteContent() {
         if (!res.ok) return
         const d = await res.json()
         const extras = ((d.templates || []) as any[])
-          .map(t => t.document_type as string)
-          .filter(v => v && !DEDICATED_TAB_TYPES.has(v) && !isPartiesCopySlug(v))
-          .filter((v, i, arr) => arr.indexOf(v) === i)
-          .filter(v => !ALWAYS_TAB_TYPES.some(t => t.value === v))
-          .map(v => ({ value: v, label: v.split('_').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') }))
+          .filter(t => t.document_type && !DEDICATED_TAB_TYPES.has(t.document_type) && !isPartiesCopySlug(t.document_type))
+          .filter((t, i, arr) => arr.findIndex(x => x.document_type === t.document_type) === i)
+          .filter(t => !ALWAYS_TAB_TYPES.some(x => x.value === t.document_type))
+          .map(t => ({ value: t.document_type as string, label: (t.document_type as string).split('_').filter(Boolean).map((w: string) => w[0].toUpperCase() + w.slice(1)).join(' '), format: t.template_format }))
         // ALWAYS_TAB_TYPES (CO, Phyto) show up as tabs even before a
         // template's been saved for them — merge the dynamically-discovered
         // extras in alongside, not replacing them.
@@ -1047,7 +1046,10 @@ function BoatNoteContent() {
         {subTab.startsWith('custom:') && canBoatNote && (() => {
           const value = subTab.slice('custom:'.length)
           const d = customDocTypes.find(c => c.value === value)
-          return d ? <CustomDocPanel documentType={d.value} label={d.label}/> : null
+          if (!d) return null
+          return d.format === 'trico_gate_pass'
+            ? <TricoGatePassPanel documentType={d.value} label={d.label}/>
+            : <CustomDocPanel documentType={d.value} label={d.label}/>
         })()}
       </div>
   )
@@ -1864,6 +1866,151 @@ function PartiesCopyPanel() {
 // only offers Download/Send — there's no CUSDEC record to save a Drive
 // link against, same reasoning as the Boat Note tab's Manual Entry mode.
 interface TemplateDocCusdec { id: string; number: string; exporter: string; code?: string; export_release_passed?: boolean; cap?: string }
+
+// ── Trico Gate Pass ───────────────────────────────────────────────────────
+// Phase 1 (per explicit scope): the Template (After-Login URL + field
+// mappings, see templates.tsx's 'trico_gate_pass' format) and this queue/
+// preview UI. Picks CDNs in order, one at a time, resolves this document
+// type's field mappings against each CDN's (and its parent CUSDEC's) real
+// data, and previews exactly what would be typed into each Trico form
+// field. The actual login + autofill (a real headless-browser step) and
+// the final Submit action are a separate, later phase — deliberately not
+// built here, so nothing on this tab can accidentally submit a real gate
+// pass to Trico.
+interface TricoCdnRec { id: string; code: string; cusdec_number: string; container_no: string; [k: string]: any }
+interface TricoMapping { field_label: string; data_source: 'cusdec' | 'cdn' | 'manual'; column_name: string; target_cell_or_range: string }
+interface TricoCredential { id: string; identity_name: string; username: string | null }
+
+function TricoGatePassPanel({ documentType, label }: { documentType: string; label: string }) {
+  const [afterLoginUrl, setAfterLoginUrl] = useState('')
+  const [mappings, setMappings] = useState<TricoMapping[]>([])
+  const [tplLoadError, setTplLoadError] = useState('')
+  const [credentials, setCredentials] = useState<TricoCredential[]>([])
+  const [credentialId, setCredentialId] = useState('')
+  const [cdns, setCdns] = useState<TricoCdnRec[]>([])
+  const [cusdecs, setCusdecs] = useState<any[]>([])
+  const [search, setSearch] = useState('')
+  const [queue, setQueue] = useState<string[]>([])
+  const [currentIndex, setCurrentIndex] = useState(0)
+
+  useEffect(() => {
+    async function load() {
+      setTplLoadError('')
+      try {
+        const h = await authHeader()
+        const res = await fetch('/api/doc-templates', { headers: h })
+        const d = await res.json()
+        const tpl = (d.templates || []).find((t: any) => t.document_type === documentType)
+        if (!tpl) { setTplLoadError('No template configured for this document type yet'); return }
+        setAfterLoginUrl(tpl.template_url || '')
+        setMappings((tpl.template_mappings || []).filter((m: any) => m.target_cell_or_range))
+      } catch (e: any) {
+        setTplLoadError(e.message || 'Failed to load template')
+      }
+    }
+    load()
+    fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/automation-credentials', { headers: h })).then(r => r.json())
+      .then(d => setCredentials((d.credentials || []).filter((c: TricoCredential) => c.identity_name === 'Trico'))).catch(() => {})
+  }, [documentType])
+
+  const filteredCdns = cdns.filter(c =>
+    !queue.includes(c.id) && search.trim() &&
+    (c.container_no?.toLowerCase().includes(search.toLowerCase()) || c.cusdec_number?.toLowerCase().includes(search.toLowerCase()))
+  ).slice(0, 8)
+
+  function addToQueue(id: string) { setQueue(prev => prev.includes(id) ? prev : [...prev, id]); setSearch('') }
+  function removeFromQueue(id: string) {
+    setQueue(prev => prev.filter(x => x !== id))
+    setCurrentIndex(i => Math.min(i, Math.max(0, queue.length - 2)))
+  }
+
+  const currentCdn = queue.length ? cdns.find(c => c.id === queue[currentIndex]) : null
+  const currentCusdec = currentCdn ? cusdecs.find(c => c.code === currentCdn.code && c.number === currentCdn.cusdec_number) : null
+
+  const preview = currentCdn ? mappings.map(m => {
+    let value = ''
+    if (m.data_source === 'cdn') value = currentCdn[m.column_name] ?? ''
+    else if (m.data_source === 'cusdec') value = currentCusdec ? (currentCusdec[m.column_name] ?? '') : ''
+    return { field_label: m.field_label, form_field: m.target_cell_or_range, value: m.data_source === 'manual' ? '(typed at run time)' : String(value) }
+  }) : []
+
+  return (
+    <div className="space-y-4">
+      <p className="text-gray-500 text-sm -mt-2">{label} — picks CDNs one at a time and previews the values that would be typed into each Trico form field. Login + auto-fill isn't wired up yet; this only shows what will be sent once it is.</p>
+
+      {tplLoadError && <p className="text-xs text-amber-600 flex items-center gap-1"><AlertTriangle size={12}/>{tplLoadError}</p>}
+      {afterLoginUrl && <p className="text-[11px] text-gray-400">After-login URL: <span className="font-mono">{afterLoginUrl}</span></p>}
+
+      <div className="card max-w-xl">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Trico Login</h2>
+        <select value={credentialId} onChange={e => setCredentialId(e.target.value)} className="input text-sm w-full">
+          <option value="">— select credential —</option>
+          {credentials.map(c => <option key={c.id} value={c.id}>{c.username || c.identity_name}</option>)}
+        </select>
+        {credentials.length === 0 && <p className="text-[11px] text-amber-600 mt-1.5">No Trico credentials saved — add one under Settings &gt; Credentials first.</p>}
+      </div>
+
+      <div className="card max-w-xl">
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">Containers (in order)</h2>
+        <div className="relative mb-3">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container or CUSDEC no..."
+            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+        </div>
+        {filteredCdns.length > 0 && (
+          <div className="border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-40 overflow-y-auto mb-3">
+            {filteredCdns.map(c => (
+              <button key={c.id} onClick={() => addToQueue(c.id)} className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs hover:bg-gray-50 text-left">
+                <span>{c.container_no} — CUSDEC {c.cusdec_number}</span>
+                <Plus size={13} className="text-blue-600 flex-shrink-0"/>
+              </button>
+            ))}
+          </div>
+        )}
+        {queue.length > 0 && (
+          <div className="space-y-1">
+            {queue.map((id, idx) => {
+              const c = cdns.find(x => x.id === id)
+              return (
+                <div key={id} className={`flex items-center justify-between text-xs border rounded-lg p-2 ${idx === currentIndex ? 'border-blue-300 bg-blue-50' : 'border-gray-100'}`}>
+                  <span>{idx + 1}. {c?.container_no || id}</span>
+                  <button onClick={() => removeFromQueue(id)} className="text-gray-300 hover:text-red-500"><X size={13}/></button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {currentCdn && (
+        <div className="card max-w-xl">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-gray-900 text-sm">Field Preview — {currentCdn.container_no} ({currentIndex + 1}/{queue.length})</h2>
+            <button onClick={() => setCurrentIndex(i => Math.min(i + 1, queue.length - 1))} disabled={currentIndex >= queue.length - 1}
+              className="text-xs text-blue-600 hover:underline disabled:opacity-40 disabled:no-underline">Next Container →</button>
+          </div>
+          {preview.length === 0 ? (
+            <p className="text-xs text-gray-400">No field mappings configured yet — set them up in Templates.</p>
+          ) : (
+            <div className="space-y-1">
+              {preview.map((p, i) => (
+                <div key={i} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2">
+                  <span className="text-gray-500">{p.field_label} <span className="text-gray-300">({p.form_field})</span></span>
+                  <span className="font-medium text-gray-800 truncate max-w-[200px]">{p.value || '—'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <button disabled className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium opacity-40 cursor-not-allowed" style={{ background: '#3b82f6' }}>
+            Submit to Trico — not connected yet
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function CustomDocPanel({ documentType, label }: { documentType: string; label: string }) {
   const [tplFields, setTplFields] = useState<{ field_label: string; is_repeating: boolean }[]>([])

@@ -28,8 +28,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { document_type, template_url, template_format, template_content, print_sheet_name, print_range, paper_size, orientation, mappings } = req.body
       const format = template_format || 'google_sheet'
       if (!document_type) return res.status(400).json({ error: 'document_type required' })
-      if (format === 'google_sheet' && !template_url) return res.status(400).json({ error: 'template_url required for Google Sheet templates' })
-      if (format !== 'google_sheet' && !template_content) return res.status(400).json({ error: 'template_content required for XML/Text templates' })
+      if ((format === 'google_sheet' || format === 'trico_gate_pass') && !template_url) {
+        return res.status(400).json({ error: format === 'google_sheet' ? 'template_url required for Google Sheet templates' : 'The after-login URL is required' })
+      }
+      if (format !== 'google_sheet' && format !== 'trico_gate_pass' && !template_content) return res.status(400).json({ error: 'template_content required for XML/Text templates' })
 
       const { fit_to_page } = req.body
 

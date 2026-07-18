@@ -16,14 +16,15 @@ interface GSheet {
   print_sheet_name: string | null; print_range: string | null
   paper_size: string; orientation: string; fit_to_page: boolean
   template_mappings: TemplateMapping[]
-  template_format?: 'google_sheet' | 'xml' | 'text'
+  template_format?: 'google_sheet' | 'xml' | 'text' | 'trico_gate_pass'
   template_content?: string | null
 }
 
 const TEMPLATE_FORMATS = [
-  { value: 'google_sheet', label: 'Google Sheet' },
-  { value: 'xml',          label: 'XML' },
-  { value: 'text',         label: 'Text Template' },
+  { value: 'google_sheet',    label: 'Google Sheet' },
+  { value: 'xml',             label: 'XML' },
+  { value: 'text',            label: 'Text Template' },
+  { value: 'trico_gate_pass', label: 'Trico Gate Pass (web form)' },
 ] as const
 type TemplateFormat = typeof TEMPLATE_FORMATS[number]['value']
 
@@ -352,6 +353,15 @@ function DocTemplatesContent() {
           paper_size: paperSize, orientation, fit_to_page: fitToPage,
           mappings: valid,
         }
+      } else if (templateFormat === 'trico_gate_pass') {
+        const url = templateUrl.trim() || urlInput.trim()
+        if (!url) throw new Error('After-login URL required')
+        const valid = mappings.filter(m => m.field_label && (m.data_source === 'manual' || m.column_name) && m.target_cell_or_range)
+        body = {
+          document_type: docType, template_format: templateFormat, template_url: url, template_content: null,
+          print_sheet_name: null, print_range: null, paper_size: 'A4', orientation: 'Portrait', fit_to_page: true,
+          mappings: valid.map(m => ({ ...m, sheet_name: '' })),
+        }
       } else {
         // XML / Text — no spreadsheet, no cell/range: the raw {{field_label}}
         // template body is typed directly here and stored as-is.
@@ -453,6 +463,17 @@ function DocTemplatesContent() {
               <p className="text-[11px] text-green-600 mt-1">✓ URL accepted — sheet names can be typed manually below</p>
             )}
           </div>
+        ) : templateFormat === 'trico_gate_pass' ? (
+          <div className="mt-3">
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              After-Login URL
+              <span className="text-gray-400 font-normal"> — the gate pass form's URL on Trico, reached after signing in with the credential picked at generation time</span>
+            </label>
+            <input value={urlInput} onChange={e => setUrlInput(e.target.value)}
+              placeholder="https://s2.tricologi.net/webuser/?option=gatepass&action=gatepass_exp"
+              className="input w-full text-xs font-mono"/>
+            <p className="text-[11px] text-gray-400 mt-1.5">No Fill/Print sheet here — map each field below to the exact form field name on that page (Column = "Form Field Name").</p>
+          </div>
         ) : (
           <div className="mt-3">
             <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -488,6 +509,7 @@ function DocTemplatesContent() {
                 <th className="pb-2 font-medium pr-2 w-36">Column</th>
                 <th className="pb-2 font-medium pr-2 w-16 text-center">Repeat</th>
                 {templateFormat === 'google_sheet' && <th className="pb-2 font-medium pr-2 w-24">Cell / Range</th>}
+                {templateFormat === 'trico_gate_pass' && <th className="pb-2 font-medium pr-2 w-32">Form Field Name</th>}
                 <th className="pb-2 w-6"></th>
               </tr>
             </thead>
@@ -529,6 +551,14 @@ function DocTemplatesContent() {
                       {m.is_repeating && m.target_cell_or_range && !m.target_cell_or_range.includes(':') && (
                         <p className="text-[10px] text-red-500 mt-0.5">Range needed</p>
                       )}
+                    </td>
+                  )}
+                  {templateFormat === 'trico_gate_pass' && (
+                    <td className="py-1.5 pr-2">
+                      <input value={m.target_cell_or_range}
+                        onChange={e => updateRow(i, { target_cell_or_range: e.target.value })}
+                        placeholder="e.g. container_no"
+                        className="input text-xs font-mono w-full"/>
                     </td>
                   )}
                   <td className="py-1.5">
