@@ -3,8 +3,103 @@ import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import {
   Database, RefreshCw, Trash2, Save, Loader, AlertTriangle,
-  ArrowUp, ArrowDown, ArrowUpDown,
+  ArrowUp, ArrowDown, ArrowUpDown, HardDrive, ChevronDown, ChevronUp,
 } from 'lucide-react'
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+interface StorageStats {
+  drive: { totalUsedBytes: number; totalLimitBytes: number | null; folders: { docType: string; folderName: string; bytes: number; fileCount: number }[] } | { error: string }
+  supabase: { tables: { key: string; label: string; rowCount: number | null }[] } | { error: string }
+}
+
+// Two clearly separate sections (Drive storage vs. Supabase data) rather
+// than one merged number — they measure different things (file bytes vs.
+// row counts) and mixing them into a single total would be meaningless.
+function StorageStatsPanel() {
+  const [stats, setStats] = useState<StorageStats | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    authHeader().then(h => fetch('/api/storage-stats', { headers: h }))
+      .then(r => r.json()).then(setStats).catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) {
+    return <div className="card mb-4 flex items-center justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
+  }
+  if (!stats) return null
+
+  const drive = 'error' in stats.drive ? null : stats.drive
+  const driveError = 'error' in stats.drive ? stats.drive.error : null
+  const supabase = 'error' in stats.supabase ? null : stats.supabase
+  const supabaseError = 'error' in stats.supabase ? stats.supabase.error : null
+  const usedPct = drive && drive.totalLimitBytes ? Math.min(100, (drive.totalUsedBytes / drive.totalLimitBytes) * 100) : null
+
+  return (
+    <div className="card mb-4">
+      <button onClick={() => setExpanded(x => !x)} className="w-full flex items-center justify-between">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><HardDrive size={16}/>Storage</h2>
+        {expanded ? <ChevronUp size={16} className="text-gray-400"/> : <ChevronDown size={16} className="text-gray-400"/>}
+      </button>
+
+      {expanded && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-4">
+          {/* Google Drive */}
+          <div>
+            <h3 className="text-xs font-semibold text-gray-700 mb-2">Google Drive</h3>
+            {driveError ? (
+              <p className="text-xs text-red-500 flex items-center gap-1"><AlertTriangle size={12}/>{driveError}</p>
+            ) : drive ? (
+              <>
+                <p className="text-xs text-gray-600 mb-1.5">
+                  {formatBytes(drive.totalUsedBytes)}{drive.totalLimitBytes ? ` / ${formatBytes(drive.totalLimitBytes)}` : ' used (unlimited plan)'}
+                </p>
+                {usedPct !== null && (
+                  <div className="w-full h-1.5 bg-gray-100 rounded-full mb-3 overflow-hidden">
+                    <div className="h-full bg-blue-500 rounded-full" style={{ width: `${usedPct}%` }}/>
+                  </div>
+                )}
+                <div className="space-y-1">
+                  {drive.folders.map(f => (
+                    <div key={f.docType} className="flex items-center justify-between text-xs">
+                      <span className="text-gray-500">{f.folderName}</span>
+                      <span className="text-gray-700 font-medium">{formatBytes(f.bytes)} <span className="text-gray-400 font-normal">({f.fileCount})</span></span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
+
+          {/* Supabase */}
+          <div>
+            <h3 className="text-xs font-semibold text-gray-700 mb-2">Supabase Database</h3>
+            {supabaseError ? (
+              <p className="text-xs text-red-500 flex items-center gap-1"><AlertTriangle size={12}/>{supabaseError}</p>
+            ) : supabase ? (
+              <div className="space-y-1">
+                {supabase.tables.map(t => (
+                  <div key={t.key} className="flex items-center justify-between text-xs">
+                    <span className="text-gray-500">{t.label}</span>
+                    <span className="text-gray-700 font-medium">{t.rowCount === null ? '—' : `${t.rowCount} row${t.rowCount === 1 ? '' : 's'}`}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 const TABLES = [
   { key: 'cusdec', label: 'CUSDEC' },
@@ -174,6 +269,8 @@ function DatabaseContent() {
             )}
           </div>
         </div>
+
+        <StorageStatsPanel/>
 
         {/* Table tabs */}
         <div className="flex gap-1.5 mb-4 flex-wrap">
