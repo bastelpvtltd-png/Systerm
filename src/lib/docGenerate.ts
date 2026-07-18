@@ -15,6 +15,11 @@ export interface GenerateDocumentInput {
   cusdec_id?: string
   manual_values?: Record<string, string>
   cdn_ids?: string[]
+  // Manual Entry mode has no CUSDEC to route by TIN VAT — the caller picks
+  // the sheet explicitly instead. Ignored (routing/mapping defaults win)
+  // when omitted.
+  fill_sheet_gid?: string
+  print_sheet_gid?: string
 }
 
 export interface GenerateDocumentResult {
@@ -29,7 +34,7 @@ export interface GenerateDocumentResult {
 // before merging with the CUSDEC's own PDF) — pulled out so there's exactly
 // one place that knows how to fill a template, not two copies drifting apart.
 export async function generateDocumentPdf(input: GenerateDocumentInput): Promise<GenerateDocumentResult> {
-  const { document_type, cusdec_id, manual_values, cdn_ids } = input
+  const { document_type, cusdec_id, manual_values, cdn_ids, fill_sheet_gid, print_sheet_gid } = input
   if (!document_type) throw new Error('document_type required')
 
   let copyId: string | null = null
@@ -83,6 +88,21 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     const spreadsheetId = spreadsheetIdFromUrl(tpl.template_url)
     if (!spreadsheetId) throw new Error('Invalid Google Sheets URL in template')
 
+    // Per-shipper sheet routing: a fill/print route matched by the CUSDEC's
+    // TIN VAT (unique, unlike exporter-name spelling) overrides EVERY
+    // mapping's sheet uniformly — the whole template's data moves to that
+    // one physical tab, not per-field. Manual Entry mode has no CUSDEC to
+    // route by, so the caller's explicit fill_sheet_gid/print_sheet_gid
+    // (picked by hand) plays the same role instead.
+    const { data: sheetRoutes } = await sb.from('template_sheet_routes').select('*').eq('template_id', tpl.id)
+    const tinVat = cusdecRow?.tin_vat as string | undefined
+    const matchedFillRoute = fill_sheet_gid
+      ? { sheet_gid: fill_sheet_gid }
+      : (tinVat ? sheetRoutes?.find(r => r.route_type === 'fill' && r.tin_vat_list?.includes(tinVat)) : undefined)
+    const matchedPrintRoute = print_sheet_gid
+      ? { sheet_gid: print_sheet_gid }
+      : (tinVat ? sheetRoutes?.find(r => r.route_type === 'print' && r.tin_vat_list?.includes(tinVat)) : undefined)
+
     // Copy the template so the original stays clean
     const drive = getDriveClient()
     const copyResp = await drive.files.copy({
@@ -95,12 +115,23 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     const sheetsList = await getSheetsList(copyId)
     const firstSheetTitle = sheetsList[0]?.title || 'Sheet1'
 
+    // Resolve routed sheets to their CURRENT title on the copy (not the
+    // possibly-stale name cached in template_sheet_routes.sheet_name) — so
+    // renaming a tab in the source spreadsheet doesn't silently break a
+    // route; only the gid has to keep matching.
+    const routedFillSheet = matchedFillRoute
+      ? sheetsList.find(s => String(s.sheetId) === String(matchedFillRoute.sheet_gid))?.title
+      : undefined
+    const routedPrintSheet = matchedPrintRoute
+      ? sheetsList.find(s => String(s.sheetId) === String(matchedPrintRoute.sheet_gid))?.title
+      : undefined
+
     // Build cell updates from mappings — each mapping can target a specific sheet
     const mappings: Array<{ field_label: string; data_source: string; column_name: string; is_repeating: boolean; target_cell_or_range: string; sheet_name?: string }> = tpl.template_mappings || []
     const updates: Array<{ range: string; value: string | number | null }> = []
 
     for (const m of mappings) {
-      const sheetForField = m.sheet_name || firstSheetTitle
+      const sheetForField = routedFillSheet || m.sheet_name || firstSheetTitle
       const sheetPrefix = `${sheetForField}!`
 
       if (m.is_repeating && m.target_cell_or_range.includes(':')) {
@@ -136,7 +167,7 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     if (updates.length) await batchWriteValues(copyId, updates)
 
     // Export PDF — fit_to_page shrinks content to fit the page
-    const printSheetName = tpl.print_sheet_name || firstSheetTitle
+    const printSheetName = routedPrintSheet || tpl.print_sheet_name || firstSheetTitle
     const matchedSheet = sheetsList.find(s => s.title === printSheetName) || sheetsList[0]
     const pdfBuffer = await exportSheetAsPdf(copyId, {
       sheetGid: matchedSheet?.sheetId ?? 0,

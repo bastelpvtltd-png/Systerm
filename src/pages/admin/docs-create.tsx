@@ -1290,6 +1290,8 @@ function BoatNoteContent() {
                     onDone={() => { setSendModalBnOpen(false); loadCusdecs(true) }}
                   />
                 )}
+
+                <GenerationHistoryPanel documentType="boat_note"/>
               </>
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -2076,6 +2078,8 @@ function PartiesCopyPanel() {
                   }
                 />
               )}
+
+              <GenerationHistoryPanel documentType="party_copy"/>
             </div>
           </div>
         )}
@@ -2112,6 +2116,12 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const [cusdecSearch, setCusdecSearch] = useState('')
   const [selectedCusdecId, setSelectedCusdecId] = useState('')
 
+  // Manual Entry has no CUSDEC to route Fill/Print sheet by TIN VAT — ask
+  // directly instead, for any template that's Google-Sheet-based.
+  const [manualSheets, setManualSheets] = useState<{ title: string; sheetId: number }[]>([])
+  const [fillSheetGid, setFillSheetGid] = useState('')
+  const [printSheetGid, setPrintSheetGid] = useState('')
+
   useEffect(() => {
     async function load() {
       setTplLoadError('')
@@ -2127,6 +2137,12 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         const init: Record<string, string[]> = {}
         fields.forEach((f: { field_label: string }) => { init[f.field_label] = [''] })
         setFormValues(init)
+
+        if ((tpl.template_format || 'google_sheet') === 'google_sheet' && tpl.template_url) {
+          const sr = await fetch('/api/excel-template-sheets?sheet_url=' + encodeURIComponent(tpl.template_url), { headers: h })
+          const sd = await sr.json()
+          setManualSheets(sd.sheets || [])
+        }
       } catch (e: any) {
         setTplLoadError(e.message || 'Failed to load template')
       }
@@ -2143,8 +2159,12 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
     !cusdecSearch || c.number?.toLowerCase().includes(cusdecSearch.toLowerCase()) || c.exporter?.toLowerCase().includes(cusdecSearch.toLowerCase())
   )
 
+  const manualSheetChoiceRequired = entryMode === 'manual' && manualSheets.length > 0
+  const manualSheetChoiceMissing = manualSheetChoiceRequired && (!fillSheetGid || !printSheetGid)
+
   async function generate() {
     if (entryMode === 'cusdec' && !selectedCusdecId) return
+    if (manualSheetChoiceMissing) return
     setGenerating(true); setStatus(''); setPdf(null)
     try {
       const h = await authHeader()
@@ -2155,6 +2175,8 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         const manual: Record<string, string> = {}
         Object.entries(formValues).forEach(([lbl, rows]) => { manual[lbl] = rows.join('\n') })
         body.manual_values = manual
+        if (fillSheetGid) body.fill_sheet_gid = fillSheetGid
+        if (printSheetGid) body.print_sheet_gid = printSheetGid
       }
       const res = await fetch('/api/doc-generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
@@ -2242,6 +2264,29 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         </div>
       )}
 
+      {entryMode === 'manual' && manualSheets.length > 0 && (
+        <div className="card max-w-xl">
+          <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Sheet &amp; Print Sheet</h2>
+          <p className="text-xs text-gray-400 mb-3">No CUSDEC to auto-route by — pick which sheet tab to fill and which to print.</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Fill Sheet</label>
+              <select value={fillSheetGid} onChange={e => setFillSheetGid(e.target.value)} className="input text-xs w-full">
+                <option value="">— select —</option>
+                {manualSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Print Sheet</label>
+              <select value={printSheetGid} onChange={e => setPrintSheetGid(e.target.value)} className="input text-xs w-full">
+                <option value="">— select —</option>
+                {manualSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
       {entryMode === 'manual' && (
       <div className="card max-w-xl">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Template Fields</h2>
@@ -2285,12 +2330,13 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
                 </div>
               )
             })}
-            <button onClick={generate} disabled={generating}
+            <button onClick={generate} disabled={generating || manualSheetChoiceMissing}
               className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
               style={{ background: '#3b82f6' }}>
               {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
               Generate {label}
             </button>
+            {manualSheetChoiceMissing && <p className="text-[11px] text-amber-600 mt-1">Pick Fill Sheet and Print Sheet above first.</p>}
           </div>
         )}
       </div>
@@ -2336,6 +2382,76 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
           onDone={() => setSendModalOpen(false)}
         />
       )}
+
+      <GenerationHistoryPanel documentType={documentType}/>
+    </div>
+  )
+}
+
+// ── Recent Generations — shared history panel, added to every doc-generating
+// tab (CustomDocPanel covers Invoice/Packing List/Cusdec XML/CDN Text/CO/
+// Phyto/Party's Copy Manual/any custom type; Boat Note and Party's Copy's
+// From-CUSDEC mode render it directly). Reuses uploaded_documents (already
+// populated by SendModal's Save tick — see document-uploads.ts) rather than
+// a new table: a generation only shows up here once actually saved via
+// Send, not on every raw/test Generate click.
+interface HistoryDoc { id: string; doc_type: string; file_name: string; drive_url: string; created_at: string }
+
+function GenerationHistoryPanel({ documentType }: { documentType: string }) {
+  const [items, setItems] = useState<HistoryDoc[]>([])
+  const [loading, setLoading] = useState(true)
+  const [copyingId, setCopyingId] = useState<string | null>(null)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!documentType) return
+    async function load() {
+      setLoading(true)
+      try {
+        const h = await authHeader()
+        const res = await fetch(`/api/list-documents?doc_type=${encodeURIComponent(documentType)}&limit=20`, { headers: h })
+        const d = await res.json()
+        setItems(d.records || [])
+      } catch {} finally { setLoading(false) }
+    }
+    load()
+  }, [documentType])
+
+  const isTextFile = (fileName: string) => /\.(txt|xml)$/i.test(fileName)
+
+  async function copyItem(item: HistoryDoc) {
+    setCopyingId(item.id)
+    try {
+      const h = await authHeader()
+      const res = await fetch(`/api/fetch-drive-text?drive_url=${encodeURIComponent(item.drive_url)}`, { headers: h })
+      const d = await res.json()
+      if (res.ok) { await navigator.clipboard.writeText(d.content); setCopiedId(item.id); setTimeout(() => setCopiedId(null), 2000) }
+    } catch {} finally { setCopyingId(null) }
+  }
+
+  if (!documentType || loading || items.length === 0) return null
+
+  return (
+    <div className="card max-w-xl">
+      <h2 className="font-semibold text-gray-900 text-sm mb-3">Recent Generations</h2>
+      <div className="space-y-1.5 max-h-72 overflow-y-auto">
+        {items.map(item => (
+          <div key={item.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2">
+            <div className="min-w-0">
+              <p className="font-medium text-gray-800 truncate">{item.file_name}</p>
+              <p className="text-gray-400">{new Date(item.created_at).toLocaleString('en-GB')}</p>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+              <a href={item.drive_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Open</a>
+              {isTextFile(item.file_name) && (
+                <button onClick={() => copyItem(item)} disabled={copyingId === item.id} className="text-blue-600 hover:underline disabled:opacity-50">
+                  {copyingId === item.id ? '…' : copiedId === item.id ? 'Copied!' : 'Copy'}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

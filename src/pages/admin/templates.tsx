@@ -10,6 +10,7 @@ interface TemplateMapping {
   column_name: string; is_repeating: boolean; target_cell_or_range: string
   sheet_name: string
 }
+interface SheetRoute { id?: string; route_type: 'fill' | 'print'; sheet_gid: string; sheet_name: string; tin_vat_list: string[] }
 interface GSheet {
   id: string; document_type: string; template_url: string
   print_sheet_name: string | null; print_range: string | null
@@ -56,6 +57,85 @@ const emptyRow = (): TemplateMapping => ({
 const CUSDEC_FALLBACK = ['code','number','date','exporter','consignee','vessel','voyage_no','bl_no','gross_mass','net_mass','cap','hs_code','amount','invoice_number','boat_note_link']
 const CDN_FALLBACK    = ['code','cusdec_number','shipper','consignee','container_no','goods_description','vessel','voyage','bl_no','slpa_no','lorry_no','cdn_no']
 
+function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shippers, onSave, saving }: {
+  title: string
+  routeType: 'fill' | 'print'
+  routes: SheetRoute[]
+  setRoutes: (fn: (prev: SheetRoute[]) => SheetRoute[]) => void
+  sheets: { title: string; sheetId: number }[]
+  shippers: { tin_vat: string; exporter: string }[]
+  onSave: () => void
+  saving: boolean
+}) {
+  const [newSheetGid, setNewSheetGid] = useState('')
+  const [pickerOpenIdx, setPickerOpenIdx] = useState<number | null>(null)
+  const [shipperSearch, setShipperSearch] = useState('')
+
+  function addRoute() {
+    if (!newSheetGid) return
+    const sheet = sheets.find(s => String(s.sheetId) === newSheetGid)
+    if (!sheet || routes.some(r => r.sheet_gid === newSheetGid)) return
+    setRoutes(prev => [...prev, { route_type: routeType, sheet_gid: newSheetGid, sheet_name: sheet.title, tin_vat_list: [] }])
+    setNewSheetGid('')
+  }
+  function toggleShipper(routeIdx: number, tinVat: string) {
+    setRoutes(prev => prev.map((r, i) => i !== routeIdx ? r : {
+      ...r, tin_vat_list: r.tin_vat_list.includes(tinVat) ? r.tin_vat_list.filter(t => t !== tinVat) : [...r.tin_vat_list, tinVat],
+    }))
+  }
+  function removeRoute(idx: number) { setRoutes(prev => prev.filter((_, i) => i !== idx)) }
+  const assignedElsewhere = (excludeIdx: number) => new Set(routes.flatMap((r, i) => i === excludeIdx ? [] : r.tin_vat_list))
+
+  return (
+    <div className="border border-gray-100 rounded-lg p-3">
+      <h3 className="text-xs font-semibold text-gray-700 mb-2">{title}</h3>
+      <div className="space-y-2 mb-3">
+        {routes.map((r, idx) => {
+          const takenElsewhere = assignedElsewhere(idx)
+          return (
+            <div key={r.sheet_gid} className="border border-gray-100 rounded-lg p-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-medium text-gray-800">{r.sheet_name}</span>
+                <button onClick={() => removeRoute(idx)} className="text-gray-300 hover:text-red-500"><X size={13}/></button>
+              </div>
+              <button onClick={() => setPickerOpenIdx(pickerOpenIdx === idx ? null : idx)} className="text-[11px] text-blue-600 hover:underline mb-1.5">
+                {pickerOpenIdx === idx ? 'Hide shippers' : `${r.tin_vat_list.length} shipper(s) — edit`}
+              </button>
+              {pickerOpenIdx === idx && (
+                <div className="max-h-40 overflow-y-auto border-t border-gray-50 pt-1.5 space-y-1">
+                  <input value={shipperSearch} onChange={e => setShipperSearch(e.target.value)} placeholder="Search shipper..." className="input text-xs w-full mb-1"/>
+                  {shippers.filter(s => !shipperSearch || s.exporter.toLowerCase().includes(shipperSearch.toLowerCase()) || s.tin_vat.includes(shipperSearch)).map(s => (
+                    <label key={s.tin_vat} className={`flex items-center gap-2 text-[11px] px-1 py-0.5 rounded ${takenElsewhere.has(s.tin_vat) ? 'opacity-40' : 'cursor-pointer hover:bg-gray-50'}`}>
+                      <input type="checkbox" checked={r.tin_vat_list.includes(s.tin_vat)} disabled={takenElsewhere.has(s.tin_vat)}
+                        onChange={() => toggleShipper(idx, s.tin_vat)}/>
+                      <span className="truncate">{s.exporter.slice(0, 28) || '(no name)'} <span className="text-gray-400">· {s.tin_vat}</span></span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+        {routes.length === 0 && <p className="text-[11px] text-gray-400">No routes — using the default sheet for everyone.</p>}
+      </div>
+      <div className="flex gap-1.5 mb-2">
+        <select value={newSheetGid} onChange={e => setNewSheetGid(e.target.value)} className="input text-xs flex-1">
+          <option value="">— pick a sheet to add —</option>
+          {sheets.filter(s => !routes.some(r => r.sheet_gid === String(s.sheetId))).map(s => (
+            <option key={s.sheetId} value={s.sheetId}>{s.title}</option>
+          ))}
+        </select>
+        <button onClick={addRoute} disabled={!newSheetGid} className="px-2.5 rounded-lg text-xs font-medium text-white disabled:opacity-40" style={{ background: '#3b82f6' }}>
+          <Plus size={13}/>
+        </button>
+      </div>
+      <button onClick={onSave} disabled={saving} className="btn-secondary w-full flex items-center justify-center gap-2 text-xs">
+        {saving ? <Loader size={13} className="animate-spin"/> : <Save size={13}/>}Save
+      </button>
+    </div>
+  )
+}
+
 function DocTemplatesContent() {
   const [docType, setDocType]         = useState('boat_note')
   const [templateFormat, setTemplateFormat] = useState<TemplateFormat>('google_sheet')
@@ -73,6 +153,7 @@ function DocTemplatesContent() {
   const [status, setStatus]           = useState('')
   const [columnsBySource, setColumnsBySource] = useState<{ cusdec: string[]; cdn: string[] }>({ cusdec: CUSDEC_FALLBACK, cdn: CDN_FALLBACK })
   const [sheetNames, setSheetNames]   = useState<string[]>([])
+  const [sheetsWithGid, setSheetsWithGid] = useState<{ title: string; sheetId: number }[]>([])
   const [sheetsLoading, setSheetsLoading] = useState(false)
   const [sheetsWarn, setSheetsWarn]   = useState('')
   const lastFetchedUrl = useRef('')  // avoid double-fetch when loadTemplate sets urlInput
@@ -80,6 +161,56 @@ function DocTemplatesContent() {
   const [addingNewType, setAddingNewType] = useState(false)
   const [newTypeLabel, setNewTypeLabel]   = useState('')
   const allDocTypes = [...DOC_TYPES, ...extraDocTypes.filter(e => !DOC_TYPES.some(d => d.value === e.value))]
+
+  // Per-shipper (TIN VAT) Sheet Routing — see template-sheet-routes.ts.
+  const [templateId, setTemplateId] = useState('')
+  const [fillRoutes, setFillRoutes] = useState<SheetRoute[]>([])
+  const [printRoutes, setPrintRoutes] = useState<SheetRoute[]>([])
+  const [shipperOptions, setShipperOptions] = useState<{ tin_vat: string; exporter: string }[]>([])
+  const [routesSaving, setRoutesSaving] = useState<'fill' | 'print' | ''>('')
+  const [routesStatus, setRoutesStatus] = useState('')
+
+  useEffect(() => {
+    fetch('/api/list-records?table=cusdec&limit=1000').then(r => r.json()).then(d => {
+      const seen = new Set<string>()
+      const opts: { tin_vat: string; exporter: string }[] = []
+      for (const c of (d.records || [])) {
+        if (!c.tin_vat || seen.has(c.tin_vat)) continue
+        seen.add(c.tin_vat)
+        opts.push({ tin_vat: c.tin_vat, exporter: c.exporter || '' })
+      }
+      setShipperOptions(opts)
+    }).catch(() => {})
+  }, [])
+
+  async function loadRoutes(tplId: string) {
+    if (!tplId) { setFillRoutes([]); setPrintRoutes([]); return }
+    try {
+      const h = await authHeader()
+      const res = await fetch(`/api/template-sheet-routes?template_id=${tplId}`, { headers: h })
+      const d = await res.json()
+      const routes: SheetRoute[] = d.routes || []
+      setFillRoutes(routes.filter(r => r.route_type === 'fill'))
+      setPrintRoutes(routes.filter(r => r.route_type === 'print'))
+    } catch { setFillRoutes([]); setPrintRoutes([]) }
+  }
+
+  async function saveRoutes(routeType: 'fill' | 'print') {
+    if (!templateId) { setRoutesStatus('Save the template first (needs a Google Sheets URL) before configuring routing.'); return }
+    setRoutesSaving(routeType); setRoutesStatus('')
+    try {
+      const list = routeType === 'fill' ? fillRoutes : printRoutes
+      const h = await authHeader()
+      const res = await fetch('/api/template-sheet-routes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ template_id: templateId, route_type: routeType, routes: list }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setRoutesStatus(`✓ ${routeType === 'fill' ? 'Fill' : 'Print'} Sheet routing saved`)
+    } catch (e: any) { setRoutesStatus(`✗ ${e.message}`) }
+    finally { setRoutesSaving('') }
+  }
 
   // Load cusdec/cdn columns once
   useEffect(() => {
@@ -144,8 +275,11 @@ function DocTemplatesContent() {
     setPaperSize(found?.paper_size || 'A4')
     setOrientation(found?.orientation || 'Portrait')
     setFitToPage(found?.fit_to_page !== false)
+    setTemplateId(found?.id || '')
+    setRoutesStatus('')
+    loadRoutes(found?.id || '')
     if (format === 'google_sheet' && url) fetchSheets(url)
-    else setSheetNames([])
+    else { setSheetNames([]); setSheetsWithGid([]) }
   }
 
   async function fetchSheets(url: string) {
@@ -158,15 +292,19 @@ function DocTemplatesContent() {
       const h = await authHeader()
       const res = await fetch('/api/excel-template-sheets?sheet_url=' + encodeURIComponent(url), { headers: h })
       const d = await res.json()
-      const names = (d.sheets || []).map((s: { title: string }) => s.title)
+      const sheets: { title: string; sheetId: number }[] = d.sheets || []
+      const names = sheets.map(s => s.title)
       if (names.length) {
         setSheetNames(names)
+        setSheetsWithGid(sheets)
       } else {
         setSheetNames([])
+        setSheetsWithGid([])
         setSheetsWarn(d.error ? `Sheet auto-load failed: ${d.error}` : 'No sheets found — enter sheet names manually')
       }
     } catch {
       setSheetNames([])
+      setSheetsWithGid([])
       setSheetsWarn('Could not connect to Google Sheets — enter sheet names manually below')
     }
     finally { setSheetsLoading(false) }
@@ -412,6 +550,29 @@ function DocTemplatesContent() {
           {mappings.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No fields — click Add Row</p>}
         </div>
       </div>
+
+      {/* Sheet Routing — optional, Google Sheets only. Different shippers'
+          data can fill (and print) on different physical tabs of the same
+          spreadsheet, matched by TIN VAT at generation time. */}
+      {templateFormat === 'google_sheet' && sheetsWithGid.length > 0 && (
+        <div className="card">
+          <h2 className="font-semibold text-gray-900 text-sm mb-1">Sheet Routing <span className="text-gray-400 font-normal">(optional)</span></h2>
+          <p className="text-xs text-gray-400 mb-3">Route different shippers' CUSDECs to different sheet tabs — pick a sheet, then tick which shippers (by TIN VAT) use it. Leave empty to always use the Field Mapping / Print Tab defaults.</p>
+          {routesStatus && <p className={`text-xs mb-3 font-medium ${routesStatus.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{routesStatus}</p>}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <SheetRouteEditor
+              title="Fill Sheet routing" routeType="fill" routes={fillRoutes} setRoutes={setFillRoutes}
+              sheets={sheetsWithGid} shippers={shipperOptions}
+              onSave={() => saveRoutes('fill')} saving={routesSaving === 'fill'}
+            />
+            <SheetRouteEditor
+              title="Print Sheet routing" routeType="print" routes={printRoutes} setRoutes={setPrintRoutes}
+              sheets={sheetsWithGid} shippers={shipperOptions}
+              onSave={() => saveRoutes('print')} saving={routesSaving === 'print'}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Step 3 — Print Settings (Google Sheets only — XML/Text have no page layout) */}
       <div className="card">

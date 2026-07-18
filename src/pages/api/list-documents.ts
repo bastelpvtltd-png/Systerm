@@ -16,12 +16,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { data: prof } = await supabaseAdmin.from('profiles').select('is_admin').eq('id', authed.userId).single()
     const isAdmin = !!prof?.is_admin
 
-    const { doc_type } = req.query
+    const { doc_type, limit } = req.query
+    const limitNum = Math.min(200, Math.max(1, parseInt(String(limit || '50'), 10) || 50))
     let query = supabaseAdmin
       .from('uploaded_documents')
       .select('id, doc_type, file_name, drive_url, extracted_data, uploaded_by, created_at')
       .order('created_at', { ascending: false })
-      .limit(50)
+      .limit(limitNum)
 
     if (doc_type) query = query.eq('doc_type', doc_type as string)
     // Preview access control: non-admins only ever see PDFs they uploaded.
