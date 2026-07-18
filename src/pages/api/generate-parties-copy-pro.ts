@@ -16,7 +16,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
 
   try {
-    const { document_type, cusdec_id } = req.body as { document_type?: string; cusdec_id?: string }
+    const { document_type, cusdec_id, fill_sheet_gid, print_sheet_gid } = req.body as {
+      document_type?: string; cusdec_id?: string; fill_sheet_gid?: string; print_sheet_gid?: string
+    }
     if (!document_type || !cusdec_id) return res.status(400).json({ error: 'document_type and cusdec_id required' })
 
     const { data: cusdec } = await sb.from('cusdec').select('number, pdf_url').eq('id', cusdec_id).maybeSingle()
@@ -25,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const [cusdecBytes, tplResult] = await Promise.all([
       downloadDriveFile(cusdec.pdf_url),
-      generateDocumentPdf({ document_type, cusdec_id }),
+      generateDocumentPdf({ document_type, cusdec_id, fill_sheet_gid, print_sheet_gid }),
     ])
 
     const merged = await PDFDocument.create()
@@ -41,6 +43,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const digits = (cusdec.number || '').replace(/\D/g, '') || cusdec.number
     res.json({ fileName: `P${digits}.pdf`, base64: Buffer.from(out).toString('base64') })
   } catch (e: any) {
+    if (e.code === 'SHEET_SELECTION_REQUIRED') {
+      return res.status(409).json({ error: e.message, needsSheetSelection: true, sheets: e.sheets || [] })
+    }
     console.error('[generate-parties-copy-pro]', e)
     res.status(500).json({ error: e.message })
   }

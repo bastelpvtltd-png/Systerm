@@ -19,6 +19,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = await generateDocumentPdf({ document_type, cusdec_id, manual_values, cdn_ids, fill_sheet_gid, print_sheet_gid })
     res.json(result)
   } catch (e: any) {
+    if (e.code === 'SHEET_SELECTION_REQUIRED') {
+      return res.status(409).json({ error: e.message, needsSheetSelection: true, sheets: e.sheets || [] })
+    }
     console.error('[doc-generate]', e)
     res.status(500).json({ error: e.message })
   }

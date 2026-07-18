@@ -103,6 +103,49 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
       ? { sheet_gid: print_sheet_gid }
       : (tinVat ? sheetRoutes?.find(r => r.route_type === 'print' && r.tin_vat_list?.includes(tinVat)) : undefined)
 
+    // Resolve the live sheet list from the ORIGINAL spreadsheet before
+    // copying — a cheap read that lets us fail fast (with the current list
+    // of tabs to offer the caller) instead of burning a Drive copy on a
+    // generate that can't be routed. Sheet IDs (gid) survive a full-file
+    // Drive copy unchanged, so this list stays valid for the copy too.
+    const liveSheets = await getSheetsList(spreadsheetId)
+    const firstSheetTitle = liveSheets[0]?.title || 'Sheet1'
+
+    const routedFillSheet = matchedFillRoute
+      ? liveSheets.find(s => String(s.sheetId) === String(matchedFillRoute.sheet_gid))?.title
+      : undefined
+    const routedPrintSheet = matchedPrintRoute
+      ? liveSheets.find(s => String(s.sheetId) === String(matchedPrintRoute.sheet_gid))?.title
+      : undefined
+
+    // Sheet Routing is the ONLY source of truth for which tab to fill/print
+    // once any route exists for this template — there's no more falling
+    // back to the old per-mapping/per-template sheet-name fields (those
+    // stopped being editable once Sheet Routing shipped, so they just sit
+    // frozen at whatever was typed in long ago and silently point at a
+    // renamed/deleted tab). If routing is in use on a side but this
+    // shipper isn't covered by any route (or their route's tab no longer
+    // exists), fail explicitly and hand back the live tab list so the
+    // caller can ask the user to pick one — instead of guessing.
+    const fillRoutingInUse = sheetRoutes?.some(r => r.route_type === 'fill')
+    const printRoutingInUse = sheetRoutes?.some(r => r.route_type === 'print')
+    if (!fill_sheet_gid && fillRoutingInUse && !routedFillSheet) {
+      const err: any = new Error(tinVat
+        ? `No Fill Sheet route matches this shipper's TIN VAT (${tinVat}). Add a route for them in Templates, or pick a Fill Sheet manually.`
+        : `No Fill Sheet route could be matched (no TIN VAT on this record). Pick a Fill Sheet manually.`)
+      err.code = 'SHEET_SELECTION_REQUIRED'
+      err.sheets = liveSheets
+      throw err
+    }
+    if (!print_sheet_gid && printRoutingInUse && !routedPrintSheet) {
+      const err: any = new Error(tinVat
+        ? `No Print Sheet route matches this shipper's TIN VAT (${tinVat}). Add a route for them in Templates, or pick a Print Sheet manually.`
+        : `No Print Sheet route could be matched (no TIN VAT on this record). Pick a Print Sheet manually.`)
+      err.code = 'SHEET_SELECTION_REQUIRED'
+      err.sheets = liveSheets
+      throw err
+    }
+
     // Copy the template so the original stays clean
     const drive = getDriveClient()
     const copyResp = await drive.files.copy({
@@ -111,27 +154,12 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     })
     copyId = copyResp.data.id!
 
-    // Get sheets list from the COPY
-    const sheetsList = await getSheetsList(copyId)
-    const firstSheetTitle = sheetsList[0]?.title || 'Sheet1'
-
-    // Resolve routed sheets to their CURRENT title on the copy (not the
-    // possibly-stale name cached in template_sheet_routes.sheet_name) — so
-    // renaming a tab in the source spreadsheet doesn't silently break a
-    // route; only the gid has to keep matching.
-    const routedFillSheet = matchedFillRoute
-      ? sheetsList.find(s => String(s.sheetId) === String(matchedFillRoute.sheet_gid))?.title
-      : undefined
-    const routedPrintSheet = matchedPrintRoute
-      ? sheetsList.find(s => String(s.sheetId) === String(matchedPrintRoute.sheet_gid))?.title
-      : undefined
-
     // Build cell updates from mappings — each mapping can target a specific sheet
-    const mappings: Array<{ field_label: string; data_source: string; column_name: string; is_repeating: boolean; target_cell_or_range: string; sheet_name?: string }> = tpl.template_mappings || []
+    const mappings: Array<{ field_label: string; data_source: string; column_name: string; is_repeating: boolean; target_cell_or_range: string }> = tpl.template_mappings || []
     const updates: Array<{ range: string; value: string | number | null }> = []
 
     for (const m of mappings) {
-      const sheetForField = routedFillSheet || m.sheet_name || firstSheetTitle
+      const sheetForField = routedFillSheet || firstSheetTitle
       const sheetPrefix = `${sheetForField}!`
 
       if (m.is_repeating && m.target_cell_or_range.includes(':')) {
@@ -167,8 +195,8 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     if (updates.length) await batchWriteValues(copyId, updates)
 
     // Export PDF — fit_to_page shrinks content to fit the page
-    const printSheetName = routedPrintSheet || tpl.print_sheet_name || firstSheetTitle
-    const matchedSheet = sheetsList.find(s => s.title === printSheetName) || sheetsList[0]
+    const printSheetName = routedPrintSheet || firstSheetTitle
+    const matchedSheet = liveSheets.find(s => s.title === printSheetName) || liveSheets[0]
     const pdfBuffer = await exportSheetAsPdf(copyId, {
       sheetGid: matchedSheet?.sheetId ?? 0,
       range: tpl.print_range || undefined,
