@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { checkBoatNote, checkExportRelease, cleanCusdecNumber, isBoatNotePassed, resolveTin } from '@/lib/automationChecks'
 import { yearOf } from '@/lib/flexibleDate'
 import { syncVesselTriggers } from '@/lib/vesselTrigger'
+import { autoCreateBoatNotes, autoCreatePartyCopies } from '@/lib/autoCreateDocs'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -136,6 +137,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'vessel_trigger')
   } else {
     results.vessel_trigger = { skipped: true, reason: 'not due yet' }
+  }
+
+  const boatNoteCreateRun = runByPanel['boat_note_create']
+  const dueBoatNoteCreate = boatNoteCreateRun?.enabled === true && (!boatNoteCreateRun?.last_run_at ||
+    (now.getTime() - new Date(boatNoteCreateRun.last_run_at).getTime()) >= (boatNoteCreateRun.interval_minutes || 60) * 60_000)
+
+  if (boatNoteCreateRun?.enabled !== true) {
+    results.boat_note_create = { skipped: true, reason: 'paused' }
+  } else if (dueBoatNoteCreate) {
+    try {
+      const r = await autoCreateBoatNotes()
+      results.boat_note_create = r
+      if (r.created || r.skipped.length || r.errors.length) await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'boat_note_create')
+    } catch (e: any) {
+      results.boat_note_create = { error: e.message }
+    }
+  } else {
+    results.boat_note_create = { skipped: true, reason: 'not due yet' }
+  }
+
+  const partyCopyCreateRun = runByPanel['party_copy_create']
+  const duePartyCopyCreate = partyCopyCreateRun?.enabled === true && (!partyCopyCreateRun?.last_run_at ||
+    (now.getTime() - new Date(partyCopyCreateRun.last_run_at).getTime()) >= (partyCopyCreateRun.interval_minutes || 60) * 60_000)
+
+  if (partyCopyCreateRun?.enabled !== true) {
+    results.party_copy_create = { skipped: true, reason: 'paused' }
+  } else if (duePartyCopyCreate) {
+    try {
+      const r = await autoCreatePartyCopies()
+      results.party_copy_create = r
+      if (r.created || r.skipped.length || r.errors.length) await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'party_copy_create')
+    } catch (e: any) {
+      results.party_copy_create = { error: e.message }
+    }
+  } else {
+    results.party_copy_create = { skipped: true, reason: 'not due yet' }
   }
 
   res.json({ ok: true, ranAt: now.toISOString(), results })

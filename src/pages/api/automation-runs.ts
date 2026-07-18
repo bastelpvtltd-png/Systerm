@@ -22,7 +22,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method === 'POST') {
       const { panel, interval_minutes, enabled } = req.body as { panel?: string; interval_minutes?: number; enabled?: boolean }
-      if (!['boat_note', 'export_release', 'vessel_trigger'].includes(panel || '')) return res.status(400).json({ error: 'panel must be boat_note, export_release, or vessel_trigger' })
+      const VALID_PANELS = ['boat_note', 'export_release', 'vessel_trigger', 'boat_note_create', 'party_copy_create']
+      if (!VALID_PANELS.includes(panel || '')) return res.status(400).json({ error: `panel must be one of: ${VALID_PANELS.join(', ')}` })
       const patch: Record<string, any> = { updated_at: new Date().toISOString() }
       if (interval_minutes !== undefined) {
         const minutes = Number(interval_minutes)

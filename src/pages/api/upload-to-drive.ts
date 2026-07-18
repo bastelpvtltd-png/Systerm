@@ -5,6 +5,36 @@ import { requireAuth } from '@/lib/serverAuth'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
+// Extracted so server-side callers that aren't handling an HTTP request
+// themselves (e.g. the automation triggers in autoCreateDocs.ts) can reuse
+// the exact same upload path instead of duplicating it.
+export async function uploadBufferToDrive(base64: string, fileName: string, mimeType: string | undefined, docType: string | undefined): Promise<{ driveId: string; driveLink: string }> {
+  const finalMimeType = mimeType || inferMimeType(fileName)
+  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || ''
+  const drive = getDriveClient()
+  const buffer = Buffer.from(base64, 'base64')
+
+  const targetFolderId = folderId
+    ? await resolveUploadFolderId(drive, folderId, docType)
+    : ''
+
+  const uploaded = await drive.files.create({
+    requestBody: {
+      name: fileName,
+      parents: targetFolderId ? [targetFolderId] : undefined,
+    },
+    media: { mimeType: finalMimeType, body: Readable.from(buffer) },
+    fields: 'id, webViewLink',
+  })
+
+  await drive.permissions.create({
+    fileId: uploaded.data.id!,
+    requestBody: { role: 'reader', type: 'anyone' },
+  })
+
+  return { driveId: uploaded.data.id!, driveLink: uploaded.data.webViewLink! }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
   const authed = await requireAuth(req)
@@ -12,36 +42,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { base64, fileName, mimeType, docType } = req.body
     if (!base64 || !fileName) return res.status(400).json({ error: 'Missing base64 or fileName' })
-    // mimeType used to default to 'application/pdf' whenever a caller didn't
-    // pass one — silently wrong for any non-PDF (an .xlsx would upload as a
-    // "PDF" Drive treats as an opaque/invalid stream). Inferring from the
-    // file extension whenever the caller doesn't supply an explicit type is
-    // the safer default.
-    const finalMimeType = mimeType || inferMimeType(fileName)
-
-    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || ''
-    const drive = getDriveClient()
-    const buffer = Buffer.from(base64, 'base64')
-
-    const targetFolderId = folderId
-      ? await resolveUploadFolderId(drive, folderId, docType)
-      : ''
-
-    const uploaded = await drive.files.create({
-      requestBody: {
-        name: fileName,
-        parents: targetFolderId ? [targetFolderId] : undefined,
-      },
-      media: { mimeType: finalMimeType, body: Readable.from(buffer) },
-      fields: 'id, webViewLink',
-    })
-
-    await drive.permissions.create({
-      fileId: uploaded.data.id!,
-      requestBody: { role: 'reader', type: 'anyone' },
-    })
-
-    res.json({ driveId: uploaded.data.id, driveLink: uploaded.data.webViewLink })
+    const { driveId, driveLink } = await uploadBufferToDrive(base64, fileName, mimeType, docType)
+    res.json({ driveId, driveLink })
   } catch (err: any) {
     console.error('Drive upload error:', err.response?.data || err.message)
     res.status(500).json({ error: describeDriveError(err) })

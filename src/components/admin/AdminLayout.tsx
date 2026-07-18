@@ -688,6 +688,8 @@ export const SECTION_ITEMS = [
   { key: 'section:automation.trico-gate-pass',      tabHref: '/admin/automation', label: 'Trico Gate Passes' },
   { key: 'section:automation.data-updates',         tabHref: '/admin/automation', label: 'Data Updates' },
   { key: 'section:automation.boat-note-create',     tabHref: '/admin/automation', label: 'Boat Note Create' },
+  { key: 'section:automation.party-copy-create',    tabHref: '/admin/automation', label: "Party's Copy Create" },
+  { key: 'section:automation.merge-pdf',            tabHref: '/admin/automation', label: 'Merge PDF' },
   { key: 'section:automation.boat-note-check',      tabHref: '/admin/automation', label: 'Boat Note Check' },
   { key: 'section:automation.export-release-check', tabHref: '/admin/automation', label: 'Export Release Check' },
   { key: 'section:automation.vessel-trigger',       tabHref: '/admin/automation', label: 'Vessel Triggers' },

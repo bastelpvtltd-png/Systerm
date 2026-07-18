@@ -3,6 +3,7 @@ import { useRouter } from 'next/router'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { yearOf } from '@/lib/flexibleDate'
+import SendModal from '@/components/admin/SendModal'
 import {
   Zap, Barcode as BarcodeIcon, Truck, RefreshCw,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Plus, Trash2,
@@ -13,6 +14,7 @@ import {
 
 type AutomationTab =
   | 'barcode' | 'trico' | 'data-updates'
+  | 'boat-note-create' | 'party-copy-create' | 'merge-pdf'
   | 'boat-note-check' | 'export-release' | 'vessel-trigger'
   | 'conflict-review' | 'cdn-approval' | 'notes' | 'pdf-editor'
 
@@ -27,6 +29,9 @@ const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: stri
   { key: 'barcode', label: 'Barcode Enter', icon: BarcodeIcon, permission: 'section:automation.barcode-enter' },
   { key: 'trico', label: 'Trico Gate Passes', icon: Truck, permission: 'section:automation.trico-gate-pass' },
   { key: 'data-updates', label: 'Data Updates', icon: RefreshCw, permission: 'section:automation.data-updates' },
+  { key: 'boat-note-create', label: 'Boat Note Create', icon: Ship, permission: 'section:automation.boat-note-create' },
+  { key: 'party-copy-create', label: "Party's Copy Create", icon: Copy, permission: 'section:automation.party-copy-create' },
+  { key: 'merge-pdf', label: 'Merge PDF', icon: GitMerge, permission: 'section:automation.merge-pdf' },
   { key: 'boat-note-check', label: 'Boat Note Check', icon: ClipboardCheck, permission: 'section:automation.boat-note-check' },
   { key: 'export-release', label: 'Export Release Check', icon: ShieldCheck, permission: 'section:automation.export-release-check' },
   { key: 'vessel-trigger', label: 'Vessel Triggers', icon: Ship, permission: 'section:automation.vessel-trigger' },
@@ -93,6 +98,9 @@ function AutomationContent() {
       {tab === 'barcode' && <RpaStub title="Barcode Enter" action="barcode-enter" description="Auto-fills the Barcode entry on the port system from a CDN's data, or lets you enter it manually."/>}
       {tab === 'trico' && <TricoGatePasses/>}
       {tab === 'data-updates' && <DataUpdates/>}
+      {tab === 'boat-note-create' && <AutoCreatePanel panel="boat_note_create" apiPath="/api/auto-create-boat-notes" title="Boat Note Create" docLabel="Boat Note"/>}
+      {tab === 'party-copy-create' && <AutoCreatePanel panel="party_copy_create" apiPath="/api/auto-create-parties-copies" title="Party's Copy Create" docLabel="Party's Copy"/>}
+      {tab === 'merge-pdf' && <MergePdfPanel/>}
       {tab === 'boat-note-check' && <BoatNoteCheckPanel/>}
       {tab === 'export-release' && <ExportReleaseCheckPanel/>}
       {tab === 'vessel-trigger' && <VesselTriggerPanel/>}
@@ -195,7 +203,7 @@ function DataUpdates() {
 // Shared by both check panels — plain-minutes interval editor + "last ran"
 // readout for the scheduled cron (cron-check-pending.ts), which is what
 // actually applies this interval; this control only reads/writes the number.
-function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger'; label: string }) {
+function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger' | 'boat_note_create' | 'party_copy_create'; label: string }) {
   const [minutes, setMinutes] = useState<string>('')
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
   const [enabled, setEnabled] = useState(true)
@@ -341,6 +349,228 @@ function useNextVessel() {
     try { return new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Colombo', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) } catch { return iso || '—' }
   }
   return vessel ? { ...vessel, etbStr: fmtDate(vessel.etb) } : null
+}
+
+// ── Boat Note Create / Party's Copy Create ──────────────────────────────
+// Auto-generates + saves the PDF for every Boat-Note-pending CUSDEC (CAP
+// complete, not yet Blue/Green) that doesn't have one saved yet — same
+// generation path the manual Docs Create tab uses. Shippers Sheet Routing
+// can't resolve a Fill/Print sheet for are skipped, not errored, since
+// guessing the wrong tab is worse than not creating anything. See
+// src/lib/autoCreateDocs.ts. Starts disabled (SchedulerControl) — a manual
+// "Run Now" always works regardless of the scheduler toggle.
+function AutoCreatePanel({ panel, apiPath, title, docLabel }: { panel: 'boat_note_create' | 'party_copy_create'; apiPath: string; title: string; docLabel: string }) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ created: number; skipped: { cusdecNumber: string; reason: string }[]; errors: { cusdecNumber: string; error: string }[] } | null>(null)
+  const [error, setError] = useState('')
+
+  async function run() {
+    setBusy(true); setError(''); setResult(null)
+    try {
+      const res = await fetch(apiPath, { method: 'POST', headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Run failed')
+      setResult({ created: d.created, skipped: d.skipped || [], errors: d.errors || [] })
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card max-w-2xl">
+      <h2 className="font-semibold text-gray-900 text-sm mb-2">{title}</h2>
+      <p className="text-xs text-gray-500 mb-4">
+        Finds every CUSDEC that's Boat Note pending (CAP complete, not yet Blue/Green) without a {docLabel} saved yet, generates it the same way the Docs Create tab does, and saves the link on the CUSDEC row.
+        Shippers without a Fill/Print Sheet Route configured in Templates are skipped, never guessed at.
+      </p>
+      <div className="mb-4">
+        <SchedulerControl panel={panel} label={title}/>
+      </div>
+      <button onClick={run} disabled={busy} className="btn-primary flex items-center gap-2">
+        {busy ? <Loader size={14} className="animate-spin"/> : <Zap size={14}/>}Run Now
+      </button>
+      {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
+      {result && (
+        <div className="mt-4 space-y-3">
+          <p className="text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2 inline-block">
+            ✓ Created {result.created}
+          </p>
+          {result.skipped.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-amber-700 mb-1.5">Skipped ({result.skipped.length}) — no Sheet Route or source PDF:</p>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {result.skipped.map((s, i) => (
+                  <div key={i} className="text-[11px] border border-amber-100 bg-amber-50 rounded p-1.5">
+                    <span className="font-medium text-amber-800">E {s.cusdecNumber}</span> — <span className="text-amber-600">{s.reason}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {result.errors.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-red-700 mb-1.5">Errors ({result.errors.length}):</p>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {result.errors.map((s, i) => (
+                  <div key={i} className="text-[11px] border border-red-100 bg-red-50 rounded p-1.5">
+                    <span className="font-medium text-red-800">E {s.cusdecNumber}</span> — <span className="text-red-600">{s.error}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Merge PDF ─────────────────────────────────────────────────────────────
+// General-purpose merge: any mix of already-saved Drive links and freshly
+// uploaded local files, under a name of your choosing, then download or
+// mail — independent of any CUSDEC/automation record.
+interface MergeSource { id: string; kind: 'drive' | 'upload'; driveUrl: string; file: File | null; fileName: string }
+function newSource(): MergeSource { return { id: Math.random().toString(36).slice(2), kind: 'drive', driveUrl: '', file: null, fileName: '' } }
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+function MergePdfPanel() {
+  const [sources, setSources] = useState<MergeSource[]>([newSource(), newSource()])
+  const [outputName, setOutputName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [merged, setMerged] = useState<{ base64: string; fileName: string } | null>(null)
+  const [sendOpen, setSendOpen] = useState(false)
+
+  function updateSource(id: string, patch: Partial<MergeSource>) {
+    setSources(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s))
+  }
+  function removeSource(id: string) {
+    setSources(prev => prev.filter(s => s.id !== id))
+  }
+
+  async function merge() {
+    setBusy(true); setError(''); setMerged(null)
+    try {
+      const payload = await Promise.all(sources.map(async s => {
+        if (s.kind === 'drive') {
+          if (!s.driveUrl.trim()) return null
+          return { driveUrl: s.driveUrl.trim() }
+        }
+        if (!s.file) return null
+        return { base64: await fileToBase64(s.file), fileName: s.file.name }
+      }))
+      const valid = payload.filter(Boolean)
+      if (valid.length < 2) throw new Error('Add at least 2 PDFs to merge')
+      const name = outputName.trim() || `Merged_${new Date().toISOString().slice(0, 10)}`
+      const res = await fetch('/api/merge-pdfs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ sources: valid, outputName: name }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Merge failed')
+      setMerged({ base64: d.base64, fileName: d.fileName })
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function downloadMerged() {
+    if (!merged) return
+    const bytes = Uint8Array.from(atob(merged.base64), c => c.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+    const a = document.createElement('a'); a.href = url; a.download = merged.fileName; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function onSaveMergedModal(): Promise<{ ok: boolean; results?: { fileName: string; driveLink: string; docType?: string }[]; error?: string }> {
+    if (!merged) return { ok: false, error: 'Nothing merged yet' }
+    try {
+      const h = await authHeader()
+      const dr = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64: merged.base64, fileName: merged.fileName, mimeType: 'application/pdf', docType: 'merged_pdf' }),
+      })
+      const dd = await dr.json()
+      if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
+      return { ok: true, results: [{ fileName: merged.fileName, driveLink: dd.driveLink, docType: 'merged_pdf' }] }
+    } catch (e: any) { return { ok: false, error: e.message } }
+  }
+
+  return (
+    <div className="card max-w-2xl">
+      <h2 className="font-semibold text-gray-900 text-sm mb-2">Merge PDF</h2>
+      <p className="text-xs text-gray-500 mb-4">Combine any PDFs — a Drive link, or a file uploaded from this computer — into one, under a name you choose.</p>
+
+      <div className="space-y-2 mb-3">
+        {sources.map((s, idx) => (
+          <div key={s.id} className="flex items-center gap-2 border border-gray-100 rounded-lg p-2">
+            <span className="text-[11px] text-gray-400 w-4">{idx + 1}</span>
+            <div className="flex gap-1 bg-gray-100 rounded-md p-0.5">
+              <button onClick={() => updateSource(s.id, { kind: 'drive' })}
+                className={`px-2 py-1 rounded text-[11px] font-medium ${s.kind === 'drive' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>Drive Link</button>
+              <button onClick={() => updateSource(s.id, { kind: 'upload' })}
+                className={`px-2 py-1 rounded text-[11px] font-medium ${s.kind === 'upload' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>Upload</button>
+            </div>
+            {s.kind === 'drive' ? (
+              <input value={s.driveUrl} onChange={e => updateSource(s.id, { driveUrl: e.target.value })}
+                placeholder="Paste a Drive PDF link..." className="input text-xs flex-1"/>
+            ) : (
+              <input type="file" accept="application/pdf" onChange={e => updateSource(s.id, { file: e.target.files?.[0] || null })}
+                className="text-xs flex-1"/>
+            )}
+            {sources.length > 2 && (
+              <button onClick={() => removeSource(s.id)} className="text-gray-300 hover:text-red-500"><X size={14}/></button>
+            )}
+          </div>
+        ))}
+      </div>
+      <button onClick={() => setSources(prev => [...prev, newSource()])} className="flex items-center gap-1 text-xs text-blue-600 hover:underline mb-4">
+        <Plus size={13}/>Add another PDF
+      </button>
+
+      <Field label="Output file name">
+        <input value={outputName} onChange={e => setOutputName(e.target.value)} placeholder="e.g. Merged Documents" className="input text-sm"/>
+      </Field>
+
+      <button onClick={merge} disabled={busy} className="btn-primary flex items-center gap-2 mt-3">
+        {busy ? <Loader size={14} className="animate-spin"/> : <GitMerge size={14}/>}Merge
+      </button>
+      {error && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
+
+      {merged && (
+        <div className="mt-4 pt-4 border-t border-gray-100 flex gap-2">
+          <button onClick={downloadMerged} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm text-white font-medium" style={{ background: '#1B3A5C' }}>
+            <Download size={14}/> Download
+          </button>
+          <button onClick={() => setSendOpen(true)} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 hover:bg-gray-50">
+            <Mail size={14}/> Mail
+          </button>
+        </div>
+      )}
+      {sendOpen && merged && (
+        <SendModal
+          label={merged.fileName}
+          docType="merged_pdf"
+          onSave={onSaveMergedModal}
+          onGetDriveLinks={async () => (await onSaveMergedModal()).results || []}
+          onClose={() => setSendOpen(false)}
+          onDone={() => setSendOpen(false)}
+        />
+      )}
+    </div>
+  )
 }
 
 function BoatNoteCheckPanel() {

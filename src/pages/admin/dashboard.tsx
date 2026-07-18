@@ -16,7 +16,7 @@ interface Summary {
   pendingCusdecPassed: PendingGroup<{ id: string; file_name: string; reason: string; reason_note: string | null; created_at: string }>
   shipmentsPending: PendingGroup<{ id: string; reference: string | null; shipper: string; invoice_number: string; packing_number: string | null; new_invoice: string | null; new_packing: string | null; cap: string | null; invoice_drive_url: string | null; packing_drive_url: string | null; license_drive_url: string | null; created_at: string; locked_by?: string | null; locked_by_name?: string | null }>
   cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number; containers: VesselContainer[] }>
-  boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number; containers: VesselContainer[] }>
+  boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number; containers: VesselContainer[]; hasBoatNote: boolean; hasPartyCopy: boolean }>
   releasePending: PendingGroup<{ cusdecId: string; number: string; exporter: string }>
   closingPassed: PendingGroup<{ cdnId: string; containerNo: string; cusdecNumber: string; vessel: string; voyage: string; closingTime: string }>
 }
@@ -73,6 +73,61 @@ function DashboardContent() {
   const [currentUserId, setCurrentUserId] = useState('')
   const [pickingShipmentId, setPickingShipmentId] = useState<string | null>(null)
   const [shipmentPickError, setShipmentPickError] = useState('')
+
+  // Boat Note Pending > Pick — select a batch of pending CUSDECs, merge
+  // their Boat Note / Party's Copy / CDN PDFs (whichever categories are
+  // ticked) into one file each, and send them through the normal
+  // notify/pick flow (document-uploads, is_saved_to_db:false so it's
+  // cleaned up from Drive once whoever picks it does Mail/Download).
+  const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([])
+  const [pickModalOpen, setPickModalOpen] = useState(false)
+  const [pickIncludeBoat, setPickIncludeBoat] = useState(true)
+  const [pickIncludeParty, setPickIncludeParty] = useState(true)
+  const [pickIncludeCdn, setPickIncludeCdn] = useState(true)
+  const [pickBusy, setPickBusy] = useState(false)
+  const [pickError, setPickError] = useState('')
+  const [pickDone, setPickDone] = useState('')
+
+  function togglePendingSelected(id: string) {
+    setSelectedPendingIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+
+  async function confirmPick() {
+    if (!selectedPendingIds.length) return
+    setPickBusy(true); setPickError(''); setPickDone('')
+    try {
+      const h = await authHeader()
+      const mr = await fetch('/api/merge-pending-docs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ cusdec_ids: selectedPendingIds, includeBoat: pickIncludeBoat, includeParty: pickIncludeParty, includeCdn: pickIncludeCdn }),
+      })
+      const md = await mr.json()
+      if (!mr.ok) throw new Error(md.error || 'Merge failed')
+
+      for (const f of md.files as { fileName: string; base64: string; docType: string }[]) {
+        const dr = await fetch('/api/upload-to-drive', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+          body: JSON.stringify({ base64: f.base64, fileName: f.fileName, mimeType: 'application/pdf', docType: f.docType }),
+        })
+        const dd = await dr.json()
+        if (!dr.ok || !dd.driveLink) throw new Error(dd.error || 'Drive upload failed')
+        await fetch('/api/document-uploads', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+          body: JSON.stringify({
+            file_name: f.fileName, drive_url: dd.driveLink, doc_type: f.docType,
+            is_saved_to_db: false, notify: true, reason: 'Boat Note Passed',
+          }),
+        })
+      }
+      setPickDone(`✓ ${md.files.length} merged file(s) sent — pick them up from My Tasks`)
+      setSelectedPendingIds([])
+      setPickModalOpen(false)
+    } catch (e: any) {
+      setPickError(e.message)
+    } finally {
+      setPickBusy(false)
+    }
+  }
 
   async function load(silent = false) {
     const res = await fetch('/api/dashboard-summary', { headers: await authHeader() })
@@ -277,19 +332,35 @@ function DashboardContent() {
 
         {expanded === 'boatnote' && (
           <div className="card mb-4">
-            <h2 className="font-semibold text-gray-900 mb-3 text-sm">CAP complete, still waiting on Boat Note</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-gray-900 text-sm">CAP complete, still waiting on Boat Note</h2>
+              {selectedPendingIds.length > 0 && (
+                <button onClick={() => { setPickModalOpen(true); setPickError('') }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white" style={{ background: '#3b82f6' }}>
+                  <CheckSquare size={13}/>Pick ({selectedPendingIds.length})
+                </button>
+              )}
+            </div>
+            {pickDone && <p className="text-xs text-green-600 mb-3">{pickDone}</p>}
             {summary.boatNotePending.items.length === 0 ? (
               <p className="text-xs text-gray-400 py-4 text-center">None — every CAP-complete CUSDEC has passed Boat Note</p>
             ) : (
               <div className="space-y-1.5 max-h-96 overflow-y-auto">
                 {summary.boatNotePending.items.map(c => (
                   <div key={c.cusdecId} className="text-xs border border-gray-100 rounded-lg p-2.5">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-gray-800">E {c.number}</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <button onClick={() => togglePendingSelected(c.cusdecId)} className="flex-shrink-0">
+                        {selectedPendingIds.includes(c.cusdecId) ? <CheckSquare size={15} className="text-blue-600"/> : <Square size={15} className="text-gray-300"/>}
+                      </button>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-medium text-gray-800">E {c.number}</p>
+                          {c.hasBoatNote && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">B</span>}
+                          {c.hasPartyCopy && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">P</span>}
+                        </div>
                         <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                       </div>
-                      <span className="font-medium text-blue-700">{c.passedCount}/{c.cdnCount} passed</span>
+                      <span className="font-medium text-blue-700 flex-shrink-0">{c.passedCount}/{c.cdnCount} passed</span>
                       <a href={`/admin/shipment-overview?number=${encodeURIComponent(c.number)}`} className="text-blue-600 hover:underline flex-shrink-0">View →</a>
                     </div>
                     <VesselContainerList containers={c.containers}/>
@@ -297,6 +368,39 @@ function DashboardContent() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {pickModalOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+            <div className="bg-white rounded-2xl w-full max-w-sm">
+              <div className="p-5 border-b">
+                <h2 className="font-bold text-gray-900 text-sm">Pick {selectedPendingIds.length} CUSDEC(s)</h2>
+              </div>
+              <div className="p-5 space-y-2">
+                <label className="flex items-center gap-3 p-2.5 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50">
+                  <input type="checkbox" checked={pickIncludeBoat} onChange={e => setPickIncludeBoat(e.target.checked)} className="w-4 h-4"/>
+                  <span className="text-sm text-gray-800">Boat Note</span>
+                </label>
+                <label className="flex items-center gap-3 p-2.5 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50">
+                  <input type="checkbox" checked={pickIncludeParty} onChange={e => setPickIncludeParty(e.target.checked)} className="w-4 h-4"/>
+                  <span className="text-sm text-gray-800">Party's Copy</span>
+                </label>
+                <label className="flex items-center gap-3 p-2.5 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50">
+                  <input type="checkbox" checked={pickIncludeCdn} onChange={e => setPickIncludeCdn(e.target.checked)} className="w-4 h-4"/>
+                  <span className="text-sm text-gray-800">CDNs</span>
+                </label>
+                <p className="text-[11px] text-gray-400">Merges each ticked category across all selected CUSDECs into one PDF, uploads it, and sends it to My Tasks (reason: Boat Note Passed).</p>
+                {pickError && <p className="text-xs text-red-600">{pickError}</p>}
+              </div>
+              <div className="flex gap-3 p-5 border-t">
+                <button onClick={() => setPickModalOpen(false)} disabled={pickBusy} className="btn-secondary flex-1 disabled:opacity-50">Cancel</button>
+                <button onClick={confirmPick} disabled={pickBusy || (!pickIncludeBoat && !pickIncludeParty && !pickIncludeCdn)}
+                  className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-40">
+                  {pickBusy ? <Loader size={14} className="animate-spin"/> : <CheckSquare size={14}/>}Merge &amp; Send
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

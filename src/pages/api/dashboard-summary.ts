@@ -38,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const [{ data: shipments }, { data: cusdecs }, { data: cdns }, { data: reasonDocsRaw }, { data: vesselTriggers }] = await Promise.all([
       shipmentsQuery,
-      supabaseAdmin.from('cusdec').select('id, code, number, exporter, cap, export_release_passed'),
+      supabaseAdmin.from('cusdec').select('id, code, number, exporter, cap, export_release_passed, boat_note_url, party_copy_url'),
       supabaseAdmin.from('cdn').select('id, code, cusdec_number, container_no, vessel, voyage, boat_note_passed, export_release_passed'),
       // Reason-tagged Quick Upload queue — a document tagged reason:'CUSDEC
       // Passed' counts as pending only while it's still sitting unpicked in
@@ -129,7 +129,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (capKnown && own.length < cap) {
         cdnPending.push({ cusdecId: c.id, number: c.number, exporter: c.exporter, cap, cdnCount: own.length, containers })
       } else if (capComplete && !allBoatNotePassed) {
-        boatNotePending.push({ cusdecId: c.id, number: c.number, exporter: c.exporter, cap: cap || null, cdnCount: own.length, passedCount: own.filter(d => d.boat_note_passed).length, containers })
+        boatNotePending.push({
+          cusdecId: c.id, number: c.number, exporter: c.exporter, cap: cap || null, cdnCount: own.length,
+          passedCount: own.filter(d => d.boat_note_passed).length, containers,
+          hasBoatNote: !!c.boat_note_url, hasPartyCopy: !!c.party_copy_url,
+        })
       }
 
       if (allBoatNotePassed && !c.export_release_passed) {

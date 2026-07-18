@@ -3,6 +3,7 @@ import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search, FileCode, ScanText, Copy, Save, Download, AlertTriangle, CheckCircle, Send } from 'lucide-react'
 import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
+import SheetPickerModal from '@/components/admin/SheetPickerModal'
 import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
 import { ALWAYS_TAB_TYPES, DEDICATED_TAB_TYPES } from '@/lib/docTypes'
 
@@ -155,6 +156,7 @@ function BoatNoteContent() {
   const [bnFillSheetGid, setBnFillSheetGid] = useState('')
   const [bnPrintSheetGid, setBnPrintSheetGid] = useState('')
   const [bnSheetPickNeeded, setBnSheetPickNeeded] = useState(false)
+  const [bnSheetPickMessage, setBnSheetPickMessage] = useState('')
 
   // ── Boat Note: Manual Entry sub-tab (no CUSDEC — type the template
   // fields by hand, generate the same Google Sheets template PDF, then
@@ -209,7 +211,8 @@ function BoatNoteContent() {
         if (d.needsSheetSelection) {
           setBnSheets(d.sheets || [])
           setBnSheetPickNeeded(true)
-          setStatus(`⚠ ${d.error}`)
+          setBnSheetPickMessage(d.error)
+          setStatus('')
           return
         }
         throw new Error(d.error || 'Generate failed')
@@ -388,7 +391,8 @@ function BoatNoteContent() {
       if (pdfD.needsSheetSelection) {
         setBnSheets(pdfD.sheets || [])
         setBnSheetPickNeeded(true)
-        setStatus(`⚠ ${pdfD.error}`)
+        setBnSheetPickMessage(pdfD.error)
+        setStatus('')
         return
       }
       throw new Error(pdfD.error || 'Template PDF generate failed')
@@ -802,28 +806,7 @@ function BoatNoteContent() {
                     </div>
                   )
                 })}
-                {bnSheetPickNeeded && (
-                  <div className="border border-amber-200 bg-amber-50 rounded-lg p-3">
-                    <p className="text-xs font-medium text-amber-700 mb-2">No CUSDEC to auto-route by — pick the tabs to use:</p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Fill Sheet</label>
-                        <select value={bnFillSheetGid} onChange={e => setBnFillSheetGid(e.target.value)} className="input text-xs w-full">
-                          <option value="">— select —</option>
-                          {bnSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Print Sheet</label>
-                        <select value={bnPrintSheetGid} onChange={e => setBnPrintSheetGid(e.target.value)} className="input text-xs w-full">
-                          <option value="">— select —</option>
-                          {bnSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <button onClick={generateManualBn} disabled={bnManualGenerating || (bnSheetPickNeeded && (!bnFillSheetGid || !bnPrintSheetGid))}
+                <button onClick={generateManualBn} disabled={bnManualGenerating}
                   className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
                   style={{ background: '#3b82f6' }}>
                   {bnManualGenerating ? <Loader size={14} className="animate-spin"/> : <Anchor size={14}/>}
@@ -927,34 +910,6 @@ function BoatNoteContent() {
             <h2 className="font-semibold text-gray-900 text-sm mb-3">3 · Download / Email</h2>
 
             {status && <p className={`text-xs mb-3 font-medium ${statusColor}`}>{status}</p>}
-
-            {bnSheetPickNeeded && (
-              <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 mb-3">
-                <p className="text-xs font-medium text-amber-700 mb-2">This shipper isn't covered by a Sheet Route — pick the tabs to use:</p>
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Fill Sheet</label>
-                    <select value={bnFillSheetGid} onChange={e => setBnFillSheetGid(e.target.value)} className="input text-xs w-full">
-                      <option value="">— select —</option>
-                      {bnSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Print Sheet</label>
-                    <select value={bnPrintSheetGid} onChange={e => setBnPrintSheetGid(e.target.value)} className="input text-xs w-full">
-                      <option value="">— select —</option>
-                      {bnSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <button onClick={() => generateBnPdf(cusdecNo, boatNotes.length)} disabled={generating || !bnFillSheetGid || !bnPrintSheetGid}
-                  className="flex items-center justify-center gap-2 w-full py-2 rounded-lg text-xs text-white font-medium disabled:opacity-40"
-                  style={{ background: '#3b82f6' }}>
-                  {generating ? <Loader size={13} className="animate-spin"/> : <FileDown size={13}/>}
-                  Generate PDF with these sheets
-                </button>
-              </div>
-            )}
 
             {bnPdf ? (
               <>
@@ -1067,6 +1022,20 @@ function BoatNoteContent() {
         <div className="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-100 text-xs text-blue-700">
           <span className="font-semibold">PDF Format:</span> SHIPPING NOTE / BOAT NOTE – Exp 3a · Landscape A4 · All fields from Excel b2 sheet (Shipper, Consignee, Voyage, Vessel, Port of Loading/Discharge, Container, CDN No., Gross Weight, Cube, SLPA, Company, Declarant)
         </div>
+
+        {bnSheetPickNeeded && (
+          <SheetPickerModal
+            message={bnSheetPickMessage}
+            sheets={bnSheets}
+            fillGid={bnFillSheetGid}
+            printGid={bnPrintSheetGid}
+            onFillChange={setBnFillSheetGid}
+            onPrintChange={setBnPrintSheetGid}
+            onConfirm={() => bnEntryMode === 'cusdec' ? generateBnPdf(cusdecNo, boatNotes.length) : generateManualBn()}
+            onClose={() => setBnSheetPickNeeded(false)}
+            busy={generating || bnManualGenerating}
+          />
+        )}
 
         </>
         )}
@@ -1603,6 +1572,7 @@ function PartiesCopyPanel() {
   const [proFillGid, setProFillGid] = useState('')
   const [proPrintGid, setProPrintGid] = useState('')
   const [proSheetPickNeeded, setProSheetPickNeeded] = useState(false)
+  const [proSheetPickMessage, setProSheetPickMessage] = useState('')
 
   // A Google Sheets template saved under a "Party's Copy"-ish document_type
   // (see isPartiesCopySlug) — Generate always produces this template's PDF;
@@ -1670,7 +1640,8 @@ function PartiesCopyPanel() {
         if (d.needsSheetSelection) {
           setProSheets(d.sheets || [])
           setProSheetPickNeeded(true)
-          setStatus(`⚠ ${d.error}`)
+          setProSheetPickMessage(d.error)
+          setStatus('')
           return
         }
         throw new Error(d.error || 'Generate failed')
@@ -1816,34 +1787,27 @@ function PartiesCopyPanel() {
                 </p>
               )}
 
-              {proSheetPickNeeded && (
-                <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 mb-3">
-                  <p className="text-xs font-medium text-amber-700 mb-2">This shipper isn't covered by a Sheet Route — pick the tabs to use:</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Fill Sheet</label>
-                      <select value={proFillGid} onChange={e => setProFillGid(e.target.value)} className="input text-xs w-full">
-                        <option value="">— select —</option>
-                        {proSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Print Sheet</label>
-                      <select value={proPrintGid} onChange={e => setProPrintGid(e.target.value)} className="input text-xs w-full">
-                        <option value="">— select —</option>
-                        {proSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              )}
-              <button onClick={generatePro} disabled={!eligible || proGenerating || !tplDocType || (proSheetPickNeeded && (!proFillGid || !proPrintGid))}
+              <button onClick={generatePro} disabled={!eligible || proGenerating || !tplDocType}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
                 style={{ background: '#1B3A5C' }}>
                 {proGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
                 Generate Pro
               </button>
               <p className="text-[11px] text-gray-400 mt-2">Merges the original CUSDEC PDF with the template output (CUSDEC pages first).</p>
+
+              {proSheetPickNeeded && (
+                <SheetPickerModal
+                  message={proSheetPickMessage}
+                  sheets={proSheets}
+                  fillGid={proFillGid}
+                  printGid={proPrintGid}
+                  onFillChange={setProFillGid}
+                  onPrintChange={setProPrintGid}
+                  onConfirm={generatePro}
+                  onClose={() => setProSheetPickNeeded(false)}
+                  busy={proGenerating}
+                />
+              )}
 
               {proPdf && (
                 <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
@@ -1938,6 +1902,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   // routed tab was deleted), so the same Fill/Print picker as Manual Entry
   // is reused rather than silently guessing a sheet.
   const [cusdecNeedsSheetPick, setCusdecNeedsSheetPick] = useState(false)
+  const [sheetPickMessage, setSheetPickMessage] = useState('')
 
   useEffect(() => {
     async function load() {
@@ -2022,7 +1987,8 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         if (d.needsSheetSelection) {
           setManualSheets(d.sheets || [])
           setCusdecNeedsSheetPick(true)
-          setStatus(`⚠ ${d.error}`)
+          setSheetPickMessage(d.error)
+          setStatus('')
           return
         }
         throw new Error(d.error || 'Generate failed')
@@ -2111,34 +2077,27 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
             ))}
             {filteredCusdecs.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDECs found</p>}
           </div>
-          {cusdecNeedsSheetPick && (
-            <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 mb-3">
-              <p className="text-xs font-medium text-amber-700 mb-2">This shipper isn't covered by a Sheet Route — pick the tabs to use:</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Fill Sheet</label>
-                  <select value={fillSheetGid} onChange={e => setFillSheetGid(e.target.value)} className="input text-xs w-full">
-                    <option value="">— select —</option>
-                    {manualSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Print Sheet</label>
-                  <select value={printSheetGid} onChange={e => setPrintSheetGid(e.target.value)} className="input text-xs w-full">
-                    <option value="">— select —</option>
-                    {manualSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-                  </select>
-                </div>
-              </div>
-            </div>
-          )}
-          <button onClick={generate} disabled={generating || !selectedCusdecId || (cusdecNeedsSheetPick && (!fillSheetGid || !printSheetGid))}
+          <button onClick={generate} disabled={generating || !selectedCusdecId}
             className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
             style={{ background: '#3b82f6' }}>
             {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
             Generate {label}
           </button>
         </div>
+      )}
+
+      {cusdecNeedsSheetPick && (
+        <SheetPickerModal
+          message={sheetPickMessage}
+          sheets={manualSheets}
+          fillGid={fillSheetGid}
+          printGid={printSheetGid}
+          onFillChange={setFillSheetGid}
+          onPrintChange={setPrintSheetGid}
+          onConfirm={generate}
+          onClose={() => setCusdecNeedsSheetPick(false)}
+          busy={generating}
+        />
       )}
 
       {entryMode === 'manual' && manualSheets.length > 0 && (
