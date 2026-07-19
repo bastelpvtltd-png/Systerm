@@ -5,6 +5,19 @@ import { buildAsycudaXml, resolveXmlValues, defaultXmlMappings } from '@/lib/asy
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
+// Lets a mapping's column_name reference a slice of a composite/space-
+// separated column instead of only whole columns — e.g. cdn.cdn_no is
+// stored as one string ("2026 CBEX1 C 46385" = "YEAR CODE SERIAL NUMBER"),
+// so a mapping can target just one token with "cdn_no[1]" rather than
+// needing a separate real column per token.
+function resolveColumnValue(row: Record<string, any> | null | undefined, columnName: string): string {
+  if (!row) return ''
+  const m = columnName.match(/^([a-zA-Z0-9_]+)\[(\d+)\]$/)
+  if (!m) return row[columnName] ?? ''
+  const parts = String(row[m[1]] ?? '').trim().split(/\s+/)
+  return parts[Number(m[2])] ?? ''
+}
+
 function getDriveClient() {
   const auth = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET)
   auth.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN })
@@ -88,10 +101,10 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
         let value = ''
         if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
         else if (m.data_source === 'cusdec') {
-          value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
+          value = cusdecRow ? resolveColumnValue(cusdecRow, m.column_name) : ((manual_values || {})[m.field_label] ?? '')
         } else if (m.data_source === 'cdn') {
-          if (m.is_repeating && cdnRows.length) value = cdnRows.map(r => r[m.column_name] ?? '').join('\n')
-          else value = cdnRows[0] ? (cdnRows[0][m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
+          if (m.is_repeating && cdnRows.length) value = cdnRows.map(r => resolveColumnValue(r, m.column_name)).join('\n')
+          else value = cdnRows[0] ? resolveColumnValue(cdnRows[0], m.column_name) : ((manual_values || {})[m.field_label] ?? '')
         }
         const escaped = m.field_label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         content = content.replace(new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, 'g'), String(value))

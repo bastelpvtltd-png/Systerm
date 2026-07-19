@@ -1043,7 +1043,7 @@ function BoatNoteContent() {
         )}
 
         {subTab === 'cusdec-xml' && canCusdecXml && <CusdecXmlPanel/>}
-        {subTab === 'cdn-text' && canCdnText && <CdnTextPanel/>}
+        {subTab === 'cdn-text' && canCdnText && <CustomDocPanel documentType="cdn_text" label="CDN Text"/>}
         {subTab === 'parties-copy' && canPartiesCopy && <PartiesCopyPanel/>}
         {subTab.startsWith('custom:') && canBoatNote && (() => {
           const value = subTab.slice('custom:'.length)
@@ -1389,152 +1389,6 @@ function CusdecXmlPanel() {
           </>
         )}
       </div>
-    </div>
-  )
-}
-
-// ── CDN Text Tab ──────────────────────────────────────────────────────────
-function CdnTextPanel() {
-  const [cdns, setCdns] = useState<CdnRec[]>([])
-  const [cusdecs, setCusdecs] = useState<CusdecRec[]>([])
-  const [search, setSearch] = useState('')
-  const [selectedId, setSelectedId] = useState('')
-  const [fields, setFields] = useState<Record<string, string>>({})
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    function load() {
-      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
-      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
-    }
-    load()
-    const t = setInterval(load, 20000)
-    return () => clearInterval(t)
-  }, [])
-
-  const filtered = cdns.filter(c => !search || c.container_no?.toLowerCase().includes(search.toLowerCase()) || c.shipper?.toLowerCase().includes(search.toLowerCase()))
-
-  function selectCdn(id: string) {
-    setSelectedId(id)
-    const cdn = cdns.find(c => c.id === id)
-    if (!cdn) return
-    const cusdec = cusdecs.find(c => c.code === cdn.code && c.number === cdn.cusdec_number)
-
-    // cdn_no is stored as one composite string — "2026 CBEX1 C 46385" i.e.
-    // "YEAR CODE SERIAL NUMBER" — split it instead of dumping the whole
-    // thing into the NBR line (which duplicated the COD/YEA/SER lines above
-    // it) or hardcoding today's year/a fixed 'C' serial.
-    const cdnNoParts = (cdn.cdn_no || '').trim().split(/\s+/)
-    const [cdnYear, cdnCode, cdnSerial, cdnNumber] = cdnNoParts.length === 4
-      ? cdnNoParts : ['', '', '', cdn.cdn_no || '']
-
-    setFields({
-      officeCode: cdnCode || cusdec?.code || cdn.code || '', year: cdnYear || new Date().getFullYear().toString(),
-      serial: cdnSerial || 'C', number: cdnNumber,
-      // cdn has no consignee column of its own — the buyer's name/address
-      // only lives on the matched CUSDEC row.
-      shipper: cdn.shipper || '', consignee: cusdec?.consignee || '',
-      linkedCusdecRef: cusdec?.number || '', voyageDate: cdn.voyage_date || '', bl: cdn.bl_no || '',
-      driver: cdn.driver_name || '', terminal: cdn.location || '', lorry: cdn.lorry_no || '', trailer: cdn.trailer_no || '',
-      loadPort: cdn.loading_port || '', dischPort: cdn.discharge_port || '', vessel: cdn.vessel || '',
-      voc: cdn.voc || '', coc: cdn.coc || '', slpa: cdn.slpa_no || '',
-      pkgNo: cdn.pkg_no || '', pkgType: cdn.pkg_type || '', volume: cdn.volume || '',
-      goods: cdn.goods_description || '', container: cdn.container_no || '', conType: cdn.con_type || '',
-      seal: cdn.seal_no || '', marks: cdn.marks || '', gross: cdn.gross_mass || '',
-      // Declarant code is the clearing agent's own registration — fixed
-      // across every declaration, not something that varies per shipment —
-      // so it falls back to the known constant when no per-CUSDEC value has
-      // been saved yet (cusdec.declarant_code is a new, mostly-empty column).
-      preparedBy: '', declarantCode: cusdec?.declarant_code || '1748813322525',
-    })
-  }
-
-  function setF(key: string, v: string) { setFields(prev => ({ ...prev, [key]: v })) }
-
-  const textOutput = [
-    `COD: ${fields.officeCode || ''}`, `YEA: ${fields.year || ''}`, `SER: ${fields.serial || ''}`, `NBR: ${fields.number || ''}`,
-    `COD: <unknown>`, `YEA: <unknown>`, `SER: <unknown>`, `NBR: <unknown>`,
-    `ADD: ${fields.shipper || ''}`, `ADD: ${fields.consignee || ''}`,
-    `NBR: ${fields.linkedCusdecRef || ''}`, `DAT: ${fields.voyageDate || ''}`, `BOL: ${fields.bl || ''}`,
-    `DRV: ${fields.driver || ''}`, `CLN: ${fields.terminal || ''}`, `NBR: ${fields.lorry || ''}`, `TRL: ${fields.trailer || ''}`,
-    `LOD: ${fields.loadPort || ''}`, `ULD: ${fields.dischPort || ''}`, `EXV: ${fields.vessel || ''}`,
-    `VSL: ${fields.voc || ''}`, `OPC: ${fields.coc || ''}`, `SLP: ${fields.slpa || ''}`,
-    `NBR: ${fields.pkgNo || ''}`, `TYP: ${fields.pkgType || ''}`, `VOL: ${fields.volume || ''}`,
-    `DSC: ${fields.goods || ''}`, `NBR: ${fields.container || ''}`, `TYP: ${fields.conType || ''}`,
-    `SEA: ${fields.seal || ''}`, `MRK: ${fields.marks || ''}`, `GWT: ${fields.gross || ''}`, `TMP: ...`,
-    `NAM: ${fields.preparedBy || ''}`, `DAT: ${new Date().toISOString().slice(0, 19).replace('T', ' ')}.0`,
-    `COD: ${fields.declarantCode || ''}`, `CNT: 1`,
-  ].join('\n')
-
-  function copyText() {
-    navigator.clipboard.writeText(textOutput).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
-  }
-
-  const editableFieldLabels: [string, string][] = [
-    ['officeCode', 'Office Code'], ['year', 'Year'], ['serial', 'Serial'], ['number', 'CDN Number'],
-    ['shipper', 'Shipper (Address)'], ['consignee', 'Consignee (Address)'], ['linkedCusdecRef', 'Linked CUSDEC Ref'],
-    ['voyageDate', 'Voyage Date'], ['bl', 'B/L No.'], ['driver', 'Driver'], ['terminal', 'Terminal'],
-    ['lorry', 'Lorry No.'], ['trailer', 'Trailer No.'], ['loadPort', 'Loading Port'], ['dischPort', 'Discharge Port'],
-    ['vessel', 'Vessel'], ['voc', 'VOC'], ['coc', 'COC'], ['slpa', 'SLPA No.'],
-    ['pkgNo', 'Package No.'], ['pkgType', 'Package Type'], ['volume', 'Volume'], ['goods', 'Goods Description'],
-    ['container', 'Container No.'], ['conType', 'Container Type'], ['seal', 'Seal No.'], ['marks', 'Marks'], ['gross', 'Gross Mass'],
-    ['preparedBy', 'Prepared By (Name)'], ['declarantCode', 'Declarant Code'],
-  ]
-
-  return (
-    <div className="space-y-6">
-    <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-      <div className="card xl:col-span-1">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CDN</h2>
-        <div className="relative mb-3">
-          <Search size={14} className="absolute left-2.5 top-2.5 text-gray-400"/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container or shipper..."
-            className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"/>
-        </div>
-        <div className="space-y-1 max-h-96 overflow-y-auto">
-          {filtered.map(c => (
-            <button key={c.id} onClick={() => selectCdn(c.id)}
-              className={`w-full text-left p-2.5 rounded-lg border text-xs ${selectedId === c.id ? 'bg-blue-50 border-blue-300' : 'border-gray-100 hover:bg-gray-50'}`}>
-              <p className="font-bold text-gray-800">{c.container_no || '—'}</p>
-              <p className="text-gray-600 truncate">{c.shipper?.slice(0, 40)}</p>
-            </button>
-          ))}
-          {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CDNs found</p>}
-        </div>
-      </div>
-      <div className="xl:col-span-2 space-y-4">
-        {!selectedId ? (
-          <div className="card text-center py-16 text-gray-400 text-sm">Select a CDN to pull its data</div>
-        ) : (
-          <>
-            <div className="card">
-              <h3 className="font-semibold text-gray-900 text-sm mb-3">Fields (auto-pulled from database — edit here only, nothing writes back)</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {editableFieldLabels.map(([key, label]) => (
-                  <Field key={key} label={label}>
-                    <input value={fields[key] || ''} onChange={e => setF(key, e.target.value)} className="input"/>
-                  </Field>
-                ))}
-              </div>
-            </div>
-            <div className="card">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-gray-900 text-sm">Copy/Paste Text Output</h3>
-                <button onClick={copyText} className="btn-secondary flex items-center gap-2 text-xs">
-                  <Copy size={13}/>{copied ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
-              <textarea readOnly value={textOutput} rows={20} className="w-full font-mono text-xs border border-gray-200 rounded-lg p-3 bg-gray-50"/>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-
-    <div className="border-t border-gray-100 pt-6">
-      <h2 className="font-semibold text-gray-900 text-sm mb-3">Generate from Text Template</h2>
-      <CustomDocPanel documentType="cdn_text" label="CDN Text"/>
-    </div>
     </div>
   )
 }
@@ -2001,7 +1855,7 @@ function TricoGatePassPanel({ documentType, label }: { documentType: string; lab
 }
 
 function CustomDocPanel({ documentType, label }: { documentType: string; label: string }) {
-  const [tplFields, setTplFields] = useState<{ field_label: string; is_repeating: boolean }[]>([])
+  const [tplFields, setTplFields] = useState<{ field_label: string; is_repeating: boolean; data_source?: string }[]>([])
   const [tplLoadError, setTplLoadError] = useState('')
   const [formValues, setFormValues] = useState<Record<string, string[]>>({})
   const [generating, setGenerating] = useState(false)
@@ -2020,6 +1874,11 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const [cdns, setCdns] = useState<CdnRec[]>([])
   const [cusdecSearch, setCusdecSearch] = useState('')
   const [selectedCusdecId, setSelectedCusdecId] = useState('')
+  // A CUSDEC can have several CDNs (one per container) — when the template
+  // maps any field from 'cdn', which specific CDN's data goes in matters
+  // (e.g. CDN Text is inherently per-container), so it needs its own pick
+  // rather than always silently taking the first matching row.
+  const [selectedCdnId, setSelectedCdnId] = useState('')
 
   // Already-saved link for (selected CUSDEC, this document_type) — see
   // /api/document-link.ts. Drives the "already saved, replace?" confirm and
@@ -2050,7 +1909,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         const d = await res.json()
         const tpl = (d.templates || []).find((t: any) => t.document_type === documentType)
         if (!tpl) { setTplLoadError('No template configured for this document type yet'); return }
-        const fields = (tpl.template_mappings || []).map((m: any) => ({ field_label: m.field_label, is_repeating: !!m.is_repeating }))
+        const fields = (tpl.template_mappings || []).map((m: any) => ({ field_label: m.field_label, is_repeating: !!m.is_repeating, data_source: m.data_source }))
         setTplFields(fields)
         const init: Record<string, string[]> = {}
         fields.forEach((f: { field_label: string }) => { init[f.field_label] = [''] })
@@ -2089,6 +1948,14 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   )
   const selectedCusdec = cusdecs.find(c => c.id === selectedCusdecId) || null
   const selectedCdns = selectedCusdec ? cdns.filter(c => c.code === selectedCusdec.code && c.cusdec_number === selectedCusdec.number) : []
+  const needsCdnPick = tplFields.some(f => f.data_source === 'cdn')
+
+  // Re-pick whenever the CUSDEC changes: auto-select the only CDN if
+  // there's just one, otherwise leave it for the picker below.
+  useEffect(() => {
+    setSelectedCdnId(selectedCdns.length === 1 ? selectedCdns[0].id : '')
+  }, [selectedCusdecId, cdns]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const capNum = Number(selectedCusdec?.cap || 0)
   const cdnCount = selectedCdns.length
   const curIsBlue = !!selectedCusdec?.export_release_passed
@@ -2097,16 +1964,18 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const manualSheetChoiceRequired = entryMode === 'manual' && manualSheets.length > 0
   const sheetPickerVisible = manualSheetChoiceRequired || (entryMode === 'cusdec' && cusdecNeedsSheetPick)
   const manualSheetChoiceMissing = sheetPickerVisible && (!fillSheetGid || !printSheetGid)
+  const cdnPickMissing = entryMode === 'cusdec' && needsCdnPick && selectedCdns.length > 0 && !selectedCdnId
 
   async function generate() {
     if (entryMode === 'cusdec' && !selectedCusdecId) return
-    if (manualSheetChoiceMissing) return
+    if (manualSheetChoiceMissing || cdnPickMissing) return
     setGenerating(true); setStatus(''); setPdf(null)
     try {
       const h = await authHeader()
       const body: Record<string, unknown> = { document_type: documentType }
       if (entryMode === 'cusdec') {
         body.cusdec_id = selectedCusdecId
+        if (selectedCdnId) body.cdn_ids = [selectedCdnId]
       } else {
         const manual: Record<string, string> = {}
         Object.entries(formValues).forEach(([lbl, rows]) => { manual[lbl] = rows.join('\n') })
@@ -2213,7 +2082,24 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
             ))}
             {filteredCusdecs.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No CUSDECs found</p>}
           </div>
-          <button onClick={generate} disabled={generating || !selectedCusdecId}
+
+          {needsCdnPick && selectedCdns.length > 0 && (
+            <div className="mb-3">
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Container / CDN {selectedCdns.length > 1 && <span className="text-gray-400 font-normal">— this CUSDEC has {selectedCdns.length}, pick which one</span>}
+              </label>
+              <select value={selectedCdnId} onChange={e => setSelectedCdnId(e.target.value)} className="input text-xs w-full">
+                <option value="">— select —</option>
+                {selectedCdns.map(c => <option key={c.id} value={c.id}>{c.container_no || c.id}</option>)}
+              </select>
+              {cdnPickMissing && <p className="text-[11px] text-amber-600 mt-1">Pick a container above first.</p>}
+            </div>
+          )}
+          {needsCdnPick && selectedCusdec && selectedCdns.length === 0 && (
+            <p className="text-[11px] text-amber-600 mb-3">No CDN found yet for this CUSDEC — container-specific fields will be blank.</p>
+          )}
+
+          <button onClick={generate} disabled={generating || !selectedCusdecId || cdnPickMissing}
             className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
             style={{ background: '#3b82f6' }}>
             {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
