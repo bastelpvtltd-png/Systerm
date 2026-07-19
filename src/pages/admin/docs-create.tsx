@@ -2241,6 +2241,8 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         <SendModal
           label={pdf.fileName}
           docType={documentType}
+          cusdecId={entryMode === 'cusdec' ? selectedCusdecId : undefined}
+          cusdecNumber={entryMode === 'cusdec' ? selectedCusdec?.number : undefined}
           onSave={onSaveModal}
           onGetDriveLinks={onGetDriveLinksModal}
           onClose={() => setSendModalOpen(false)}

@@ -74,6 +74,18 @@ const PROTECTED_COLUMNS = new Set(['id', 'shipment_id', 'created_at', 'uploaded_
 // replace, CDN cap cleanup, or the Database browser) goes through this so a
 // row is never deleted without its uploaded PDF going with it.
 export async function deleteRowAndDriveFile(table: string, id: string, urlColumn: string = 'pdf_url'): Promise<void> {
+  // cusdec_document_links and final_document_tasks both cascade-delete their
+  // rows automatically (FK "on delete cascade" to cusdec), but that only
+  // removes the database rows — the actual Drive files they point at would
+  // otherwise be orphaned, since nothing else ever cleans those up.
+  if (table === 'cusdec') {
+    const [{ data: links }, { data: tasks }] = await Promise.all([
+      supabaseAdmin.from('cusdec_document_links').select('drive_url').eq('cusdec_id', id),
+      supabaseAdmin.from('final_document_tasks').select('drive_url').eq('cusdec_id', id).in('status', ['pending', 'picked']),
+    ])
+    await Promise.all([...(links || []), ...(tasks || [])].map(r => r.drive_url ? deleteDriveFileByUrl(r.drive_url) : Promise.resolve()))
+  }
+
   const { data } = await supabaseAdmin.from(table).select(urlColumn).eq('id', id).maybeSingle()
   const url = (data as any)?.[urlColumn]
   if (url) await deleteDriveFileByUrl(url)

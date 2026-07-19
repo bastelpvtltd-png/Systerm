@@ -15,10 +15,16 @@ export interface SendResultFile { fileName: string; driveLink: string; docType?:
 // everything in one message.
 const REASON_OPTIONS = ['', 'CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Final Document', 'Other']
 
-export default function SendModal({ label, uploaderName, docType, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason }: {
+export default function SendModal({ label, uploaderName, docType, cusdecId, cusdecNumber, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason }: {
   label: string
   uploaderName?: string
   docType?: string
+  // Only known when the caller is in Database mode with a CUSDEC picked —
+  // lets a "Final Document" send create its pending-approval task (see
+  // final_document_tasks). Reason-tagged sends with no CUSDEC (Manual
+  // Entry) just skip that — there's nothing to attach the task to.
+  cusdecId?: string
+  cusdecNumber?: string
   onSave: (referenceOverride?: string) => Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }>
   onGetDriveLinks: () => Promise<SendResultFile[]>
   onClose: () => void
@@ -120,6 +126,7 @@ export default function SendModal({ label, uploaderName, docType, onSave, onGetD
             file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: effectiveSave, notify: effectiveNotify, uploaded_by_name: uploaderName,
             reason: reason || undefined, reason_note: reason === 'Other' ? reasonNote.trim() : undefined,
             doc_type: f.docType || docType || undefined,
+            cusdec_id: cusdecId || undefined, cusdec_number: cusdecNumber || undefined,
           }),
         })
       ))

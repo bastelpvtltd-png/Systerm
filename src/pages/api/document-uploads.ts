@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'POST') {
       const authed = await requireAuth(req)
       if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
-      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note } = req.body
+      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note, cusdec_id, cusdec_number } = req.body
       if (!file_name) return res.status(400).json({ error: 'file_name required' })
 
       let uploadedByName = uploaded_by_name || ''
@@ -39,8 +39,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
         uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
         reason: reason || null, reason_note: reason === 'Other' ? (reason_note || null) : null,
+        cusdec_id: cusdec_id || null,
       }).select().single()
       if (error) throw error
+
+      // "Final Document" is its own approval queue (final_document_tasks),
+      // separate from the generic Notify/dashboard_notifications pending-item
+      // path — that path force-disables Notify once a document is already
+      // saved (the exact state a Final Document send is normally in), and its
+      // "pending item" shape (a flat file list) doesn't carry the CUSDEC
+      // number + document type the Dashboard panel needs to show.
+      if (reason === 'Final Document' && cusdec_id && doc_type && drive_url) {
+        await supabaseAdmin.from('final_document_tasks').insert({
+          cusdec_id, cusdec_number: cusdec_number || null, document_type: doc_type,
+          drive_url, file_name, status: 'pending',
+          created_by: authed.userId, created_by_name: uploadedByName,
+          document_id: data.id,
+        })
+        await supabaseAdmin.from('pick_history_log').insert({
+          document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'final_document_pending',
+        })
+      }
 
       // Upload-time work count: insert immediately when doc is saved so the
       // count reflects uploads, not just mail/downloads (log-document-action

@@ -647,6 +647,7 @@ export const SECTION_ITEMS = [
   { key: 'section:dashboard.incoming',         tabHref: '/admin/dashboard', label: 'Incoming (Notify) panel' },
   { key: 'section:dashboard.my-picked-tasks',  tabHref: '/admin/dashboard', label: 'My Picked Tasks panel' },
   { key: 'section:dashboard.pick-history',     tabHref: '/admin/dashboard', label: 'Pick History panel' },
+  { key: 'section:dashboard.final-documents',  tabHref: '/admin/dashboard', label: 'Pending Final Document panel' },
   { key: 'section:pick-history.delete',        tabHref: '/admin/dashboard', label: 'Pick History: delete entries' },
   { key: 'section:shipment-entry.form',        tabHref: '/admin/shipment-entry', label: 'Shipment entry form' },
   { key: 'section:templates.manage',           tabHref: '/admin/templates', label: 'Template upload & fill' },

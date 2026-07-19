@@ -4,7 +4,7 @@ import { authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
 import {
   Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
-  Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square, Trash2,
+  Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square, Trash2, FileCheck,
 } from 'lucide-react'
 
 interface PendingGroup<T> { count: number; items: T[] }
@@ -34,6 +34,16 @@ function ReasonBadge({ reason, note }: { reason?: string | null; note?: string |
       {reason === 'Other' && note ? note : reason}
     </span>
   )
+}
+
+function docTypeLabel(v: string) { return v.split('_').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') }
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 }
 
 // Shown under a CDN/Boat Note Pending row — one line per container, but
@@ -450,6 +460,7 @@ function DashboardContent() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
           {has('section:dashboard.incoming') && <IncomingPanel onPicked={() => setPickRefreshKey(k => k + 1)}/>}
           {has('section:dashboard.my-picked-tasks') && <MyPickedTasksPanel refreshKey={pickRefreshKey}/>}
+          {has('section:dashboard.final-documents') && <PendingFinalDocumentsPanel currentUserId={currentUserId}/>}
         </div>
 
         {has('section:dashboard.pick-history') && <PickHistoryPanel/>}
@@ -878,6 +889,124 @@ function EventCell({ e }: { e: HistoryEvent | null }) {
   )
 }
 
+// ── Pending Final Document — CO/Phyto/SAFTA/any custom type sent with
+// reason "Final Document" (SendModal). Picking is open to anyone, same
+// model as Incoming — once picked, only that picker (or an admin, enforced
+// server-side) can Reject (deletes the generated file + clears the saved
+// link so it can be regenerated from scratch) or Done (uploads the scanned
+// signed/stamped final PDF, which replaces the file at that same link).
+function PendingFinalDocumentsPanel({ currentUserId }: { currentUserId: string }) {
+  const [tasks, setTasks] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
+    try {
+      const res = await fetch('/api/final-document-tasks', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setTasks(d.tasks || [])
+    } finally { if (!silent) setLoading(false) }
+  }
+  useEffect(() => {
+    load()
+    const t = setInterval(() => load(true), 15000)
+    return () => clearInterval(t)
+  }, [])
+
+  async function act(taskId: string, body: Record<string, unknown>) {
+    setBusyId(taskId)
+    try {
+      const res = await fetch('/api/final-document-tasks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ task_id: taskId, ...body }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      await load()
+    } catch (e: any) { alert(e.message) }
+    finally { setBusyId(null) }
+  }
+
+  async function reject(taskId: string) {
+    if (!confirm('Reject this document? The generated file will be deleted — it can be generated again from scratch after this.')) return
+    await act(taskId, { action: 'reject' })
+  }
+
+  async function doneWithFile(task: any, file: File) {
+    setBusyId(task.id)
+    try {
+      const base64 = await fileToBase64(file)
+      const h = await authHeader()
+      const upRes = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ base64, fileName: file.name, mimeType: file.type || 'application/pdf', docType: task.document_type }),
+      })
+      const upData = await upRes.json()
+      if (!upRes.ok || !upData.driveLink) throw new Error(upData.error || 'Upload failed')
+      const res = await fetch('/api/final-document-tasks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ action: 'done', task_id: task.id, drive_url: upData.driveLink, file_name: file.name }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      await load()
+    } catch (e: any) { alert(e.message) }
+    finally { setBusyId(null) }
+  }
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+          <FileCheck size={15} className="text-green-600"/> Pending Final Document
+          {tasks.length > 0 && <span className="text-[11px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold">{tasks.length}</span>}
+        </h2>
+        {loading && <Loader size={13} className="animate-spin text-gray-400"/>}
+      </div>
+      {tasks.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-6">No pending final documents</p>
+      ) : (
+        <div className="space-y-2 max-h-96 overflow-y-auto">
+          {tasks.map(t => {
+            const pickedByMe = t.status === 'picked' && t.picked_by === currentUserId
+            const pickedByOther = t.status === 'picked' && t.picked_by !== currentUserId
+            const busy = busyId === t.id
+            return (
+              <div key={t.id} className="border border-gray-100 rounded-lg p-2.5">
+                <div className="flex items-center justify-between mb-1.5 gap-2">
+                  <span className="text-xs font-semibold text-gray-800">CUSDEC {t.cusdec_number || '—'} · {docTypeLabel(t.document_type)}</span>
+                  <a href={t.drive_url} target="_blank" rel="noreferrer" className="text-[11px] text-blue-600 hover:underline flex-shrink-0">View</a>
+                </div>
+                {t.status === 'pending' && (
+                  <button onClick={() => act(t.id, { action: 'pick' })} disabled={busy}
+                    className="btn-secondary text-xs w-full flex items-center justify-center gap-1.5 disabled:opacity-50">
+                    {busy ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Pick
+                  </button>
+                )}
+                {pickedByOther && <p className="text-[11px] text-gray-400">Picked by {t.picked_by_name || '—'}</p>}
+                {pickedByMe && (
+                  <div className="flex gap-1.5">
+                    <button onClick={() => reject(t.id)} disabled={busy}
+                      className="flex-1 text-xs py-1.5 rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50">
+                      Reject
+                    </button>
+                    <label className={`flex-1 text-xs py-1.5 rounded-md text-white text-center font-medium ${busy ? 'bg-gray-300' : 'bg-green-600 hover:bg-green-700 cursor-pointer'}`}>
+                      {busy ? 'Working…' : 'Done — Upload Scan'}
+                      <input type="file" accept="application/pdf" className="hidden" disabled={busy}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) doneWithFile(t, f); e.target.value = '' }}/>
+                    </label>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PickHistoryPanel() {
   const { has } = usePermission()
   const canDelete = has('section:pick-history.delete')
@@ -965,6 +1094,7 @@ function PickHistoryPanel() {
           <option value="CUSDEC Passed">CUSDEC Passed</option>
           <option value="Container Moved">Container Moved</option>
           <option value="Boat Note Passed">Boat Note Passed</option>
+          <option value="Final Document">Final Document</option>
           <option value="Other">Other</option>
         </select>
         <button onClick={() => { setPage(1); load(false, 1) }} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white" style={{ background: '#1B3A5C' }}>
