@@ -31,7 +31,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if ((format === 'google_sheet' || format === 'trico_gate_pass') && !template_url) {
         return res.status(400).json({ error: format === 'google_sheet' ? 'template_url required for Google Sheet templates' : 'The after-login URL is required' })
       }
-      if (format !== 'google_sheet' && format !== 'trico_gate_pass' && !template_content) return res.status(400).json({ error: 'template_content required for XML/Text templates' })
+      // ASYCUDA CUSDEC XML has a fixed field set with no typed template
+      // body at all (see asycudaXml.ts) — only the free-form XML/Text
+      // format actually needs template_content.
+      if (format !== 'google_sheet' && format !== 'trico_gate_pass' && format !== 'asycuda_xml' && !template_content) return res.status(400).json({ error: 'template_content required for XML/Text templates' })
 
       const { fit_to_page } = req.body
 

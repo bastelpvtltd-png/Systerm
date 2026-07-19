@@ -132,6 +132,169 @@ function tag(name: string, value: string, indent: string) {
     : `${indent}<${name}>\n${indent}<null/>\n${indent}</${name}>`
 }
 
+// ── Field mapping (Templates tab "ASYCUDA CUSDEC XML" format) ──────────────
+// Every key in XmlValues, broken down with a sensible default data source so
+// the Templates page can auto-seed a full set of mapping rows instead of the
+// user building 85 rows from scratch. "manual" fields repurpose column_name
+// (see TemplateMapping) to hold the literal default value itself — the same
+// value emptyXmlValues() ships — rather than a picked DB column, since these
+// are mostly fixed declaration constants (office code, SAD flow, etc.) that
+// only rarely need overriding, exactly like trico_gate_pass repurposes
+// target_cell_or_range for its own format-specific meaning.
+export interface XmlFieldDef {
+  key: keyof XmlValues
+  label: string
+  group: string
+  defaultSource: 'cusdec' | 'cdn' | 'manual'
+  defaultColumn?: string
+}
+
+const d = emptyXmlValues()
+
+export const XML_FIELD_DEFS: XmlFieldDef[] = [
+  // Identification
+  { key: 'asycudaId', label: 'ASYCUDA ID (blank = auto)', group: 'Identification', defaultSource: 'manual', defaultColumn: '' },
+  { key: 'sadFlow', label: 'SAD Flow', group: 'Identification', defaultSource: 'manual', defaultColumn: d.sadFlow },
+  { key: 'totalItems', label: 'Total Items', group: 'Identification', defaultSource: 'manual', defaultColumn: d.totalItems },
+  { key: 'totalPackages', label: 'Total Packages', group: 'Identification', defaultSource: 'cusdec', defaultColumn: 'total_packages' },
+  { key: 'officeCode', label: 'Customs Office Code', group: 'Identification', defaultSource: 'manual', defaultColumn: d.officeCode },
+  { key: 'officeName', label: 'Customs Office Name', group: 'Identification', defaultSource: 'manual', defaultColumn: d.officeName },
+  { key: 'regSerial', label: 'Registration Serial', group: 'Identification', defaultSource: 'manual', defaultColumn: d.regSerial },
+  { key: 'regNumber', label: 'Registration Number', group: 'Identification', defaultSource: 'cusdec', defaultColumn: 'number' },
+  { key: 'regDate', label: 'Registration Date', group: 'Identification', defaultSource: 'cusdec', defaultColumn: 'date' },
+  { key: 'assessSerial', label: 'Assessment Serial', group: 'Identification', defaultSource: 'manual', defaultColumn: d.assessSerial },
+  { key: 'assessNumber', label: 'Assessment Number', group: 'Identification', defaultSource: 'cusdec', defaultColumn: 'assess_number' },
+  { key: 'assessDate', label: 'Assessment Date', group: 'Identification', defaultSource: 'cusdec', defaultColumn: 'assess_date' },
+  { key: 'receiptSerial', label: 'Receipt Serial', group: 'Identification', defaultSource: 'manual', defaultColumn: d.receiptSerial },
+  { key: 'receiptNumber', label: 'Receipt Number', group: 'Identification', defaultSource: 'cusdec', defaultColumn: 'receipt_number' },
+  { key: 'receiptDate', label: 'Receipt Date', group: 'Identification', defaultSource: 'cusdec', defaultColumn: 'receipt_date' },
+
+  // Traders / Declarant
+  { key: 'exporterCode', label: 'Exporter Code (TIN/VAT)', group: 'Traders / Declarant', defaultSource: 'cusdec', defaultColumn: 'tin_vat' },
+  { key: 'exporterName', label: 'Exporter Name', group: 'Traders / Declarant', defaultSource: 'cusdec', defaultColumn: 'exporter' },
+  { key: 'consigneeName', label: 'Consignee Name', group: 'Traders / Declarant', defaultSource: 'cusdec', defaultColumn: 'consignee' },
+  { key: 'declarantCode', label: 'Declarant Code', group: 'Traders / Declarant', defaultSource: 'cusdec', defaultColumn: 'declarant_code' },
+  { key: 'declarantName', label: 'Declarant Name', group: 'Traders / Declarant', defaultSource: 'cusdec', defaultColumn: 'declarant_name' },
+  { key: 'declarantReference', label: 'Declarant Reference', group: 'Traders / Declarant', defaultSource: 'cusdec', defaultColumn: 'reference' },
+
+  // Country / General
+  { key: 'countryFirstDestination', label: 'Country of First Destination', group: 'Country / General', defaultSource: 'cusdec', defaultColumn: 'country_first_destination' },
+  { key: 'tradingCountry', label: 'Trading Country', group: 'Country / General', defaultSource: 'cusdec', defaultColumn: 'trading_country' },
+  { key: 'destinationCountryCode', label: 'Destination Country Code', group: 'Country / General', defaultSource: 'cusdec', defaultColumn: 'destination_country_code' },
+  { key: 'destinationCountryName', label: 'Destination Country Name', group: 'Country / General', defaultSource: 'cusdec', defaultColumn: 'destination_country_name' },
+  { key: 'countryOfOriginName', label: 'Country of Origin Name', group: 'Country / General', defaultSource: 'manual', defaultColumn: d.countryOfOriginName },
+  { key: 'countryOfOriginCode', label: 'Country of Origin Code', group: 'Country / General', defaultSource: 'manual', defaultColumn: d.countryOfOriginCode },
+  { key: 'cap', label: 'CAP', group: 'Country / General', defaultSource: 'cusdec', defaultColumn: 'cap' },
+
+  // Transport
+  { key: 'vesselIdentity', label: 'Vessel', group: 'Transport', defaultSource: 'cusdec', defaultColumn: 'vessel' },
+  { key: 'borderInfoIdentity', label: 'Border Info (Voyage/Date)', group: 'Transport', defaultSource: 'cusdec', defaultColumn: 'border_info_identity' },
+  { key: 'borderMode', label: 'Border Mode', group: 'Transport', defaultSource: 'manual', defaultColumn: d.borderMode },
+  { key: 'containerFlag', label: 'Container Flag', group: 'Transport', defaultSource: 'manual', defaultColumn: d.containerFlag },
+  { key: 'deliveryTermsCode', label: 'Delivery Terms Code', group: 'Transport', defaultSource: 'cusdec', defaultColumn: 'delivery_terms' },
+  { key: 'placeOfLoadingCode', label: 'Place of Loading Code', group: 'Transport', defaultSource: 'cusdec', defaultColumn: 'place_of_loading_code' },
+  { key: 'placeOfLoadingName', label: 'Place of Loading Name', group: 'Transport', defaultSource: 'cusdec', defaultColumn: 'place_of_loading_name' },
+  { key: 'locationOfGoods', label: 'Location of Goods', group: 'Transport', defaultSource: 'cusdec', defaultColumn: 'location_of_goods' },
+
+  // Financial / Bank
+  { key: 'bankCode', label: 'Bank Code', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'bank_code' },
+  { key: 'bankName', label: 'Bank Name', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'bank_name' },
+  { key: 'bankBranch', label: 'Bank Branch', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'bank_branch' },
+  { key: 'bankReference', label: 'Bank Reference', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'bank_reference' },
+  { key: 'termsCode', label: 'Payment Terms Code', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'payment_terms_code' },
+  { key: 'termsDescription', label: 'Payment Terms Description', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'payment_terms_description' },
+  { key: 'modeOfPayment', label: 'Mode of Payment', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'mode_of_payment' },
+  { key: 'globalTaxes', label: 'Global Taxes', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'global_taxes' },
+  { key: 'totalTaxes', label: 'Total Taxes', group: 'Financial / Bank', defaultSource: 'cusdec', defaultColumn: 'total_taxes' },
+
+  // Valuation
+  { key: 'totalCif', label: 'Total CIF', group: 'Valuation', defaultSource: 'cusdec', defaultColumn: 'amount' },
+  { key: 'invoiceAmountNational', label: 'Invoice Amount (LKR)', group: 'Valuation', defaultSource: 'cusdec', defaultColumn: 'invoice_amount_lkr' },
+  { key: 'invoiceAmountForeign', label: 'Invoice Amount (Foreign)', group: 'Valuation', defaultSource: 'cusdec', defaultColumn: 'invoice_amount_usd' },
+  { key: 'currencyCode', label: 'Currency Code', group: 'Valuation', defaultSource: 'manual', defaultColumn: d.currencyCode },
+  { key: 'totalInvoice', label: 'Total Invoice', group: 'Valuation', defaultSource: 'cusdec', defaultColumn: 'invoice_amount_usd' },
+  { key: 'totalWeight', label: 'Total Weight', group: 'Valuation', defaultSource: 'cusdec', defaultColumn: 'gross_mass' },
+
+  // Attached Documents / Packages
+  { key: 'attachedDocCode', label: 'Attached Doc Code', group: 'Attached Documents / Packages', defaultSource: 'manual', defaultColumn: d.attachedDocCode },
+  { key: 'attachedDocName', label: 'Attached Doc Name', group: 'Attached Documents / Packages', defaultSource: 'manual', defaultColumn: d.attachedDocName },
+  { key: 'attachedDocReference', label: 'Attached Doc Reference', group: 'Attached Documents / Packages', defaultSource: 'cusdec', defaultColumn: 'licence_number' },
+  { key: 'attachedDocDate', label: 'Attached Doc Date', group: 'Attached Documents / Packages', defaultSource: 'cusdec', defaultColumn: 'licence_date' },
+  { key: 'numberOfPackages', label: 'Number of Packages', group: 'Attached Documents / Packages', defaultSource: 'cusdec', defaultColumn: 'total_packages' },
+  { key: 'marks1', label: 'Marks 1', group: 'Attached Documents / Packages', defaultSource: 'cusdec', defaultColumn: 'marks1' },
+  { key: 'marks2', label: 'Marks 2', group: 'Attached Documents / Packages', defaultSource: 'cusdec', defaultColumn: 'marks2' },
+  { key: 'packageKindCode', label: 'Package Kind Code', group: 'Attached Documents / Packages', defaultSource: 'cusdec', defaultColumn: 'package_kind_code' },
+  { key: 'packageKindName', label: 'Package Kind Name', group: 'Attached Documents / Packages', defaultSource: 'cusdec', defaultColumn: 'package_kind_name' },
+
+  // Tarification / HS
+  { key: 'hsCode', label: 'HS Code', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'hs_code' },
+  { key: 'hsPrecision1', label: 'HS Precision', group: 'Tarification / HS', defaultSource: 'manual', defaultColumn: d.hsPrecision1 },
+  { key: 'preferenceCode', label: 'Preference Code', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'preference_code' },
+  { key: 'extendedProcedure', label: 'Extended Procedure', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'procedure_code' },
+  { key: 'nationalProcedure', label: 'National Procedure', group: 'Tarification / HS', defaultSource: 'manual', defaultColumn: d.nationalProcedure },
+  { key: 'supplementaryUnitCode', label: 'Supplementary Unit Code', group: 'Tarification / HS', defaultSource: 'manual', defaultColumn: d.supplementaryUnitCode },
+  { key: 'supplementaryUnitName', label: 'Supplementary Unit Name', group: 'Tarification / HS', defaultSource: 'manual', defaultColumn: d.supplementaryUnitName },
+  { key: 'supplementaryUnitQuantity', label: 'Supplementary Unit Quantity', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'net_mass' },
+  { key: 'itemPrice', label: 'Item Price', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'invoice_amount_usd' },
+  { key: 'descriptionOfGoods', label: 'Description of Goods', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'goods' },
+  { key: 'previousDocSummaryDeclaration', label: 'Previous Doc (Summary Declaration)', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'summary_declaration' },
+  { key: 'licenceNumber', label: 'Licence Number', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'licence_number' },
+  { key: 'quantityDeductedFromLicence', label: 'Quantity Deducted from Licence', group: 'Tarification / HS', defaultSource: 'cusdec', defaultColumn: 'net_mass' },
+
+  // Taxation
+  { key: 'itemTaxesAmount', label: 'Item Taxes Amount', group: 'Taxation', defaultSource: 'cusdec', defaultColumn: 'item_taxes_amount' },
+  { key: 'dutyTaxCode1', label: 'Duty Tax Code 1', group: 'Taxation', defaultSource: 'manual', defaultColumn: d.dutyTaxCode1 },
+  { key: 'dutyTaxBase1', label: 'Duty Tax Base 1', group: 'Taxation', defaultSource: 'cusdec', defaultColumn: 'net_mass' },
+  { key: 'dutyTaxRate1', label: 'Duty Tax Rate 1', group: 'Taxation', defaultSource: 'manual', defaultColumn: d.dutyTaxRate1 },
+  { key: 'dutyTaxAmount1', label: 'Duty Tax Amount 1', group: 'Taxation', defaultSource: 'cusdec', defaultColumn: 'duty_amount_cc1' },
+  { key: 'dutyTaxCode2', label: 'Duty Tax Code 2', group: 'Taxation', defaultSource: 'manual', defaultColumn: d.dutyTaxCode2 },
+  { key: 'dutyTaxBase2', label: 'Duty Tax Base 2', group: 'Taxation', defaultSource: 'cusdec', defaultColumn: 'net_mass' },
+  { key: 'dutyTaxRate2', label: 'Duty Tax Rate 2', group: 'Taxation', defaultSource: 'manual', defaultColumn: d.dutyTaxRate2 },
+  { key: 'dutyTaxAmount2', label: 'Duty Tax Amount 2', group: 'Taxation', defaultSource: 'cusdec', defaultColumn: 'duty_amount_ced' },
+
+  // Item Weight / Value
+  { key: 'grossWeightItm', label: 'Gross Weight (Item)', group: 'Item Weight / Value', defaultSource: 'cusdec', defaultColumn: 'gross_mass' },
+  { key: 'netWeightItm', label: 'Net Weight (Item)', group: 'Item Weight / Value', defaultSource: 'cusdec', defaultColumn: 'net_mass' },
+  { key: 'statisticalValue', label: 'Statistical Value', group: 'Item Weight / Value', defaultSource: 'cusdec', defaultColumn: 'amount' },
+]
+
+export interface XmlMappingRow { field_label: string; data_source: 'cusdec' | 'cdn' | 'manual'; column_name: string }
+
+// Every field's suggested mapping, ready to use as-is with zero setup —
+// Docs Create falls back to this when no doc_templates row has been saved
+// yet for cusdec_xml (or an admin hasn't customized it in Templates), and
+// the Templates page seeds a fresh "ASYCUDA CUSDEC XML" template with the
+// same rows so what's shown there matches what generation actually uses.
+export function defaultXmlMappings(): XmlMappingRow[] {
+  return XML_FIELD_DEFS.map(def => ({ field_label: def.key, data_source: def.defaultSource, column_name: def.defaultColumn || '' }))
+}
+
+// Resolves a full XmlValues object from configured mappings — "database"
+// pulls straight from the matched cusdec/cdn row's column, "manual" uses
+// whatever was typed at generation time (falling back to the mapping's own
+// configured default constant, see XML_FIELD_DEFS comment above). Any field
+// left unmapped, or whose resolved value is blank, keeps its
+// emptyXmlValues() default so the output is always structurally complete.
+export function resolveXmlValues(
+  mappings: XmlMappingRow[],
+  cusdecRow: Record<string, any> | null,
+  cdnRow: Record<string, any> | null,
+  manualValues: Record<string, string> = {}
+): XmlValues {
+  const values = emptyXmlValues()
+  const byKey = new Map(mappings.map(m => [m.field_label, m]))
+  for (const def of XML_FIELD_DEFS) {
+    const m = byKey.get(def.key)
+    if (!m) continue
+    let value = ''
+    if (m.data_source === 'manual') value = manualValues[def.key] || m.column_name || ''
+    else if (m.data_source === 'cusdec') value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : (manualValues[def.key] || '')
+    else if (m.data_source === 'cdn') value = cdnRow ? (cdnRow[m.column_name] ?? '') : (manualValues[def.key] || '')
+    if (value) (values as any)[def.key] = value
+  }
+  return values
+}
+
 export function buildAsycudaXml(v: XmlValues): string {
   const i2 = '  ', i3 = '   ', i4 = '    '
   return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>

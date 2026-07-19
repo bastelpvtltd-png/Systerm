@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { google } from 'googleapis'
 import { spreadsheetIdFromUrl, batchWriteValues, exportSheetAsPdf, getSheetsList } from '@/lib/googleSheets'
+import { buildAsycudaXml, resolveXmlValues, defaultXmlMappings } from '@/lib/asycudaXml'
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
@@ -54,6 +55,26 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
         if (cdn_ids?.length) q = q.in('id', cdn_ids) as typeof q
         const { data: cdns } = await q
         cdnRows = cdns || []
+      }
+    }
+
+    // ASYCUDA CUSDEC XML — a fixed field set (see asycudaXml.ts), never
+    // free-text substitution: mapped values are resolved from the CUSDEC/CDN
+    // row (or manual_values) into an XmlValues object, then run through the
+    // same buildAsycudaXml() serializer the dedicated Cusdec XML tab uses,
+    // so the output structure always matches a real ASYCUDA export exactly
+    // regardless of which fields are mapped where.
+    if (tpl.template_format === 'asycuda_xml') {
+      const mappings: Array<{ field_label: string; data_source: 'cusdec' | 'cdn' | 'manual'; column_name: string }> =
+        tpl.template_mappings?.length ? tpl.template_mappings : defaultXmlMappings()
+      const values = resolveXmlValues(mappings, cusdecRow, cdnRows[0] || null, manual_values || {})
+      const content = buildAsycudaXml(values)
+      const fileName = `${values.regNumber ? `CUSDEC_${values.regNumber}` : document_type}_${new Date().toISOString().slice(0, 10)}.xml`
+      return {
+        fileName,
+        base64: Buffer.from(content, 'utf-8').toString('base64'),
+        mimeType: 'application/xml',
+        content,
       }
     }
 

@@ -5,7 +5,7 @@ import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileSta
 import SendModal, { type SendResultFile } from '@/components/admin/SendModal'
 import SheetPickerModal from '@/components/admin/SheetPickerModal'
 import EmailPdfModal from '@/components/admin/EmailPdfModal'
-import { emptyXmlValues, buildAsycudaXml, type XmlValues } from '@/lib/asycudaXml'
+import { emptyXmlValues, buildAsycudaXml, XML_FIELD_DEFS, defaultXmlMappings, type XmlValues, type XmlMappingRow } from '@/lib/asycudaXml'
 import { ALWAYS_TAB_TYPES, DEDICATED_TAB_TYPES } from '@/lib/docTypes'
 
 // Custom document types (from Templates → "+ Add New Document Type") get a
@@ -1243,6 +1243,8 @@ interface CusdecXmlRec extends CusdecRec {
 
 function CusdecXmlPanel() {
   const [cusdecs, setCusdecs] = useState<CusdecXmlRec[]>([])
+  const [cdns, setCdns] = useState<Record<string, any>[]>([])
+  const [mappings, setMappings] = useState<XmlMappingRow[]>(defaultXmlMappings())
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [values, setValues] = useState<XmlValues>(emptyXmlValues())
@@ -1252,9 +1254,18 @@ function CusdecXmlPanel() {
   useEffect(() => {
     function load() {
       fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+      fetch('/api/list-records?table=cdn&limit=1000').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
     }
     load()
     const t = setInterval(load, 20000)
+    // The Templates page ("ASYCUDA CUSDEC XML" format) is the source of
+    // truth for field mapping once an admin has saved one — falls back to
+    // the built-in defaults (same ones Templates seeds a fresh template
+    // with) so this works with zero setup.
+    fetch('/api/doc-templates').then(r => r.json()).then(d => {
+      const tpl = (d.templates || []).find((t: any) => t.document_type === 'cusdec_xml')
+      if (tpl?.template_mappings?.length) setMappings(tpl.template_mappings)
+    }).catch(() => {})
     return () => clearInterval(t)
   }, [])
 
@@ -1265,26 +1276,28 @@ function CusdecXmlPanel() {
 
   async function selectCusdec(id: string) {
     setSelectedId(id); setStatus('')
-    const cusdec = cusdecs.find(c => c.id === id)
+    const cusdec = cusdecs.find(c => c.id === id) as unknown as Record<string, any> | undefined
     if (!cusdec) return
     setLoading(true)
     try {
       const res = await fetch(`/api/cusdec-xml?id=${id}`)
       const d = await res.json()
       const saved: Partial<XmlValues> = d.xml_data || {}
-      setValues({
-        ...emptyXmlValues(), ...saved,
-        regNumber: cusdec.number || '', regDate: cusdec.date || '',
-        exporterName: cusdec.exporter || '', consigneeName: cusdec.consignee || '',
-        vesselIdentity: cusdec.vessel || '',
-        deliveryTermsCode: cusdec.delivery_terms || saved.deliveryTermsCode || 'CIF',
-        locationOfGoods: cusdec.location_of_goods || '',
-        cap: cusdec.cap || saved.cap || '01',
-        hsCode: cusdec.hs_code || '', preferenceCode: cusdec.preference || saved.preferenceCode || 'APTA',
-        extendedProcedure: cusdec.procedure_code || saved.extendedProcedure || '1000',
-        totalWeight: cusdec.gross_mass || '', grossWeightItm: cusdec.gross_mass || '', netWeightItm: cusdec.net_mass || '',
-        numberOfPackages: cusdec.pkges || '', totalPackages: cusdec.pkges || '',
-      })
+      const cdnRow = cdns.find(c => c.code === cusdec.code && c.cusdec_number === cusdec.number) || null
+
+      // Database pull (via mapping) wins when it has a value; otherwise fall
+      // back to whatever was last saved to this CUSDEC's xml_data, then the
+      // ASYCUDA structural defaults — same priority the dedicated builder
+      // used before, just driven by configurable mappings now instead of a
+      // fixed handful of hardcoded fields.
+      const merged: XmlValues = { ...emptyXmlValues(), ...saved }
+      for (const def of XML_FIELD_DEFS) {
+        const m = mappings.find(mm => mm.field_label === def.key)
+        if (!m || m.data_source === 'manual') continue
+        const raw = m.data_source === 'cusdec' ? cusdec[m.column_name] : cdnRow?.[m.column_name]
+        if (raw) (merged as any)[def.key] = raw
+      }
+      setValues(merged)
     } finally { setLoading(false) }
   }
 
@@ -1364,7 +1377,6 @@ function CusdecXmlPanel() {
   ]
 
   return (
-    <div className="space-y-6">
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
       <div className="card xl:col-span-1">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Select CUSDEC</h2>
@@ -1411,12 +1423,6 @@ function CusdecXmlPanel() {
           </>
         )}
       </div>
-    </div>
-
-    <div className="border-t border-gray-100 pt-6">
-      <h2 className="font-semibold text-gray-900 text-sm mb-3">Generate from XML Template</h2>
-      <CustomDocPanel documentType="cusdec_xml" label="Cusdec XML"/>
-    </div>
     </div>
   )
 }

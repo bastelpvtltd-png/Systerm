@@ -3,6 +3,7 @@ import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { FileStack, AlertTriangle, Loader, Plus, X, Save } from 'lucide-react'
 import { BUILTIN_DOC_TYPES } from '@/lib/docTypes'
+import { XML_FIELD_DEFS, defaultXmlMappings } from '@/lib/asycudaXml'
 
 // ── Google Sheets Templates — fixed doc types, relational mappings ─────────
 interface TemplateMapping {
@@ -16,7 +17,7 @@ interface GSheet {
   print_sheet_name: string | null; print_range: string | null
   paper_size: string; orientation: string; fit_to_page: boolean
   template_mappings: TemplateMapping[]
-  template_format?: 'google_sheet' | 'xml' | 'text' | 'trico_gate_pass'
+  template_format?: 'google_sheet' | 'xml' | 'text' | 'trico_gate_pass' | 'asycuda_xml'
   template_content?: string | null
 }
 
@@ -25,17 +26,27 @@ const TEMPLATE_FORMATS = [
   { value: 'xml',             label: 'XML' },
   { value: 'text',            label: 'Text Template' },
   { value: 'trico_gate_pass', label: 'Trico Gate Pass (web form)' },
+  { value: 'asycuda_xml',     label: 'ASYCUDA CUSDEC XML' },
 ] as const
 type TemplateFormat = typeof TEMPLATE_FORMATS[number]['value']
 
 const DOC_TYPES = BUILTIN_DOC_TYPES
 
-// Picking these two document types only makes sense with one template
-// format each — auto-select it so the mapping UI below (Sheet columns vs.
-// the {{tag}} textarea) matches without an extra manual step.
+// Picking these document types only makes sense with one template format
+// each — auto-select it so the mapping UI below (Sheet columns vs. the
+// {{tag}} textarea vs. the fixed ASYCUDA field list) matches without an
+// extra manual step.
 const DOC_TYPE_DEFAULT_FORMAT: Partial<Record<string, TemplateFormat>> = {
-  cusdec_xml: 'xml',
+  cusdec_xml: 'asycuda_xml',
   cdn_text: 'text',
+}
+
+// Every ASYCUDA field pre-seeded with its suggested source/column so a
+// fresh "ASYCUDA CUSDEC XML" template starts fully mapped (85 rows) instead
+// of blank — the user only needs to adjust the handful that don't fit their
+// data, not build the whole set by hand.
+function seedAsycudaMappings(): TemplateMapping[] {
+  return defaultXmlMappings().map(m => ({ ...m, is_repeating: false, target_cell_or_range: '', sheet_name: '' }))
 }
 
 // Slug used as the document_type value (DB column + /api/doc-generate key) —
@@ -275,7 +286,13 @@ function DocTemplatesContent() {
     setTemplateContent(found?.template_content || '')
     setTemplateUrl(url)
     setUrlInput(url)
-    setMappings(found?.template_mappings?.length ? found.template_mappings.map(m => ({ ...m, sheet_name: m.sheet_name || '' })) : [emptyRow()])
+    if (found?.template_mappings?.length) {
+      setMappings(found.template_mappings.map(m => ({ ...m, sheet_name: m.sheet_name || '' })))
+    } else if (format === 'asycuda_xml') {
+      setMappings(seedAsycudaMappings())
+    } else {
+      setMappings([emptyRow()])
+    }
     setPrintSheet(found?.print_sheet_name || '')
     setPrintRange(found?.print_range || '')
     setPaperSize(found?.paper_size || 'A4')
@@ -362,6 +379,16 @@ function DocTemplatesContent() {
           print_sheet_name: null, print_range: null, paper_size: 'A4', orientation: 'Portrait', fit_to_page: true,
           mappings: valid.map(m => ({ ...m, sheet_name: '' })),
         }
+      } else if (templateFormat === 'asycuda_xml') {
+        // Fixed field set (one row per XmlValues key, see XML_FIELD_DEFS) —
+        // no template body at all, generation always runs the mapped values
+        // through buildAsycudaXml() so the ASYCUDA structure never drifts.
+        // "manual" rows repurpose column_name as the literal default value.
+        body = {
+          document_type: docType, template_format: templateFormat, template_url: null, template_content: null,
+          print_sheet_name: null, print_range: null, paper_size: 'A4', orientation: 'Portrait', fit_to_page: true,
+          mappings: mappings.map(m => ({ ...m, target_cell_or_range: '', sheet_name: '' })),
+        }
       } else {
         // XML / Text — no spreadsheet, no cell/range: the raw {{field_label}}
         // template body is typed directly here and stored as-is.
@@ -427,7 +454,11 @@ function DocTemplatesContent() {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Template Format</label>
-            <select value={templateFormat} onChange={e => setTemplateFormat(e.target.value as TemplateFormat)} className="input">
+            <select value={templateFormat} onChange={e => {
+              const fmt = e.target.value as TemplateFormat
+              setTemplateFormat(fmt)
+              if (fmt === 'asycuda_xml' && mappings.length !== XML_FIELD_DEFS.length) setMappings(seedAsycudaMappings())
+            }} className="input">
               {TEMPLATE_FORMATS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
             </select>
           </div>
@@ -474,6 +505,13 @@ function DocTemplatesContent() {
               className="input w-full text-xs font-mono"/>
             <p className="text-[11px] text-gray-400 mt-1.5">No Fill/Print sheet here — map each field below to the exact form field name on that page (Column = "Form Field Name").</p>
           </div>
+        ) : templateFormat === 'asycuda_xml' ? (
+          <div className="mt-3">
+            <p className="text-[11px] text-gray-400">
+              No Fill Sheet / Print Sheet here — the Fill Sheet <em>is</em> the XML: every field below maps straight onto the ASYCUDA declaration structure (matching a real exported CUSDEC exactly, so it stays importable), and generating produces that XML directly with no separate print step.
+              In Docs Create, picking a CUSDEC record pulls the mapped fields from the database; anything left blank (or typed over) is filled in by hand.
+            </p>
+          </div>
         ) : (
           <div className="mt-3">
             <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -496,10 +534,56 @@ function DocTemplatesContent() {
             <span className="w-5 h-5 bg-blue-600 text-white rounded-full text-[11px] flex items-center justify-center font-bold">2</span>
             Field Mappings
           </h2>
-          <button onClick={() => setMappings(p => [...p, emptyRow()])} className="flex items-center gap-1 text-xs text-blue-600 hover:underline">
-            <Plus size={13}/>Add Row
-          </button>
+          {templateFormat !== 'asycuda_xml' && (
+            <button onClick={() => setMappings(p => [...p, emptyRow()])} className="flex items-center gap-1 text-xs text-blue-600 hover:underline">
+              <Plus size={13}/>Add Row
+            </button>
+          )}
         </div>
+        {templateFormat === 'asycuda_xml' ? (
+          <div className="space-y-4">
+            {Array.from(new Set(XML_FIELD_DEFS.map(def => def.group))).map(group => (
+              <div key={group}>
+                <h3 className="text-[11px] font-semibold text-gray-500 mb-1.5 uppercase tracking-wide">{group}</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs min-w-[560px]">
+                    <tbody>
+                      {XML_FIELD_DEFS.filter(def => def.group === group).map(def => {
+                        const i = mappings.findIndex(m => m.field_label === def.key)
+                        const m = i >= 0 ? mappings[i] : { field_label: def.key, data_source: def.defaultSource, column_name: def.defaultColumn || '', is_repeating: false, target_cell_or_range: '', sheet_name: '' }
+                        return (
+                          <tr key={def.key} className="border-b border-gray-50">
+                            <td className="py-1.5 pr-2 w-56 text-gray-700">{def.label}</td>
+                            <td className="py-1.5 pr-2 w-24">
+                              <select value={m.data_source} disabled={i < 0}
+                                onChange={e => updateRow(i, { data_source: e.target.value as 'cusdec' | 'cdn' | 'manual', column_name: '' })}
+                                className="input text-xs">
+                                <option value="cusdec">cusdec</option>
+                                <option value="cdn">cdn</option>
+                                <option value="manual">manual</option>
+                              </select>
+                            </td>
+                            <td className="py-1.5 pr-2">
+                              {m.data_source === 'manual' ? (
+                                <input value={m.column_name} disabled={i < 0} onChange={e => updateRow(i, { column_name: e.target.value })}
+                                  placeholder="default value" className="input text-xs w-full"/>
+                              ) : (
+                                <select value={m.column_name} disabled={i < 0} onChange={e => updateRow(i, { column_name: e.target.value })} className="input text-xs">
+                                  <option value="">— pick —</option>
+                                  {cols(m.data_source).map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs min-w-[700px]">
             <thead>
@@ -570,6 +654,7 @@ function DocTemplatesContent() {
           </table>
           {mappings.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No fields — click Add Row</p>}
         </div>
+        )}
       </div>
 
       {/* Sheet Routing — optional, Google Sheets only. Different shippers'
