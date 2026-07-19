@@ -13,7 +13,7 @@ export interface SendResultFile { fileName: string; driveLink: string; docType?:
 // whole "Send All" batch — each file still gets its own document_uploads
 // row (so Notify/Pick tracks them individually), but a batch Mail sends
 // everything in one message.
-const REASON_OPTIONS = ['', 'CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Other']
+const REASON_OPTIONS = ['', 'CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Final Document', 'Other']
 
 export default function SendModal({ label, uploaderName, docType, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason }: {
   label: string

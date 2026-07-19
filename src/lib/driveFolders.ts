@@ -69,6 +69,8 @@ export const DOC_TYPE_FOLDER_NAMES: Record<string, string> = {
   packing_list: 'Packing List',
   template: 'Templates',
   party_copy: "Party's Copy",
+  co: 'CO',
+  pytho: 'Phyto',
 }
 
 // Two-level path: mainFolder/Bills/{cusdecNumber}/

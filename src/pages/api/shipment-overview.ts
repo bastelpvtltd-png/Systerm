@@ -107,7 +107,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         boatNotes.forEach(b => matchedBoatNoteIds.add(b.id))
       }
 
-      overview.push({ cusdec, cdns: cdnWithBarcode, boatNotes })
+      // Everything saved through the generic per-(cusdec, document_type) table
+      // — CO, Phyto, CDN Text, or any future custom document type — isn't on
+      // a fixed column like pdf_url/party_copy_url, so it has to be pulled in
+      // separately for this shipment's Drive links to actually be complete.
+      const { data: documentLinks } = await supabaseAdmin.from('cusdec_document_links')
+        .select('document_type, drive_url, file_name, updated_at').eq('cusdec_id', cusdec.id)
+
+      overview.push({ cusdec, cdns: cdnWithBarcode, boatNotes, documentLinks: documentLinks || [] })
     }
 
     // Boat notes whose shipper matches the search but whose container didn't

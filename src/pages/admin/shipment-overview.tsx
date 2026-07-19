@@ -16,7 +16,8 @@ interface Cusdec { id: string; code: string; number: string; date: string; expor
 interface Cdn { id: string; container_no: string; shipper: string; goods_description: string; gross_mass: string; pdf_url?: string; [k: string]: any }
 interface Barcode { id: string; container_no: string; seal_no: string; truck_no: string; date: string; pdf_url?: string; [k: string]: any }
 interface BoatNote { id: string; pdf_url?: string; details: Record<string, any> }
-interface OverviewEntry { cusdec: Cusdec; cdns: { cdn: Cdn; barcode: Barcode | null }[]; boatNotes: BoatNote[] }
+interface DocLink { document_type: string; drive_url: string; file_name?: string; updated_at?: string }
+interface OverviewEntry { cusdec: Cusdec; cdns: { cdn: Cdn; barcode: Barcode | null }[]; boatNotes: BoatNote[]; documentLinks: DocLink[] }
 interface Options { shippers: string[]; codes: string[]; numbers: string[]; containers: string[]; references: string[]; invoiceNumbers: string[] }
 
 // Bookkeeping columns that aren't a real extracted field — never shown in the
@@ -35,6 +36,7 @@ const LABEL_OVERRIDES: Record<string, string> = {
   gross_mass: 'Gross Mass (KG)', net_mass: 'Net Mass (KG)',
 }
 function fieldLabel(key: string) { return LABEL_OVERRIDES[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) }
+function docTypeLabel(v: string) { return v.split('_').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') }
 
 // Every non-empty column on the record, laid out as a compact label/value
 // grid — this is the "full details" view (as opposed to the few columns the
@@ -279,6 +281,12 @@ export default function DriveFilesPage() {
                       <a href={entry.cusdec.pdf_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={13}/>View CUSDEC PDF</a>
                     </>
                   )}
+                  {entry.cusdec.party_copy_url && (
+                    <>
+                      <DocCheckbox docKey={`partycopy-${entry.cusdec.id}`} attachment={{ filename: `PartysCopy_${entry.cusdec.code}_${entry.cusdec.number}.pdf`, url: entry.cusdec.party_copy_url }}/>
+                      <a href={entry.cusdec.party_copy_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={13}/>View Party&apos;s Copy PDF</a>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -345,6 +353,21 @@ export default function DriveFilesPage() {
                         )}
                       </div>
                       <FieldGrid record={bn.details || {}}/>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {entry.documentLinks.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5">
+                  <p className="text-xs font-medium text-gray-500 flex items-center gap-1"><FileText size={12}/> Other Generated Documents</p>
+                  {entry.documentLinks.map(doc => (
+                    <div key={doc.document_type} className="flex items-center justify-between border border-gray-100 rounded-lg px-3 py-1.5">
+                      <span className="text-xs font-semibold text-gray-800">{docTypeLabel(doc.document_type)}</span>
+                      <div className="flex items-center gap-2">
+                        <DocCheckbox docKey={`doclink-${entry.cusdec.id}-${doc.document_type}`} attachment={{ filename: doc.file_name || `${docTypeLabel(doc.document_type)}.pdf`, url: doc.drive_url }}/>
+                        <a href={doc.drive_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"><ExternalLink size={11}/>View</a>
+                      </div>
                     </div>
                   ))}
                 </div>
