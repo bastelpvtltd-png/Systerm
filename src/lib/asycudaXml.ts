@@ -99,7 +99,7 @@ export const emptyXmlValues = (): XmlValues => ({
   assessSerial: 'A', assessNumber: '', assessDate: '',
   receiptSerial: 'R', receiptNumber: '', receiptDate: '',
   exporterCode: '', exporterName: '', consigneeName: '',
-  declarantCode: '', declarantName: '', declarantReference: '',
+  declarantCode: '1748813322525', declarantName: 'SHIPPING MANAGEMENT LOGISTICS P L\n102/A/3 SUBASINGHE MW\nBATUWATTA RAGAMA', declarantReference: '',
   countryFirstDestination: '', tradingCountry: '',
   destinationCountryCode: '', destinationCountryName: '', countryOfOriginName: 'Sri Lanka',
   cap: '01', vesselIdentity: '', borderInfoIdentity: '', borderMode: '1', containerFlag: 'true',

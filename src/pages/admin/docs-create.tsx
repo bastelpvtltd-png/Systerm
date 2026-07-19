@@ -23,8 +23,10 @@ function isPartiesCopySlug(slug: string): boolean {
   return norm.includes('party') && norm.includes('copy')
 }
 
-interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean; boat_note_url?: string }
-interface CdnRec    { id: string; code?: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; boat_note_passed?: boolean; shipper?: string; consignee?: string }
+interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean; boat_note_url?: string; declarant_code?: string }
+// No consignee column on cdn — the buyer's name/address only lives on the
+// matched CUSDEC row (see CdnTextPanel.selectCdn).
+interface CdnRec    { id: string; code?: string; cdn_no: string; container_no: string; driver_name: string; cusdec_number: string; goods_description: string; gross_mass: string; vessel: string; voyage: string; voyage_date: string; bl_no: string; slpa_no: string; voc: string; coc: string; lorry_no: string; trailer_no: string; loading_port: string; discharge_port: string; location: string; pkg_no: string; pkg_type: string; volume: string; seal_no: string; con_type: string; marks: string; boat_note_passed?: boolean; shipper?: string }
 
 interface BoatNote { shipper: string; consignee: string; entry_no: string; bl_no: string; slpa_no: string; voyage: string; voyage_date: string; vessel: string; terminal: string; lorry_no: string; trailer_no: string; driver_name: string; container_no: string; con_type: string; seal_no: string; goods: string; gross_mass: string; net_mass: string; cdn_no: string; pkg_no: string; pkg_type: string; voc: string; coc: string; loading_port: string; discharge_port: string; volume: string; marks: string }
 
@@ -1329,52 +1331,16 @@ function CusdecXmlPanel() {
     setStatus('✓ XML downloaded')
   }
 
-  const FIELD_GROUPS: { title: string; fields: [keyof XmlValues, string][] }[] = [
-    { title: 'Registration / Assessment / Receipt', fields: [
-      ['regSerial', 'Registration Serial'], ['regNumber', 'Registration Number'], ['regDate', 'Registration Date'],
-      ['assessSerial', 'Assessment Serial'], ['assessNumber', 'Assessment Number'], ['assessDate', 'Assessment Date'],
-      ['receiptSerial', 'Receipt Serial'], ['receiptNumber', 'Receipt Number'], ['receiptDate', 'Receipt Date'],
-    ]},
-    { title: 'Traders / Declarant', fields: [
-      ['exporterCode', 'Exporter Code'], ['exporterName', 'Exporter Name'], ['consigneeName', 'Consignee Name'],
-      ['declarantCode', 'Declarant Code'], ['declarantName', 'Declarant Name'], ['declarantReference', 'Declarant Reference'],
-    ]},
-    { title: 'Country / General', fields: [
-      ['countryFirstDestination', 'Country of First Destination'], ['tradingCountry', 'Trading Country'],
-      ['destinationCountryCode', 'Destination Country Code'], ['destinationCountryName', 'Destination Country Name'],
-      ['cap', 'CAP'],
-    ]},
-    { title: 'Transport', fields: [
-      ['vesselIdentity', 'Vessel'], ['borderInfoIdentity', 'Border Info (Voyage/Date)'],
-      ['deliveryTermsCode', 'Delivery Terms'], ['placeOfLoadingCode', 'Place of Loading Code'],
-      ['placeOfLoadingName', 'Place of Loading Name'], ['locationOfGoods', 'Location of Goods'],
-    ]},
-    { title: 'Financial', fields: [
-      ['bankCode', 'Bank Code'], ['bankName', 'Bank Name'], ['bankBranch', 'Bank Branch'], ['bankReference', 'Bank Reference'],
-      ['modeOfPayment', 'Mode of Payment'], ['globalTaxes', 'Global Taxes'], ['totalTaxes', 'Total Taxes'],
-    ]},
-    { title: 'Valuation', fields: [
-      ['totalCif', 'Total CIF'], ['invoiceAmountNational', 'Invoice Amount (LKR)'], ['invoiceAmountForeign', 'Invoice Amount (Foreign)'],
-      ['currencyCode', 'Currency Code'], ['totalInvoice', 'Total Invoice'], ['totalWeight', 'Total Weight'],
-    ]},
-    { title: 'Item / Packages', fields: [
-      ['numberOfPackages', 'Number of Packages'], ['marks1', 'Marks 1'], ['marks2', 'Marks 2'],
-      ['attachedDocReference', 'Attached Document Reference'], ['attachedDocDate', 'Attached Document Date'],
-    ]},
-    { title: 'Tarification / Goods', fields: [
-      ['hsCode', 'HS Code'], ['itemPrice', 'Item Price'], ['descriptionOfGoods', 'Description of Goods'],
-      ['previousDocSummaryDeclaration', 'Previous Doc (Summary Declaration)'],
-      ['licenceNumber', 'Licence Number'], ['quantityDeductedFromLicence', 'Quantity Deducted from Licence'],
-    ]},
-    { title: 'Taxation', fields: [
-      ['itemTaxesAmount', 'Item Taxes Amount'],
-      ['dutyTaxBase1', 'Duty Tax Base (CC1)'], ['dutyTaxAmount1', 'Duty Tax Amount (CC1)'],
-      ['dutyTaxBase2', 'Duty Tax Base (CED)'], ['dutyTaxAmount2', 'Duty Tax Amount (CED)'],
-    ]},
-    { title: 'Item Weight/Value', fields: [
-      ['grossWeightItm', 'Gross Weight (Item)'], ['netWeightItm', 'Net Weight (Item)'], ['statisticalValue', 'Statistical Value'],
-    ]},
-  ]
+  // Every ASYCUDA field gets an editable box here — not just a curated
+  // subset — so anything without a database mapping (or where the mapped
+  // value is wrong/missing) always has somewhere to type it by hand before
+  // Save/Generate. Derived from XML_FIELD_DEFS (the same list Templates'
+  // "ASYCUDA CUSDEC XML" format mapping uses) so the two stay in sync.
+  const FIELD_GROUPS: { title: string; fields: [keyof XmlValues, string][] }[] =
+    Array.from(new Set(XML_FIELD_DEFS.map(def => def.group))).map(group => ({
+      title: group,
+      fields: XML_FIELD_DEFS.filter(def => def.group === group).map(def => [def.key, def.label] as [keyof XmlValues, string]),
+    }))
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
@@ -1453,17 +1419,33 @@ function CdnTextPanel() {
     const cdn = cdns.find(c => c.id === id)
     if (!cdn) return
     const cusdec = cusdecs.find(c => c.code === cdn.code && c.number === cdn.cusdec_number)
+
+    // cdn_no is stored as one composite string — "2026 CBEX1 C 46385" i.e.
+    // "YEAR CODE SERIAL NUMBER" — split it instead of dumping the whole
+    // thing into the NBR line (which duplicated the COD/YEA/SER lines above
+    // it) or hardcoding today's year/a fixed 'C' serial.
+    const cdnNoParts = (cdn.cdn_no || '').trim().split(/\s+/)
+    const [cdnYear, cdnCode, cdnSerial, cdnNumber] = cdnNoParts.length === 4
+      ? cdnNoParts : ['', '', '', cdn.cdn_no || '']
+
     setFields({
-      officeCode: cusdec?.code || cdn.code || '', year: new Date().getFullYear().toString(), serial: 'C', number: cdn.cdn_no || '',
-      shipper: cdn.shipper || '', consignee: cdn.consignee || '',
+      officeCode: cdnCode || cusdec?.code || cdn.code || '', year: cdnYear || new Date().getFullYear().toString(),
+      serial: cdnSerial || 'C', number: cdnNumber,
+      // cdn has no consignee column of its own — the buyer's name/address
+      // only lives on the matched CUSDEC row.
+      shipper: cdn.shipper || '', consignee: cusdec?.consignee || '',
       linkedCusdecRef: cusdec?.number || '', voyageDate: cdn.voyage_date || '', bl: cdn.bl_no || '',
-      driver: cdn.driver_name || '', terminal: '', lorry: cdn.lorry_no || '', trailer: cdn.trailer_no || '',
+      driver: cdn.driver_name || '', terminal: cdn.location || '', lorry: cdn.lorry_no || '', trailer: cdn.trailer_no || '',
       loadPort: cdn.loading_port || '', dischPort: cdn.discharge_port || '', vessel: cdn.vessel || '',
       voc: cdn.voc || '', coc: cdn.coc || '', slpa: cdn.slpa_no || '',
       pkgNo: cdn.pkg_no || '', pkgType: cdn.pkg_type || '', volume: cdn.volume || '',
       goods: cdn.goods_description || '', container: cdn.container_no || '', conType: cdn.con_type || '',
       seal: cdn.seal_no || '', marks: cdn.marks || '', gross: cdn.gross_mass || '',
-      preparedBy: '', declarantCode: '',
+      // Declarant code is the clearing agent's own registration — fixed
+      // across every declaration, not something that varies per shipment —
+      // so it falls back to the known constant when no per-CUSDEC value has
+      // been saved yet (cusdec.declarant_code is a new, mostly-empty column).
+      preparedBy: '', declarantCode: cusdec?.declarant_code || '1748813322525',
     })
   }
 
