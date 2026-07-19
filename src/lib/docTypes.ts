@@ -8,6 +8,7 @@ export const BUILTIN_DOC_TYPES = [
   { value: 'packing_list', label: 'Packing List' },
   { value: 'co',           label: 'CO (Certificate of Origin)' },
   { value: 'pytho',        label: 'Phyto (Phytosanitary)' },
+  { value: 'safta',        label: 'SAFTA' },
   { value: 'cusdec_xml',   label: 'Cusdec XML' },
   { value: 'cdn_text',     label: 'CDN Text' },
 ]
