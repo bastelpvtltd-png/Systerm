@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -11,6 +12,8 @@ const supabaseAdmin = createClient(
 // the normal PDF/Excel upload flow). GET loads the saved xml_data (or {} if
 // none yet); POST updates it on that same row.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     if (req.method === 'GET') {
       const id = String(req.query.id || '')

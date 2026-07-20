@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -10,6 +11,8 @@ const supabaseAdmin = createClient(
 // PDF" prompts default to it instead of a blank field — saving a different
 // subject overwrites it for next time, exactly like the recipient list.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     if (req.method === 'GET') {
       const { data } = await supabaseAdmin.from('email_settings').select('last_subject').eq('id', 1).maybeSingle()

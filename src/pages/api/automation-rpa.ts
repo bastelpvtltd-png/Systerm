@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { requireAuth } from '@/lib/serverAuth'
 
 // Barcode Enter / Trico Gate Pass entry / Boat Note Check / Export Release
 // Check all require driving a real login session on a government/port
@@ -10,6 +11,8 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 // real site (Playwright/Puppeteer, run once against a test entry first).
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   const { action } = req.body
   res.status(501).json({
     ok: false,

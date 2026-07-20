@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,6 +14,8 @@ const supabaseAdmin = createClient(
 // downloaded and was logged in uploaded_documents either way.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { invoice_number, doc_type, url } = req.body
     if (!invoice_number || !url || !['invoice', 'packing_list'].includes(doc_type)) {

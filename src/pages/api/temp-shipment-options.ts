@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,6 +13,8 @@ const supabaseAdmin = createClient(
 // allows free typing for a brand-new name that hasn't appeared yet.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { data, error } = await supabaseAdmin.from('cusdec').select('exporter, consignee').limit(2000)
     if (error) return res.status(400).json({ error: error.message })

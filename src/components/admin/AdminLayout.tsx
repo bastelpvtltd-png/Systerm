@@ -752,6 +752,32 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     router.push('/')
   }
 
+  // Auto-logout after 10 minutes with no activity anywhere in the app —
+  // mounted once per admin page (AdminLayout wraps every one), so this is
+  // the single place that needs to enforce it rather than each page. Any
+  // real interaction (click, key, scroll, touch, mouse move) resets the
+  // clock; running out logs out and sends them back to the login screen,
+  // same as an expired session.
+  useEffect(() => {
+    const IDLE_MS = 10 * 60 * 1000
+    let timer: ReturnType<typeof setTimeout>
+    async function onIdle() {
+      await supabase.auth.signOut()
+      router.replace('/')
+    }
+    function resetTimer() {
+      clearTimeout(timer)
+      timer = setTimeout(onIdle, IDLE_MS)
+    }
+    const events: (keyof WindowEventMap)[] = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click']
+    events.forEach(e => window.addEventListener(e, resetTimer, { passive: true }))
+    resetTimer()
+    return () => {
+      clearTimeout(timer)
+      events.forEach(e => window.removeEventListener(e, resetTimer))
+    }
+  }, [router])
+
   if (checking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -782,9 +808,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {/* Sidebar */}
         <aside className={`sidebar flex flex-col transition-all duration-300 ${collapsed ? 'w-16' : 'w-56'}`}>
           <div className="flex items-center gap-3 px-4 py-5 border-b border-white/10">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{background:'#22A87A'}}>
-              <Ship size={16} color="white"/>
-            </div>
+            <img src="/bastel-logo.png" alt="Bastel" className="w-8 h-8 rounded-lg flex-shrink-0 object-cover"/>
             {!collapsed && <span className="text-white font-bold text-sm">Bastel Official System</span>}
           </div>
 

@@ -6,6 +6,7 @@ import { extractByGrid } from '@/lib/gridExtract'
 import { extractBoxes } from '@/lib/boxExtract'
 import { applyTextRules, cleanContainerNo, cleanGrossMass } from '@/lib/textClean'
 import { DOC_TYPE_TABLE, getTableColumns } from '@/lib/docTables'
+import { requireAuth } from '@/lib/serverAuth'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
@@ -373,6 +374,8 @@ async function buildFieldsFromSchema(resolvedType: string, regexData: Record<str
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { base64, docType } = req.body
     if (!base64) return res.status(400).json({ error: 'No file data' })

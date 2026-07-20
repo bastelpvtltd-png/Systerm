@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -10,6 +11,8 @@ const supabaseAdmin = createClient(
 // this PDF" prompts (Upload Docs, its Preview list, Shipment Overview) offer
 // them back as suggestions instead of needing to be retyped every time.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     if (req.method === 'GET') {
       const { data, error } = await supabaseAdmin.from('saved_recipients').select('email').order('email')

@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { google } from 'googleapis'
 import { DOC_TYPE_FOLDER_NAMES, getOrCreateSubfolder } from '@/lib/driveFolders'
+import { requireAuth } from '@/lib/serverAuth'
 
 function driveClient() {
   const clientId = process.env.GOOGLE_CLIENT_ID || ''
@@ -17,6 +18,8 @@ function driveClient() {
 // actually stored in Drive without opening Drive itself.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const mainFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID || ''
     if (!mainFolderId) return res.status(500).json({ error: 'GOOGLE_DRIVE_FOLDER_ID not configured' })

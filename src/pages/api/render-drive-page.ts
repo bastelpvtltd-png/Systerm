@@ -1,12 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { google } from 'googleapis'
 import { openPdf } from '@/lib/mupdfDoc'
+import { requireAuth } from '@/lib/serverAuth'
 
 // Same rendering as render-page.ts, but for a document that's already saved
 // (only its Drive link is stored in the DB, not the PDF bytes) — downloads
 // the file from Drive first, then renders the requested page to a PNG.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { driveUrl, page } = req.body
     if (!driveUrl) return res.status(400).json({ error: 'driveUrl required' })

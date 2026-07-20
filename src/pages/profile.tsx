@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
-import { supabase } from '@/lib/supabase'
-import { Save, User, Lock } from 'lucide-react'
+import { supabase, authHeader } from '@/lib/supabase'
+import { Save, User, Lock, Camera, Loader } from 'lucide-react'
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
 
 const emptyForm = {
   full_name: '', username: '', password: '', confirm_password: '',
@@ -15,6 +24,8 @@ export default function ProfilePage() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [msg, setMsg] = useState('')
   const [loading, setLoading] = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState('')
+  const [avatarUploading, setAvatarUploading] = useState(false)
 
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data: { user } }) => {
@@ -30,8 +41,25 @@ export default function ProfilePage() {
         position: data.position ?? '', designation: data.designation ?? '',
       }))
       setIsAdmin(!!data?.is_admin)
+      setAvatarUrl(data?.avatar_url || '')
     })
   }, [])
+
+  async function handleAvatarChange(file: File) {
+    setAvatarUploading(true); setMsg('')
+    try {
+      const base64 = await fileToBase64(file)
+      const res = await fetch('/api/upload-profile-picture', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ base64, mimeType: file.type }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setAvatarUrl(d.avatar_url)
+      setMsg('Profile picture updated')
+    } catch (e: any) { setMsg(`✗ ${e.message}`) }
+    finally { setAvatarUploading(false) }
+  }
 
   async function handleSave() {
     setLoading(true)
@@ -75,12 +103,17 @@ export default function ProfilePage() {
   return (
     <div className="max-w-lg mx-auto p-8">
       <div className="flex items-center gap-3 mb-6">
-        <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{background:'#22A87A'}}>
-          <User size={24} color="white"/>
-        </div>
+        <label className="relative w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer overflow-hidden group" style={{background:'#22A87A'}}>
+          {avatarUrl ? <img src={avatarUrl} alt="" className="w-full h-full object-cover"/> : <User size={24} color="white"/>}
+          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+            {avatarUploading ? <Loader size={16} color="white" className="animate-spin"/> : <Camera size={16} color="white"/>}
+          </div>
+          <input type="file" accept="image/*" className="hidden" disabled={avatarUploading}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleAvatarChange(f); e.target.value = '' }}/>
+        </label>
         <div>
           <h1 className="text-xl font-bold">My Profile</h1>
-          <p className="text-gray-500 text-sm">Update your details</p>
+          <p className="text-gray-500 text-sm">Update your details · click your picture to change it</p>
         </div>
       </div>
 

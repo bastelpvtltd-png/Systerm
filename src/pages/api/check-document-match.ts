@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { findExistingMatches, checkCdnCap } from '@/lib/docTables'
+import { requireAuth } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,6 +15,8 @@ const supabaseAdmin = createClient(
 // in place, deleted-and-replaced, or the new one added alongside them anyway.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { doc_type, data } = req.body
     if (!doc_type || !data) return res.status(400).json({ error: 'doc_type and data required' })
