@@ -38,5 +38,18 @@ const nextConfig = {
     }
     return config
   },
+  // Bare aliases for every page under /admin/* — lets non-admin users (whose
+  // access is scoped via profiles.allowed_tabs) browse without ever seeing
+  // "/admin" in the address bar. This only masks the URL; it does NOT grant
+  // access on its own — AdminLayout still gates every one of these pages by
+  // is_admin / allowed_tabs regardless of which alias was used to reach it.
+  async rewrites() {
+    const adminPages = [
+      'dashboard', 'my-tasks', 'shipment-entry', 'upload-docs', 'shipment-overview',
+      'docs-create', 'templates', 'automation', 'database', 'financials',
+      'reports', 'users', 'settings', 'google-reauth',
+    ]
+    return adminPages.map(p => ({ source: `/${p}`, destination: `/admin/${p}` }))
+  },
 }
 module.exports = nextConfig

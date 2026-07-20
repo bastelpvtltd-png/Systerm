@@ -51,7 +51,9 @@ export default function LoginPage() {
       return
     }
 
-    router.push('/admin/dashboard')
+    // Bare alias (see next.config.js rewrites) — AdminLayout redirects on to
+    // whichever bare tab the account is actually allowed on if this isn't it.
+    router.push('/dashboard')
   }
 
   return (

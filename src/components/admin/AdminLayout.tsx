@@ -703,6 +703,15 @@ interface PermissionValue { isAdmin: boolean; has: (key: string) => boolean }
 const PermissionContext = createContext<PermissionValue>({ isAdmin: false, has: () => false })
 export function usePermission() { return useContext(PermissionContext) }
 
+// Every /admin/* page also has a bare alias via the rewrites in next.config.js
+// (e.g. /admin/dashboard <-> /dashboard) so non-admin users never see "/admin"
+// in the address bar. router.pathname always resolves to the /admin/* form
+// (that's the actual matched page) regardless of which alias was browsed to —
+// this just derives the bare form for building links/redirects.
+function bareOf(path: string) {
+  return path.startsWith('/admin/') ? path.slice('/admin'.length) : path
+}
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const [collapsed, setCollapsed] = useState(false)
@@ -745,15 +754,28 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       const allowed: string[] = prof?.allowed_tabs || []
       setIsAdmin(admin)
       setAllowedTabs(allowed)
-      if (!admin && allowed.length && !allowed.includes(router.pathname)) {
-        router.replace(allowed[0])
-        return // leaving this path — never mark it authorized, keeps the spinner up until we're gone
+      if (!admin) {
+        // Land on the (bare-URL) tab they're actually allowed on — whether
+        // they hit an unauthorized tab, or reached any /admin/* URL directly
+        // by typing it (that alias must never surface for a non-admin).
+        // On an allowed tab, keep the query string (e.g. dashboard "View →"
+        // links pass ?invoiceNumber=...) — only the /admin prefix gets masked.
+        const onAllowedTab = allowed.includes(router.pathname)
+        const qIndex = router.asPath.indexOf('?')
+        const query = qIndex >= 0 ? router.asPath.slice(qIndex) : ''
+        const targetBare = onAllowedTab
+          ? bareOf(router.pathname) + query
+          : bareOf(allowed[0] || router.pathname)
+        if (router.asPath !== targetBare) {
+          router.replace(targetBare)
+          return // leaving this path — never mark it authorized, keeps the spinner up until we're gone
+        }
       }
       setAuthorizedPath(router.pathname)
     }
     check()
     return () => { cancelled = true }
-  }, [router.pathname])
+  }, [router.pathname, router.asPath])
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -836,7 +858,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             {visibleItems.map(({href, icon: Icon, label}) => {
               const active = router.pathname === href
               return (
-                <Link key={href} href={href}
+                <Link key={href} href={isAdmin ? href : bareOf(href)}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
                     active ? 'bg-brand-green text-white' : 'text-blue-100 hover:bg-white/10'
                   }`}>
