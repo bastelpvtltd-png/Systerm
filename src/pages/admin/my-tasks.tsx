@@ -258,6 +258,32 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
           </div>
         </div>
 
+        {/* Awaiting my response — lives here (not the Payments panel) so
+            confirming/declining a payment doesn't need Payments tab access,
+            just Balance. */}
+        {awaitingMyResponse.length > 0 && (
+          <div className="mb-3">
+            <p className="text-xs font-medium text-gray-600 mb-1.5">Awaiting your response</p>
+            <div className="space-y-1.5">
+              {awaitingMyResponse.map(p => (
+                <div key={p.id} className="flex items-center justify-between text-xs border border-amber-200 bg-amber-50 rounded-lg px-3 py-2">
+                  <span><b>{p.from_user_name}</b> says they paid you <b>Rs. {fmtLKR(Number(p.amount))}</b></span>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button onClick={() => respond(p.id, 'confirmed')} disabled={respondingId === p.id}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-md text-white font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                      <Check size={12}/>Yes, landed
+                    </button>
+                    <button onClick={() => respond(p.id, 'declined')} disabled={respondingId === p.id}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-md border border-red-300 text-red-600 font-medium disabled:opacity-50 hover:bg-red-50">
+                      <X size={12}/>No
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Cost breakdown */}
         {showCost && (
           <div className="mb-3 bg-blue-50 rounded-xl p-3 space-y-3">
@@ -488,30 +514,6 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
           </button>
         </div>
         {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
-
-        {/* Awaiting my response */}
-        {awaitingMyResponse.length > 0 && (
-          <div className="mb-4">
-            <p className="text-xs font-medium text-gray-600 mb-1.5">Awaiting your response</p>
-            <div className="space-y-1.5">
-              {awaitingMyResponse.map(p => (
-                <div key={p.id} className="flex items-center justify-between text-xs border border-amber-200 bg-amber-50 rounded-lg px-3 py-2">
-                  <span><b>{p.from_user_name}</b> says they paid you <b>Rs. {fmtLKR(Number(p.amount))}</b></span>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <button onClick={() => respond(p.id, 'confirmed')} disabled={respondingId === p.id}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-md text-white font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
-                      <Check size={12}/>Yes, landed
-                    </button>
-                    <button onClick={() => respond(p.id, 'declined')} disabled={respondingId === p.id}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-md border border-red-300 text-red-600 font-medium disabled:opacity-50 hover:bg-red-50">
-                      <X size={12}/>No
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Payments you've sent */}
         {sentByMe.length > 0 && (

@@ -130,12 +130,17 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     // (picked by hand) plays the same role instead.
     const { data: sheetRoutes } = await sb.from('template_sheet_routes').select('*').eq('template_id', tpl.id)
     const tinVat = cusdecRow?.tin_vat as string | undefined
+    // '__all__' in a route's tin_vat_list (set via Templates' "All Shippers"
+    // checkbox — see templates.tsx's SheetRouteEditor) matches every CUSDEC,
+    // including ones with no tin_vat at all — checked first since it should
+    // win regardless of whether a specific-TIN-VAT route also exists.
+    const matchesRoute = (r: { tin_vat_list?: string[] }) => r.tin_vat_list?.includes('__all__') || (!!tinVat && r.tin_vat_list?.includes(tinVat))
     const matchedFillRoute = fill_sheet_gid
       ? { sheet_gid: fill_sheet_gid }
-      : (tinVat ? sheetRoutes?.find(r => r.route_type === 'fill' && r.tin_vat_list?.includes(tinVat)) : undefined)
+      : sheetRoutes?.find(r => r.route_type === 'fill' && matchesRoute(r))
     const matchedPrintRoute = print_sheet_gid
       ? { sheet_gid: print_sheet_gid }
-      : (tinVat ? sheetRoutes?.find(r => r.route_type === 'print' && r.tin_vat_list?.includes(tinVat)) : undefined)
+      : sheetRoutes?.find(r => r.route_type === 'print' && matchesRoute(r))
 
     // Resolve the live sheet list from the ORIGINAL spreadsheet before
     // copying — a cheap read that lets us fail fast (with the current list

@@ -69,6 +69,13 @@ const emptyRow = (): TemplateMapping => ({
 const CUSDEC_FALLBACK = ['code','number','date','exporter','consignee','vessel','voyage_no','bl_no','gross_mass','net_mass','cap','hs_code','amount','invoice_number','boat_note_link']
 const CDN_FALLBACK    = ['code','cusdec_number','shipper','consignee','container_no','goods_description','vessel','voyage','bl_no','slpa_no','lorry_no','cdn_no']
 
+// A route's tin_vat_list normally holds real TIN VAT strings — this
+// sentinel means "every shipper, no matter what" instead of enumerating
+// them one by one. Only one route (per fill/print) can hold it; while it
+// does, every other route's individual shipper picks are moot (an "All
+// Shippers" route always wins the match — see docGenerate.ts).
+const ALL_SHIPPERS = '__all__'
+
 function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shippers, onSave, saving }: {
   title: string
   routeType: 'fill' | 'print'
@@ -95,14 +102,22 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
       ...r, tin_vat_list: r.tin_vat_list.includes(tinVat) ? r.tin_vat_list.filter(t => t !== tinVat) : [...r.tin_vat_list, tinVat],
     }))
   }
+  function toggleAllShippers(routeIdx: number) {
+    setRoutes(prev => prev.map((r, i) => i !== routeIdx ? r : {
+      ...r, tin_vat_list: r.tin_vat_list.includes(ALL_SHIPPERS) ? [] : [ALL_SHIPPERS],
+    }))
+  }
   function removeRoute(idx: number) { setRoutes(prev => prev.filter((_, i) => i !== idx)) }
   const assignedElsewhere = (excludeIdx: number) => new Set(routes.flatMap((r, i) => i === excludeIdx ? [] : r.tin_vat_list))
+  const allShippersUsedElsewhere = (excludeIdx: number) => routes.some((r, i) => i !== excludeIdx && r.tin_vat_list.includes(ALL_SHIPPERS))
 
   return (
     <div className="border border-gray-100 rounded-lg p-3">
       <h3 className="text-xs font-semibold text-gray-700 mb-2">{title}</h3>
       <div className="space-y-2 mb-3">
         {routes.map((r, idx) => {
+          const isAll = r.tin_vat_list.includes(ALL_SHIPPERS)
+          const allTakenElsewhere = allShippersUsedElsewhere(idx)
           const takenElsewhere = assignedElsewhere(idx)
           // Always show the sheet's CURRENT title (looked up live by gid,
           // the same stable-ID resolution generation itself uses) — not the
@@ -116,18 +131,28 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
                 <button onClick={() => removeRoute(idx)} className="text-gray-300 hover:text-red-500"><X size={13}/></button>
               </div>
               <button onClick={() => setPickerOpenIdx(pickerOpenIdx === idx ? null : idx)} className="text-[11px] text-blue-600 hover:underline mb-1.5">
-                {pickerOpenIdx === idx ? 'Hide shippers' : `${r.tin_vat_list.length} shipper(s) — edit`}
+                {pickerOpenIdx === idx ? 'Hide shippers' : isAll ? 'All Shippers — edit' : `${r.tin_vat_list.length} shipper(s) — edit`}
               </button>
               {pickerOpenIdx === idx && (
-                <div className="max-h-40 overflow-y-auto border-t border-gray-50 pt-1.5 space-y-1">
-                  <input value={shipperSearch} onChange={e => setShipperSearch(e.target.value)} placeholder="Search shipper..." className="input text-xs w-full mb-1"/>
-                  {shippers.filter(s => !shipperSearch || s.exporter.toLowerCase().includes(shipperSearch.toLowerCase()) || s.tin_vat.includes(shipperSearch)).map(s => (
-                    <label key={s.tin_vat} className={`flex items-center gap-2 text-[11px] px-1 py-0.5 rounded ${takenElsewhere.has(s.tin_vat) ? 'opacity-40' : 'cursor-pointer hover:bg-gray-50'}`}>
-                      <input type="checkbox" checked={r.tin_vat_list.includes(s.tin_vat)} disabled={takenElsewhere.has(s.tin_vat)}
-                        onChange={() => toggleShipper(idx, s.tin_vat)}/>
-                      <span className="truncate">{s.exporter.slice(0, 28) || '(no name)'} <span className="text-gray-400">· {s.tin_vat}</span></span>
-                    </label>
-                  ))}
+                <div className="border-t border-gray-50 pt-1.5 space-y-1">
+                  <label className={`flex items-center gap-2 text-[11px] font-medium px-1 py-0.5 rounded ${allTakenElsewhere ? 'opacity-40' : 'cursor-pointer hover:bg-gray-50'}`}>
+                    <input type="checkbox" checked={isAll} disabled={allTakenElsewhere}
+                      onChange={() => toggleAllShippers(idx)}/>
+                    <span>All Shippers <span className="text-gray-400 font-normal">— everyone routes here, no individual picks needed</span></span>
+                  </label>
+                  {allTakenElsewhere && <p className="text-[10px] text-amber-600 px-1">Another route already claims all shippers.</p>}
+                  {!isAll && (
+                    <div className="max-h-40 overflow-y-auto space-y-1">
+                      <input value={shipperSearch} onChange={e => setShipperSearch(e.target.value)} placeholder="Search shipper..." className="input text-xs w-full mb-1"/>
+                      {shippers.filter(s => !shipperSearch || s.exporter.toLowerCase().includes(shipperSearch.toLowerCase()) || s.tin_vat.includes(shipperSearch)).map(s => (
+                        <label key={s.tin_vat} className={`flex items-center gap-2 text-[11px] px-1 py-0.5 rounded ${(takenElsewhere.has(s.tin_vat) || allTakenElsewhere) ? 'opacity-40' : 'cursor-pointer hover:bg-gray-50'}`}>
+                          <input type="checkbox" checked={r.tin_vat_list.includes(s.tin_vat)} disabled={takenElsewhere.has(s.tin_vat) || allTakenElsewhere}
+                            onChange={() => toggleShipper(idx, s.tin_vat)}/>
+                          <span className="truncate">{s.exporter.slice(0, 28) || '(no name)'} <span className="text-gray-400">· {s.tin_vat}</span></span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
