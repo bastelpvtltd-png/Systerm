@@ -28,7 +28,7 @@ export default function LoginPage() {
     // Find user by username
     const { data: profile } = await supabase
       .from('profiles')
-      .select('id')
+      .select('id, is_admin')
       .eq('username', username)
       .single()
 
@@ -51,9 +51,10 @@ export default function LoginPage() {
       return
     }
 
-    // Bare alias (see next.config.js rewrites) — AdminLayout redirects on to
-    // whichever bare tab the account is actually allowed on if this isn't it.
-    router.push('/dashboard')
+    // Admins keep the /admin/* URL; everyone else lands on the bare alias
+    // (see next.config.js rewrites) — AdminLayout redirects on to whichever
+    // bare tab a non-admin account is actually allowed on if this isn't it.
+    router.push(profile?.is_admin ? '/admin/dashboard' : '/dashboard')
   }
 
   return (
