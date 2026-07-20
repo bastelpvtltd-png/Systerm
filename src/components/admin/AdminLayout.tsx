@@ -706,10 +706,17 @@ export function usePermission() { return useContext(PermissionContext) }
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const [collapsed, setCollapsed] = useState(false)
-  const [checking, setChecking]   = useState(true)
+  const [authorizedPath, setAuthorizedPath] = useState<string | null>(null)
   const [isAdmin, setIsAdmin]     = useState(false)
   const [allowedTabs, setAllowedTabs] = useState<string[]>([])
   const [dark, setDark] = useState(false)
+  // AdminLayout stays mounted across tab navigations (see _app.tsx) rather
+  // than remounting per page. That means the permission check below re-runs
+  // per pathname but must gate rendering per-pathname too — otherwise the
+  // previous page's "already checked" state carries over and the new
+  // (possibly unauthorized) page's content, and its own data-fetching
+  // effects, render for an instant before the redirect below lands.
+  const checking = authorizedPath !== router.pathname
 
   useEffect(() => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('theme') : null
@@ -738,10 +745,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       const allowed: string[] = prof?.allowed_tabs || []
       setIsAdmin(admin)
       setAllowedTabs(allowed)
-      setChecking(false)
       if (!admin && allowed.length && !allowed.includes(router.pathname)) {
         router.replace(allowed[0])
+        return // leaving this path — never mark it authorized, keeps the spinner up until we're gone
       }
+      setAuthorizedPath(router.pathname)
     }
     check()
     return () => { cancelled = true }
