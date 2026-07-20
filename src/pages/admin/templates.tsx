@@ -10,6 +10,11 @@ interface TemplateMapping {
   id?: string; field_label: string; data_source: 'cusdec' | 'cdn' | 'manual'
   column_name: string; is_repeating: boolean; target_cell_or_range: string
   sheet_name: string
+  // Google Sheet format only. example_value is purely informational (shown
+  // as a placeholder/hint here, never enforced — blank is always fine).
+  // empty_fallback is what actually gets written into the cell when the
+  // real value is missing — blank means "write nothing" (today's default).
+  example_value?: string; empty_fallback?: string
 }
 interface SheetRoute { id?: string; route_type: 'fill' | 'print'; sheet_gid: string; sheet_name: string; tin_vat_list: string[] }
 interface GSheet {
@@ -63,6 +68,7 @@ export function titleCaseSlug(slug: string): string {
 const emptyRow = (): TemplateMapping => ({
   field_label: '', data_source: 'cusdec', column_name: '',
   is_repeating: false, target_cell_or_range: '', sheet_name: '',
+  example_value: '', empty_fallback: '',
 })
 
 // Known columns per table — loaded from /api/table-columns
@@ -618,6 +624,8 @@ function DocTemplatesContent() {
                 <th className="pb-2 font-medium pr-2 w-36">Column</th>
                 <th className="pb-2 font-medium pr-2 w-16 text-center">Repeat</th>
                 {templateFormat === 'google_sheet' && <th className="pb-2 font-medium pr-2 w-24">Cell / Range</th>}
+                {templateFormat === 'google_sheet' && <th className="pb-2 font-medium pr-2 w-28">Example <span className="text-gray-300 font-normal">(optional)</span></th>}
+                {templateFormat === 'google_sheet' && <th className="pb-2 font-medium pr-2 w-28">If Empty, Write</th>}
                 {templateFormat === 'trico_gate_pass' && <th className="pb-2 font-medium pr-2 w-32">Form Field Name</th>}
                 <th className="pb-2 w-6"></th>
               </tr>
@@ -660,6 +668,18 @@ function DocTemplatesContent() {
                       {m.is_repeating && m.target_cell_or_range && !m.target_cell_or_range.includes(':') && (
                         <p className="text-[10px] text-red-500 mt-0.5">Range needed</p>
                       )}
+                    </td>
+                  )}
+                  {templateFormat === 'google_sheet' && (
+                    <td className="py-1.5 pr-2">
+                      <input value={m.example_value || ''} onChange={e => updateRow(i, { example_value: e.target.value })}
+                        placeholder="e.g. INV-2026-001" className="input text-xs w-full"/>
+                    </td>
+                  )}
+                  {templateFormat === 'google_sheet' && (
+                    <td className="py-1.5 pr-2">
+                      <input value={m.empty_fallback || ''} onChange={e => updateRow(i, { empty_fallback: e.target.value })}
+                        placeholder="blank" className="input text-xs w-full" title='What to write in the cell when there is no data — leave blank to write nothing, or type e.g. a space, ".", "N/A".'/>
                     </td>
                   )}
                   {templateFormat === 'trico_gate_pass' && (

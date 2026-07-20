@@ -1856,6 +1856,7 @@ function TricoGatePassPanel({ documentType, label }: { documentType: string; lab
 
 function CustomDocPanel({ documentType, label }: { documentType: string; label: string }) {
   const [tplFields, setTplFields] = useState<{ field_label: string; is_repeating: boolean; data_source?: string }[]>([])
+  const [templateFormat, setTemplateFormat] = useState('google_sheet')
   const [tplLoadError, setTplLoadError] = useState('')
   const [formValues, setFormValues] = useState<Record<string, string[]>>({})
   const [generating, setGenerating] = useState(false)
@@ -1911,6 +1912,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         if (!tpl) { setTplLoadError('No template configured for this document type yet'); return }
         const fields = (tpl.template_mappings || []).map((m: any) => ({ field_label: m.field_label, is_repeating: !!m.is_repeating, data_source: m.data_source }))
         setTplFields(fields)
+        setTemplateFormat(tpl.template_format || 'google_sheet')
         const init: Record<string, string[]> = {}
         fields.forEach((f: { field_label: string }) => { init[f.field_label] = [''] })
         setFormValues(init)
@@ -2145,19 +2147,21 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         </div>
       )}
 
-      {entryMode === 'manual' && (
-      <div className="card max-w-xl">
+      {entryMode === 'manual' && (() => {
+        const isGrid = templateFormat === 'google_sheet'
+        return (
+        <div className={`card ${isGrid ? 'max-w-4xl' : 'max-w-xl'}`}>
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Template Fields</h2>
         {tplLoadError ? (
           <p className="text-xs text-red-500 flex items-center gap-1"><AlertTriangle size={12}/>{tplLoadError}</p>
         ) : tplFields.length === 0 ? (
           <p className="text-xs text-gray-400">Loading template fields…</p>
         ) : (
-          <div className="space-y-3">
+          <div className={isGrid ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3' : 'space-y-3'}>
             {tplFields.map(f => {
               const rows = formValues[f.field_label] || ['']
               return (
-                <div key={f.field_label}>
+                <div key={f.field_label} className={isGrid && f.is_repeating ? 'sm:col-span-2 lg:col-span-3' : ''}>
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-xs font-medium text-gray-600">{f.field_label}</label>
                     {f.is_repeating && (
@@ -2188,17 +2192,20 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
                 </div>
               )
             })}
-            <button onClick={generate} disabled={generating || manualSheetChoiceMissing}
-              className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
-              style={{ background: '#3b82f6' }}>
-              {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-              Generate {label}
-            </button>
-            {manualSheetChoiceMissing && <p className="text-[11px] text-amber-600 mt-1">Pick Fill Sheet and Print Sheet above first.</p>}
+            <div className={isGrid ? 'sm:col-span-2 lg:col-span-3' : ''}>
+              <button onClick={generate} disabled={generating || manualSheetChoiceMissing}
+                className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
+                style={{ background: '#3b82f6' }}>
+                {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
+                Generate {label}
+              </button>
+              {manualSheetChoiceMissing && <p className="text-[11px] text-amber-600 mt-1">Pick Fill Sheet and Print Sheet above first.</p>}
+            </div>
           </div>
         )}
-      </div>
-      )}
+        </div>
+        )
+      })()}
 
       {status && <p className={`text-xs font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
 
@@ -2243,6 +2250,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
           docType={documentType}
           cusdecId={entryMode === 'cusdec' ? selectedCusdecId : undefined}
           cusdecNumber={entryMode === 'cusdec' ? selectedCusdec?.number : undefined}
+          hideSaveAndNotify={entryMode === 'manual'}
           onSave={onSaveModal}
           onGetDriveLinks={onGetDriveLinksModal}
           onClose={() => setSendModalOpen(false)}
@@ -2328,11 +2336,20 @@ function GenerationHistoryPanel({ documentType, refreshKey }: { documentType: st
     } catch {} finally { setCopyingId(null) }
   }
 
-  if (!documentType || loading || items.length === 0) return null
+  if (!documentType) return null
 
+  // Always rendered as its own distinct panel — not just content that
+  // appears once something's been generated — so History reads as a
+  // separate, permanent section per document type rather than transient
+  // output tacked onto the generate flow.
   return (
-    <div className="card max-w-xl">
-      <h2 className="font-semibold text-gray-900 text-sm mb-3">Recent Generations</h2>
+    <div className="card max-w-xl mt-5">
+      <h2 className="font-semibold text-gray-900 text-sm mb-3">History</h2>
+      {loading ? (
+        <p className="text-xs text-gray-400 flex items-center gap-1.5"><Loader size={12} className="animate-spin"/>Loading…</p>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-4">No documents generated yet</p>
+      ) : (
       <div className="space-y-1.5 max-h-72 overflow-y-auto">
         {items.map(item => (
           <div key={item.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2">
@@ -2356,6 +2373,7 @@ function GenerationHistoryPanel({ documentType, refreshKey }: { documentType: st
           </div>
         ))}
       </div>
+      )}
       {mailItem && (
         <EmailPdfModal
           attachments={[{ filename: mailItem.file_name, url: mailItem.drive_url }]}

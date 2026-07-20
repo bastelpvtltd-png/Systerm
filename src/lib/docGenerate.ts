@@ -18,6 +18,13 @@ function resolveColumnValue(row: Record<string, any> | null | undefined, columnN
   return parts[Number(m[2])] ?? ''
 }
 
+// A Google Sheet mapping's empty_fallback (Templates → "If Empty, Write")
+// is what actually goes into the cell when there's no real value — blank
+// (the default) keeps today's behavior of writing nothing.
+function withFallback(value: string, fallback?: string | null): string {
+  return value === '' && fallback ? fallback : value
+}
+
 function getDriveClient() {
   const auth = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET)
   auth.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN })
@@ -194,7 +201,7 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     copyId = copyResp.data.id!
 
     // Build cell updates from mappings — each mapping can target a specific sheet
-    const mappings: Array<{ field_label: string; data_source: string; column_name: string; is_repeating: boolean; target_cell_or_range: string }> = tpl.template_mappings || []
+    const mappings: Array<{ field_label: string; data_source: string; column_name: string; is_repeating: boolean; target_cell_or_range: string; empty_fallback?: string | null }> = tpl.template_mappings || []
     const updates: Array<{ range: string; value: string | number | null }> = []
 
     for (const m of mappings) {
@@ -210,25 +217,25 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
           const sourceRows = m.data_source === 'manual' ? [] : m.data_source === 'cdn' ? cdnRows : cusdecRow ? [cusdecRow] : []
           if (sourceRows.length) {
             sourceRows.slice(0, endRow - startRow + 1).forEach((row, i) => {
-              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: row[m.column_name] ?? '' })
+              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: withFallback(row[m.column_name] ?? '', m.empty_fallback) })
             })
           } else if ((manual_values || {})[m.field_label]) {
             // No CUSDEC/CDN row to source from (pure manual entry) — fall back
             // to the newline-joined rows typed into the Manual Entry tab.
             const manualRows = manual_values![m.field_label].split('\n').filter(Boolean)
             manualRows.slice(0, endRow - startRow + 1).forEach((val, i) => {
-              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: val })
+              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: withFallback(val, m.empty_fallback) })
             })
           }
         }
         continue
       }
 
-      let value: string | number | null = ''
+      let value = ''
       if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
       else if (m.data_source === 'cusdec') value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
       else if (m.data_source === 'cdn') value = cdnRows[0] ? (cdnRows[0][m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
-      updates.push({ range: `${sheetPrefix}${m.target_cell_or_range.toUpperCase()}`, value })
+      updates.push({ range: `${sheetPrefix}${m.target_cell_or_range.toUpperCase()}`, value: withFallback(value, m.empty_fallback) })
     }
 
     if (updates.length) await batchWriteValues(copyId, updates)

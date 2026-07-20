@@ -69,6 +69,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   // ── other work admin ──────────────────────────────────────────────────────
   const [approvingId,  setApprovingId]  = useState<string | null>(null)
   const [deletingOwId, setDeletingOwId] = useState<string | null>(null)
+  const [clearingUserId, setClearingUserId] = useState<string | null>(null)
   // ── rate edit (admin) ─────────────────────────────────────────────────────
   const [rateDraft,   setRateDraft]   = useState<WorkRates | null>(null)
   const [savingRates, setSavingRates] = useState(false)
@@ -178,6 +179,21 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
       setMyOtherWork(prev => prev.filter(x => x.id !== id))
     } catch (e: any) { setError(e.message) }
     finally { setDeletingOwId(null) }
+  }
+
+  async function clearUserData(id: string, name: string) {
+    if (!confirm(`Clear ALL financial data for ${name}? This permanently deletes their Count Work, Other Work, and received-payment records — Cost/Received/Balance all go back to zero. This cannot be undone.`)) return
+    setClearingUserId(id)
+    try {
+      const res = await fetch('/api/admin-clear-user-data', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ user_id: id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      await Promise.all([load(), loadAllWork()])
+    } catch (e: any) { setError(e.message) }
+    finally { setClearingUserId(null) }
   }
 
   async function saveRates() {
@@ -454,7 +470,13 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                       <div className="px-3 py-2.5 bg-gray-50">
                         <div className="flex items-center justify-between mb-1.5">
                           <p className="font-semibold text-gray-800 text-xs">{name}</p>
-                          <span className={`text-xs font-bold ${bal >= 0 ? 'text-amber-700' : 'text-red-600'}`}>Balance: Rs. {fmtLKR(bal)}</span>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs font-bold ${bal >= 0 ? 'text-amber-700' : 'text-red-600'}`}>Balance: Rs. {fmtLKR(bal)}</span>
+                            <button onClick={() => clearUserData(u.id, name)} disabled={clearingUserId === u.id}
+                              title="Clear all financial data for this user" className="text-gray-300 hover:text-red-500 disabled:opacity-40">
+                              {clearingUserId === u.id ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>}
+                            </button>
+                          </div>
                         </div>
                         <div className="flex items-center gap-4 text-xs flex-wrap">
                           <span className="text-gray-500">CDN: <b className="text-green-700">{userWork.cdn}</b> · CAP: <b className="text-purple-700">{userWork.cap}</b></span>
@@ -525,11 +547,17 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                   <span className="text-gray-600">{p.to_display_name} — Rs. {fmtLKR(Number(p.amount))}</span>
                   <div className="flex items-center gap-2">
                     {statusBadge(p.status)}
-                    <button onClick={() => { if (confirm('Return this payment?')) deletePayment(p.id, true) }}
-                      disabled={returningId === p.id}
-                      className="flex items-center gap-0.5 text-[10px] text-gray-400 hover:text-amber-600 disabled:opacity-40">
-                      {returningId === p.id ? <Loader size={10} className="animate-spin"/> : <Undo2 size={10}/>}Return
-                    </button>
+                    {/* Only a declined payment can be returned — once the
+                        recipient has confirmed it landed (or it's still
+                        pending their response), the sender can't unilaterally
+                        erase that record. */}
+                    {p.status === 'declined' && (
+                      <button onClick={() => { if (confirm('Return this payment?')) deletePayment(p.id, true) }}
+                        disabled={returningId === p.id}
+                        className="flex items-center gap-0.5 text-[10px] text-gray-400 hover:text-amber-600 disabled:opacity-40">
+                        {returningId === p.id ? <Loader size={10} className="animate-spin"/> : <Undo2 size={10}/>}Return
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

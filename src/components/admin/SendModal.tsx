@@ -15,10 +15,14 @@ export interface SendResultFile { fileName: string; driveLink: string; docType?:
 // everything in one message.
 const REASON_OPTIONS = ['', 'CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Final Document', 'Other']
 
-export default function SendModal({ label, uploaderName, docType, cusdecId, cusdecNumber, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason }: {
+export default function SendModal({ label, uploaderName, docType, cusdecId, cusdecNumber, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason, hideSaveAndNotify }: {
   label: string
   uploaderName?: string
   docType?: string
+  // Manual Entry has no CUSDEC to save the Drive link against (Save writes
+  // to cusdec_document_links, which needs a cusdec_id) — Download already
+  // works independently of this modal, so only Mail makes sense here.
+  hideSaveAndNotify?: boolean
   // Only known when the caller is in Database mode with a CUSDEC picked —
   // lets a "Final Document" send create its pending-approval task (see
   // final_document_tasks). Reason-tagged sends with no CUSDEC (Manual
@@ -162,24 +166,30 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         </div>
         <div className="p-5 space-y-3">
           <p className="text-xs text-gray-500 truncate">{label}</p>
-          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
-            <input type="checkbox" checked={save} disabled={notify} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
-            <Save size={15} className="text-gray-500"/>
-            <span className="text-sm text-gray-800">Save (to Drive + Database)</span>
-          </label>
+          {!hideSaveAndNotify && (
+            <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
+              <input type="checkbox" checked={save} disabled={notify} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
+              <Save size={15} className="text-gray-500"/>
+              <span className="text-sm text-gray-800">Save (to Drive + Database)</span>
+            </label>
+          )}
           <label className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50">
             <input type="checkbox" checked={mail} onChange={e => setMail(e.target.checked)} className="w-4 h-4"/>
             <Mail size={15} className="text-gray-500"/>
             <span className="text-sm text-gray-800">Mail</span>
           </label>
-          <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${(isCusdecPassed || notifyDisabled) ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
-            <input type="checkbox" checked={(notify || isCusdecPassed) && !notifyDisabled} disabled={isCusdecPassed || notifyDisabled} onChange={e => setNotifyChecked(e.target.checked)} className="w-4 h-4"/>
-            <Bell size={15} className="text-gray-500"/>
-            <span className="text-sm text-gray-800">Notify (everyone's Dashboard)</span>
-          </label>
-          {notifyDisabled && <p className="text-[11px] text-amber-600 -mt-1">{notifyDisabledReason || 'Notify is not available for this item.'}</p>}
-          {!notifyDisabled && notify && !isCusdecPassed && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
-          {!notifyDisabled && isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Notify always on. Save is ticked by default; untick only if you want Drive-only (temporary) upload.</p>}
+          {!hideSaveAndNotify && (
+            <>
+              <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${(isCusdecPassed || notifyDisabled) ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
+                <input type="checkbox" checked={(notify || isCusdecPassed) && !notifyDisabled} disabled={isCusdecPassed || notifyDisabled} onChange={e => setNotifyChecked(e.target.checked)} className="w-4 h-4"/>
+                <Bell size={15} className="text-gray-500"/>
+                <span className="text-sm text-gray-800">Notify (everyone's Dashboard)</span>
+              </label>
+              {notifyDisabled && <p className="text-[11px] text-amber-600 -mt-1">{notifyDisabledReason || 'Notify is not available for this item.'}</p>}
+              {!notifyDisabled && notify && !isCusdecPassed && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
+              {!notifyDisabled && isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Notify always on. Save is ticked by default; untick only if you want Drive-only (temporary) upload.</p>}
+            </>
+          )}
 
           <div className="pt-1">
             <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>

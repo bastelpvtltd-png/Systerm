@@ -65,6 +65,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             is_repeating: m.is_repeating || false,
             target_cell_or_range: m.target_cell_or_range,
             sheet_name: m.sheet_name || null,
+            example_value: m.example_value || null,
+            empty_fallback: m.empty_fallback ?? null,
           }))
           const { error: mapErr } = await sb.from('template_mappings').insert(rows)
           if (mapErr) throw mapErr

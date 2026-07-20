@@ -81,6 +81,7 @@ function DashboardContent() {
   // immediately instead of needing a page refresh to show the new task.
   const [pickRefreshKey, setPickRefreshKey] = useState(0)
   const [currentUserId, setCurrentUserId] = useState('')
+  const [finalDocsCount, setFinalDocsCount] = useState(0)
   const [pickingShipmentId, setPickingShipmentId] = useState<string | null>(null)
   const [shipmentPickError, setShipmentPickError] = useState('')
 
@@ -205,6 +206,7 @@ function DashboardContent() {
     { key: 'section:dashboard.boatnote-pending', id: 'boatnote', label: 'Boat Note Pending',       value: summary.boatNotePending.count,    icon: Package,     color: '#3b82f6' },
     { key: 'section:dashboard.release-pending',  id: 'release',  label: 'Export Release Pending',  value: summary.releasePending.count,     icon: AlertCircle, color: '#ef4444' },
     { key: 'section:dashboard.closing-passed',   id: 'closingPassed', label: 'Closing Time Passed', value: summary.closingPassed.count,  icon: AlertCircle, color: '#dc2626' },
+    { key: 'section:dashboard.final-documents',  id: 'finalDocs', label: 'Pending Final Document', value: finalDocsCount, icon: FileCheck, color: '#22A87A' },
   ].filter(s => has(s.key))
 
   return (
@@ -457,10 +459,21 @@ function DashboardContent() {
           </div>
         )}
 
+        {expanded === 'finalDocs' && (
+          <div className="mb-4">
+            <PendingFinalDocumentsPanel currentUserId={currentUserId} onCountChange={setFinalDocsCount}/>
+          </div>
+        )}
+        {/* Keeps the stat card's count fresh even while collapsed — this
+            component polls internally regardless of whether it's rendered
+            expanded, so mount it invisibly when collapsed just for the count. */}
+        {expanded !== 'finalDocs' && has('section:dashboard.final-documents') && (
+          <div className="hidden"><PendingFinalDocumentsPanel currentUserId={currentUserId} onCountChange={setFinalDocsCount}/></div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
           {has('section:dashboard.incoming') && <IncomingPanel onPicked={() => setPickRefreshKey(k => k + 1)}/>}
           {has('section:dashboard.my-picked-tasks') && <MyPickedTasksPanel refreshKey={pickRefreshKey}/>}
-          {has('section:dashboard.final-documents') && <PendingFinalDocumentsPanel currentUserId={currentUserId}/>}
         </div>
 
         {has('section:dashboard.pick-history') && <PickHistoryPanel/>}
@@ -895,7 +908,7 @@ function EventCell({ e }: { e: HistoryEvent | null }) {
 // server-side) can Reject (deletes the generated file + clears the saved
 // link so it can be regenerated from scratch) or Done (uploads the scanned
 // signed/stamped final PDF, which replaces the file at that same link).
-function PendingFinalDocumentsPanel({ currentUserId }: { currentUserId: string }) {
+function PendingFinalDocumentsPanel({ currentUserId, onCountChange }: { currentUserId: string; onCountChange?: (n: number) => void }) {
   const [tasks, setTasks] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -905,7 +918,7 @@ function PendingFinalDocumentsPanel({ currentUserId }: { currentUserId: string }
     try {
       const res = await fetch('/api/final-document-tasks', { headers: await authHeader() })
       const d = await res.json()
-      if (res.ok) setTasks(d.tasks || [])
+      if (res.ok) { setTasks(d.tasks || []); onCountChange?.((d.tasks || []).length) }
     } finally { if (!silent) setLoading(false) }
   }
   useEffect(() => {
