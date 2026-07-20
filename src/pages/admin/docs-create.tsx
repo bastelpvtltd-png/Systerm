@@ -69,6 +69,17 @@ const emptyBoatNote = (): BoatNote => ({
   pkg_type: '', voc: '', coc: '', loading_port: '', discharge_port: '', volume: '', marks: '',
 })
 
+// Mirrors docGenerate.ts's resolveColumnValue — same "col[n]" composite-value
+// split support — so Database mode's field preview shows exactly what
+// generation would resolve, before any edits.
+function resolveClientValue(row: Record<string, any> | null | undefined, columnName: string): string {
+  if (!row || !columnName) return ''
+  const m = columnName.match(/^([a-zA-Z0-9_]+)\[(\d+)\]$/)
+  if (!m) return row[columnName] ?? ''
+  const parts = String(row[m[1]] ?? '').trim().split(/\s+/)
+  return parts[Number(m[2])] ?? ''
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -1855,7 +1866,7 @@ function TricoGatePassPanel({ documentType, label }: { documentType: string; lab
 }
 
 function CustomDocPanel({ documentType, label }: { documentType: string; label: string }) {
-  const [tplFields, setTplFields] = useState<{ field_label: string; is_repeating: boolean; data_source?: string }[]>([])
+  const [tplFields, setTplFields] = useState<{ field_label: string; is_repeating: boolean; data_source?: string; column_name?: string }[]>([])
   const [templateFormat, setTemplateFormat] = useState('google_sheet')
   const [tplLoadError, setTplLoadError] = useState('')
   const [formValues, setFormValues] = useState<Record<string, string[]>>({})
@@ -1910,7 +1921,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         const d = await res.json()
         const tpl = (d.templates || []).find((t: any) => t.document_type === documentType)
         if (!tpl) { setTplLoadError('No template configured for this document type yet'); return }
-        const fields = (tpl.template_mappings || []).map((m: any) => ({ field_label: m.field_label, is_repeating: !!m.is_repeating, data_source: m.data_source }))
+        const fields = (tpl.template_mappings || []).map((m: any) => ({ field_label: m.field_label, is_repeating: !!m.is_repeating, data_source: m.data_source, column_name: m.column_name }))
         setTplFields(fields)
         setTemplateFormat(tpl.template_format || 'google_sheet')
         const init: Record<string, string[]> = {}
@@ -1958,6 +1969,27 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
     setSelectedCdnId(selectedCdns.length === 1 ? selectedCdns[0].id : '')
   }, [selectedCusdecId, cdns]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Database mode: pre-fill the same field grid Manual Entry uses, resolved
+  // from the picked CUSDEC/CDN(s) — editable before Generate, same as typing
+  // it by hand, just starting from real data instead of blank.
+  useEffect(() => {
+    if (entryMode !== 'cusdec' || !selectedCusdec || !tplFields.length) return
+    const singleCdn = selectedCdns.find(c => c.id === selectedCdnId) || selectedCdns[0] || null
+    const resolved: Record<string, string[]> = {}
+    for (const f of tplFields) {
+      if (f.data_source === 'cusdec') {
+        resolved[f.field_label] = [resolveClientValue(selectedCusdec, f.column_name || '')]
+      } else if (f.data_source === 'cdn') {
+        resolved[f.field_label] = f.is_repeating && selectedCdns.length
+          ? selectedCdns.map(c => resolveClientValue(c, f.column_name || ''))
+          : [resolveClientValue(singleCdn, f.column_name || '')]
+      } else {
+        resolved[f.field_label] = ['']
+      }
+    }
+    setFormValues(resolved)
+  }, [entryMode, selectedCusdecId, selectedCdnId, tplFields]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const capNum = Number(selectedCusdec?.cap || 0)
   const cdnCount = selectedCdns.length
   const curIsBlue = !!selectedCusdec?.export_release_passed
@@ -1975,13 +2007,16 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
     try {
       const h = await authHeader()
       const body: Record<string, unknown> = { document_type: documentType }
+      // Sent either way — in Database mode this doubles as the edited
+      // field-preview override (see the resolve-on-select effect above);
+      // the server prefers an explicit value here over the CUSDEC/CDN
+      // column whenever one's present.
+      const manual: Record<string, string> = {}
+      Object.entries(formValues).forEach(([lbl, rows]) => { manual[lbl] = rows.join('\n') })
+      body.manual_values = manual
       if (entryMode === 'cusdec') {
         body.cusdec_id = selectedCusdecId
         if (selectedCdnId) body.cdn_ids = [selectedCdnId]
-      } else {
-        const manual: Record<string, string> = {}
-        Object.entries(formValues).forEach(([lbl, rows]) => { manual[lbl] = rows.join('\n') })
-        body.manual_values = manual
       }
       if (fillSheetGid) body.fill_sheet_gid = fillSheetGid
       if (printSheetGid) body.print_sheet_gid = printSheetGid
@@ -2100,13 +2135,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
           {needsCdnPick && selectedCusdec && selectedCdns.length === 0 && (
             <p className="text-[11px] text-amber-600 mb-3">No CDN found yet for this CUSDEC — container-specific fields will be blank.</p>
           )}
-
-          <button onClick={generate} disabled={generating || !selectedCusdecId || cdnPickMissing}
-            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
-            style={{ background: '#3b82f6' }}>
-            {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
-            Generate {label}
-          </button>
+          {!selectedCusdecId && <p className="text-[11px] text-gray-400">Pick a CUSDEC above to see and edit its fields below.</p>}
         </div>
       )}
 
@@ -2147,11 +2176,13 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         </div>
       )}
 
-      {entryMode === 'manual' && (() => {
+      {(entryMode === 'manual' || (entryMode === 'cusdec' && selectedCusdecId && !cdnPickMissing)) && (() => {
         const isGrid = templateFormat === 'google_sheet'
         return (
         <div className={`card ${isGrid ? 'max-w-4xl' : 'max-w-xl'}`}>
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Template Fields</h2>
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">
+          {entryMode === 'cusdec' ? 'Fields (pulled from the database — edit any of them before generating)' : 'Fill Template Fields'}
+        </h2>
         {tplLoadError ? (
           <p className="text-xs text-red-500 flex items-center gap-1"><AlertTriangle size={12}/>{tplLoadError}</p>
         ) : tplFields.length === 0 ? (
@@ -2193,7 +2224,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
               )
             })}
             <div className={isGrid ? 'sm:col-span-2 lg:col-span-3' : ''}>
-              <button onClick={generate} disabled={generating || manualSheetChoiceMissing}
+              <button onClick={generate} disabled={generating || manualSheetChoiceMissing || (entryMode === 'cusdec' && (!selectedCusdecId || cdnPickMissing))}
                 className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
                 style={{ background: '#3b82f6' }}>
                 {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}

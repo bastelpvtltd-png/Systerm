@@ -994,7 +994,7 @@ function PendingFinalDocumentsPanel({ currentUserId, onCountChange }: { currentU
                 {t.status === 'pending' && (
                   <button onClick={() => act(t.id, { action: 'pick' })} disabled={busy}
                     className="btn-secondary text-xs w-full flex items-center justify-center gap-1.5 disabled:opacity-50">
-                    {busy ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Pick
+                    {busy ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Update
                   </button>
                 )}
                 {pickedByOther && <p className="text-[11px] text-gray-400">Picked by {t.picked_by_name || '—'}</p>}

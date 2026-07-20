@@ -25,6 +25,32 @@ function withFallback(value: string, fallback?: string | null): string {
   return value === '' && fallback ? fallback : value
 }
 
+// Whether the caller explicitly sent a value for this field — Database mode
+// now always sends manual_values as the (possibly-edited) field preview
+// alongside cusdec_id, so an explicit key here means "use this," even for
+// a cusdec/cdn-sourced field, overriding the raw column value.
+function hasOverride(fieldLabel: string, manualValues: Record<string, string> | undefined | null): boolean {
+  return !!manualValues && Object.prototype.hasOwnProperty.call(manualValues, fieldLabel)
+}
+
+// "co_2026-07-20.pdf" told you nothing about which shipment it was for —
+// this builds "PY_JES_20-07.pdf" style names instead (doc type's first two
+// letters + shipper's first word's first three letters + DD-MM) whenever a
+// CUSDEC is known (Database mode). Falls back to the old generic name for
+// Manual Entry, which has no CUSDEC to pull a shipper from.
+function buildFileName(document_type: string, cusdecRow: Record<string, any> | null, ext: string): string {
+  const today = new Date()
+  const dd = String(today.getDate()).padStart(2, '0')
+  const mm = String(today.getMonth() + 1).padStart(2, '0')
+  const shipperWord = String(cusdecRow?.exporter || '').split('\n')[0].trim().split(/\s+/)[0] || ''
+  if (cusdecRow && shipperWord) {
+    const docCode = document_type.slice(0, 2).toUpperCase()
+    const shipperCode = shipperWord.slice(0, 3).toUpperCase()
+    return `${docCode}_${shipperCode}_${dd}-${mm}.${ext}`
+  }
+  return `${document_type}_${today.toISOString().slice(0, 10)}.${ext}`
+}
+
 function getDriveClient() {
   const auth = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET)
   auth.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN })
@@ -106,12 +132,17 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
       let content: string = tpl.template_content || ''
       for (const m of mappings) {
         let value = ''
-        if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
+        // Docs Create's Database mode now pre-fills its field preview from
+        // the CUSDEC/CDN row and lets it be edited before Generate — an
+        // explicit manual_values entry (even in cusdec_id mode) is that
+        // edit and wins over the raw column, same field_label either way.
+        if (hasOverride(m.field_label, manual_values)) value = (manual_values as Record<string, string>)[m.field_label]
+        else if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
         else if (m.data_source === 'cusdec') {
-          value = cusdecRow ? resolveColumnValue(cusdecRow, m.column_name) : ((manual_values || {})[m.field_label] ?? '')
+          value = cusdecRow ? resolveColumnValue(cusdecRow, m.column_name) : ''
         } else if (m.data_source === 'cdn') {
           if (m.is_repeating && cdnRows.length) value = cdnRows.map(r => resolveColumnValue(r, m.column_name)).join('\n')
-          else value = cdnRows[0] ? resolveColumnValue(cdnRows[0], m.column_name) : ((manual_values || {})[m.field_label] ?? '')
+          else value = cdnRows[0] ? resolveColumnValue(cdnRows[0], m.column_name) : ''
         }
         const escaped = m.field_label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         content = content.replace(new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, 'g'), String(value))
@@ -214,17 +245,18 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
           const col = rangeMatch[1].toUpperCase()
           const startRow = parseInt(rangeMatch[2])
           const endRow = parseInt(rangeMatch[4])
-          const sourceRows = m.data_source === 'manual' ? [] : m.data_source === 'cdn' ? cdnRows : cusdecRow ? [cusdecRow] : []
-          if (sourceRows.length) {
-            sourceRows.slice(0, endRow - startRow + 1).forEach((row, i) => {
-              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: withFallback(row[m.column_name] ?? '', m.empty_fallback) })
-            })
-          } else if ((manual_values || {})[m.field_label]) {
-            // No CUSDEC/CDN row to source from (pure manual entry) — fall back
-            // to the newline-joined rows typed into the Manual Entry tab.
-            const manualRows = manual_values![m.field_label].split('\n').filter(Boolean)
+          if (hasOverride(m.field_label, manual_values)) {
+            // Database mode's edited field preview (or plain Manual Entry) —
+            // newline-joined rows, one Sheet row each, wins over the raw
+            // CUSDEC/CDN rows either way.
+            const manualRows = (manual_values as Record<string, string>)[m.field_label].split('\n').filter(Boolean)
             manualRows.slice(0, endRow - startRow + 1).forEach((val, i) => {
               updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: withFallback(val, m.empty_fallback) })
+            })
+          } else {
+            const sourceRows = m.data_source === 'manual' ? [] : m.data_source === 'cdn' ? cdnRows : cusdecRow ? [cusdecRow] : []
+            sourceRows.slice(0, endRow - startRow + 1).forEach((row, i) => {
+              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: withFallback(row[m.column_name] ?? '', m.empty_fallback) })
             })
           }
         }
@@ -232,9 +264,10 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
       }
 
       let value = ''
-      if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
-      else if (m.data_source === 'cusdec') value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
-      else if (m.data_source === 'cdn') value = cdnRows[0] ? (cdnRows[0][m.column_name] ?? '') : ((manual_values || {})[m.field_label] ?? '')
+      if (hasOverride(m.field_label, manual_values)) value = (manual_values as Record<string, string>)[m.field_label]
+      else if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
+      else if (m.data_source === 'cusdec') value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ''
+      else if (m.data_source === 'cdn') value = cdnRows[0] ? (cdnRows[0][m.column_name] ?? '') : ''
       updates.push({ range: `${sheetPrefix}${m.target_cell_or_range.toUpperCase()}`, value: withFallback(value, m.empty_fallback) })
     }
 
@@ -255,7 +288,7 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     await drive.files.delete({ fileId: copyId })
     copyId = null
 
-    const fileName = `${document_type}_${new Date().toISOString().slice(0, 10)}.pdf`
+    const fileName = buildFileName(document_type, cusdecRow, 'pdf')
     return { fileName, base64: pdfBuffer.toString('base64') }
   } catch (e) {
     // Clean up copy if something failed mid-way
