@@ -1016,8 +1016,6 @@ function BoatNoteContent() {
                     onDone={() => { setSendModalBnOpen(false); loadCusdecs(true); setBnHistoryRefreshKey(k => k + 1) }}
                   />
                 )}
-
-                <GenerationHistoryPanel documentType="boat_note" refreshKey={bnHistoryRefreshKey}/>
               </>
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -1027,6 +1025,7 @@ function BoatNoteContent() {
                 </p>
               </div>
             )}
+            <GenerationHistoryPanel documentType="boat_note" refreshKey={bnHistoryRefreshKey}/>
           </div>
           )}
         </div>
@@ -1399,6 +1398,7 @@ function CusdecXmlPanel() {
             </div>
           </>
         )}
+        <GenerationHistoryPanel documentType="cusdec_xml"/>
       </div>
     </div>
   )
@@ -1592,7 +1592,7 @@ function PartiesCopyPanel() {
         </div>
       </div>
 
-      <div className="xl:col-span-2">
+      <div className="xl:col-span-2 space-y-4">
         {!selected ? (
           <div className="card text-center py-16 text-gray-400 text-sm">Select a CUSDEC to generate its Party's Copy</div>
         ) : (
@@ -1701,11 +1701,10 @@ function PartiesCopyPanel() {
                   }
                 />
               )}
-
-              <GenerationHistoryPanel documentType="party_copy" refreshKey={partyHistoryRefreshKey}/>
             </div>
           </div>
         )}
+        <GenerationHistoryPanel documentType="party_copy" refreshKey={partyHistoryRefreshKey}/>
       </div>
     </div>
       )}
