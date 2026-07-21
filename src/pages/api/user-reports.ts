@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const now = new Date()
         const y = now.getFullYear(); const m = now.getMonth() + 1
         const { data, error } = await sb.from("user_monthly_reports").select("*")
-          .eq("user_id", authed.user!.id).order("year", { ascending: false }).order("month", { ascending: false }).limit(12)
+          .eq("user_id", authed.userId).order("year", { ascending: false }).order("month", { ascending: false }).limit(12)
         if (error) throw error
         return res.json({ reports: data || [] })
       }

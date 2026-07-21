@@ -25,20 +25,19 @@ export default function LoginPage() {
       ip = data.ip
     } catch {}
 
-    // Find user by username
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id, is_admin')
-      .eq('username', username)
-      .single()
-
-    // Attempt sign in (email = username@system.local convention)
+    // Attempt sign in (email = username@system.local convention). Looking the
+    // profile up by username *before* sign-in used to run as an anonymous
+    // request — profiles' RLS only allows reading your own row, so that
+    // always 406'd and silently produced a null profile (dropping user_id
+    // from the login_logs insert below, and always sending is_admin
+    // accounts to the non-admin URL). Doing it after sign-in, by the now-
+    // authenticated user's own id, is what RLS actually permits.
     const email = `${username}@exportsys.local`
     const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
 
     // Log attempt
     await supabase.from('login_logs').insert({
-      user_id: profile?.id ?? null,
+      user_id: data?.user?.id ?? null,
       username,
       ip_address: ip,
       user_agent: navigator.userAgent,
@@ -50,6 +49,8 @@ export default function LoginPage() {
       setLoading(false)
       return
     }
+
+    const { data: profile } = await supabase.from('profiles').select('is_admin').eq('id', data.user.id).single()
 
     // Admins keep the /admin/* URL; everyone else lands on the bare alias
     // (see next.config.js rewrites) — AdminLayout redirects on to whichever
