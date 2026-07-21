@@ -5,6 +5,7 @@ import { getDriveClient, getOrCreateSubfolder, driveFileIdFromUrl, deleteDriveFi
 import { cascadeDeleteCusdec } from '@/lib/docTables'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
+import { Readable } from 'stream'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -28,7 +29,19 @@ function addSheet(wb: ExcelJS.Workbook, name: string, rows: any[]) {
   if (!rows.length) return
   const cols: string[] = Array.from(rows.reduce((set: Set<string>, r) => { Object.keys(r).forEach(k => set.add(k)); return set }, new Set<string>()))
   ws.columns = cols.map(c => ({ header: c, key: c, width: 18 }))
-  rows.forEach(r => ws.addRow(r))
+  // ExcelJS's addRow can choke on a cell value that isn't a plain
+  // string/number/date/boolean (a jsonb column value, for instance) —
+  // stringify anything else so one odd column can't crash the whole export.
+  for (const r of rows) {
+    const flat: Record<string, any> = {}
+    for (const c of cols) {
+      const v = r[c]
+      flat[c] = (v === null || v === undefined || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+        ? v
+        : JSON.stringify(v)
+    }
+    ws.addRow(flat)
+  }
 }
 
 // This is genuinely heavy (fetches every matched shipment's PDFs from Drive
@@ -141,7 +154,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const archiveFolderId = await getOrCreateSubfolder(drive, mainFolderId, 'Export Archives')
     const rangeLabel = `${startDate}_to_${endDate}`
     const fileName = `Export_${rangeLabel}.zip`
-    const { Readable } = await import('stream')
     const uploaded = await drive.files.create({
       requestBody: { name: fileName, parents: [archiveFolderId] },
       media: { mimeType: 'application/zip', body: Readable.from(zipBuffer) },
@@ -154,7 +166,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       matchedIds: matched.map(c => c.id),
     })
   } catch (err: any) {
-    console.error('[database-export] error:', err)
-    res.status(500).json({ error: err.message })
+    console.error('[database-export] error:', err.stack || err)
+    res.status(500).json({ error: err.message || String(err) })
   }
 }

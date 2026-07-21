@@ -57,6 +57,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   const [costFilter,   setCostFilter]   = useState<CostFilter>(null)
   const [showAdminAll, setShowAdminAll] = useState(false)
   const [expandedUser, setExpandedUser] = useState<string | null>(null)
+  const [historyUser, setHistoryUser] = useState<string | null>(null)
   // ── payment form ──────────────────────────────────────────────────────────
   const [toUserId,     setToUserId]     = useState('')
   const [toOther,      setToOther]      = useState('')
@@ -483,7 +484,11 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                           </div>
                         </div>
                         <div className="flex items-center gap-4 text-xs flex-wrap">
-                          <span className="text-gray-500">CDN: <b className="text-green-700">{userWork.cdn}</b> · CAP: <b className="text-purple-700">{userWork.cap} ({userWork.capCusdecs})</b></span>
+                          <button onClick={() => setHistoryUser(historyUser === name ? null : name)}
+                            className="text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                            CDN: <b className="text-green-700">{userWork.cdn}</b> · CAP: <b className="text-purple-700">{userWork.cap} ({userWork.capCusdecs})</b>
+                            <span className="text-gray-400 ml-0.5">▾</span>
+                          </button>
                           <span className="text-gray-500">Cost: <b className="text-gray-800">Rs. {fmtLKR(totalCost)}</b></span>
                           {owData.approved > 0 && <span className="text-indigo-600">Other: <b>Rs. {fmtLKR(owData.approved)}</b></span>}
                           {owData.pending.length > 0 && <span className="text-amber-500">Pending: {owData.pending.length}</span>}
@@ -494,6 +499,26 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                           </button>
                         </div>
                       </div>
+                      {historyUser === name && (
+                        <div className="divide-y divide-gray-50 max-h-48 overflow-y-auto bg-purple-50/30">
+                          {allWorkRows.filter(r => r.user_name === name).length === 0 ? (
+                            <p className="text-xs text-gray-400 p-3">No CDN/CUSDEC upload history yet</p>
+                          ) : allWorkRows.filter(r => r.user_name === name)
+                              .sort((a, b) => b.created_at.localeCompare(a.created_at))
+                              .map(r => (
+                            <div key={r.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                              <div className="min-w-0">
+                                <p className="text-gray-700 truncate">{r.file_name} <span className="text-gray-400">· {r.reason} ({r.action})</span></p>
+                                <p className="text-gray-400">{new Date(r.created_at).toLocaleString('en-GB')}</p>
+                              </div>
+                              <div className="flex-shrink-0 text-right">
+                                {r.cdn_inc > 0 && <span className="text-green-700 font-medium">CDN +{r.cdn_inc}</span>}
+                                {r.cap_inc > 0 && <span className="text-purple-700 font-medium">CAP +{r.cap_inc}</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {isExpanded && (
                         <div className="divide-y divide-gray-50 max-h-40 overflow-y-auto">
                           {userConfirmedPayments.length === 0 ? (
