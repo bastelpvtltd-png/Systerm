@@ -961,7 +961,6 @@ function DocumentsUploadContent() {
   }
 
   const readyCount = items.filter(it => it.status === 'ready').length
-  const savedItems = items.filter(it => it.status === 'saved' && it.driveLink)
 
   // Bulk actions — shown on both the normal "Uploaded" list and the "Admin
   // Edit" list, since they're two views onto the same uploaded items.
@@ -1080,12 +1079,6 @@ function DocumentsUploadContent() {
                     title="Send all — same Save/Mail/Notify choice as a single file" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
                     {savingAll ? <Loader size={11} className="animate-spin"/> : <Send size={11}/>} Send All
                   </button>
-                  {savedItems.length > 0 && (
-                    <button onClick={() => setEmailAttachments(savedItems.map(it => ({ filename: it.fileName, url: it.driveLink })))}
-                      title="Email every saved file in this list together" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white" style={{ background: '#22A87A' }}>
-                      <Mail size={11}/> Email All Saved ({savedItems.length})
-                    </button>
-                  )}
                   <button onClick={handleDeleteAll}
                     title="Remove all from this list" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-red-600 border border-red-200 hover:bg-red-50">
                     <Trash2 size={11}/> Delete All
@@ -1331,12 +1324,6 @@ function DocumentsUploadContent() {
                     title="Send all — same Save/Mail/Notify choice as a single file" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
                     {savingAll ? <Loader size={11} className="animate-spin"/> : <Send size={11}/>} Send All
                   </button>
-                  {savedItems.length > 0 && (
-                    <button onClick={() => setEmailAttachments(savedItems.map(it => ({ filename: it.fileName, url: it.driveLink })))}
-                      title="Email every saved file in this list together" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white" style={{ background: '#22A87A' }}>
-                      <Mail size={11}/> Email All Saved ({savedItems.length})
-                    </button>
-                  )}
                   <button onClick={handleDeleteAll}
                     title="Remove all from this list" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-red-600 border border-red-200 hover:bg-red-50">
                     <Trash2 size={11}/> Delete All

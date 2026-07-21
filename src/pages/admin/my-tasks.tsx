@@ -215,6 +215,9 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   // Current user computed values
   const myCdn = myWorkRows.reduce((s, r) => s + (r.cdn_inc || 0), 0)
   const myCap = myWorkRows.reduce((s, r) => s + (r.cap_inc || 0), 0)
+  // CAP is now the sum of each CUSDEC's own container count, not one per
+  // document — showing "total (cusdec count)" keeps both numbers visible.
+  const myCapCusdecs = myWorkRows.filter(r => (r.cap_inc || 0) > 0).length
   const myCountWorkEarned = myCdn * rates.cdn_rate + myCap * rates.cap_rate
   const myApprovedOtherWork = myOtherWork.filter(x => x.status === 'approved')
   const myOtherWorkEarned = myApprovedOtherWork.reduce((s, x) => s + Number(x.amount), 0)
@@ -226,11 +229,12 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
 
   // Admin: per-user work earned from allWorkRows
   const workByUser = allWorkRows.reduce((acc, r) => {
-    if (!acc[r.user_name]) acc[r.user_name] = { cdn: 0, cap: 0 }
+    if (!acc[r.user_name]) acc[r.user_name] = { cdn: 0, cap: 0, capCusdecs: 0 }
     acc[r.user_name].cdn += r.cdn_inc || 0
     acc[r.user_name].cap += r.cap_inc || 0
+    if (r.cap_inc || 0) acc[r.user_name].capCusdecs += 1
     return acc
-  }, {} as Record<string, { cdn: number; cap: number }>)
+  }, {} as Record<string, { cdn: number; cap: number; capCusdecs: number }>)
 
   // Admin: per-user other work (approved)
   const otherWorkByUserId = allOtherWork.reduce((acc, x) => {
@@ -321,7 +325,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                     <button
                       onClick={() => setCostFilter(f => f === 'cap' ? null : 'cap')}
                       className={`rounded-lg p-2.5 text-center transition-all border-2 ${costFilter === 'cap' ? 'bg-purple-100 border-purple-400' : 'bg-white border-transparent hover:border-purple-200'}`}>
-                      <p className="text-xl font-bold text-purple-700">{myCap}</p>
+                      <p className="text-xl font-bold text-purple-700">{myCap} <span className="text-xs font-normal text-purple-400">({myCapCusdecs})</span></p>
                       <p className="text-[10px] text-gray-500 mt-0.5">CAP</p>
                       <p className="text-[9px] text-purple-600">{costFilter === 'cap' ? '▲ hide' : '▼ details'}</p>
                     </button>
@@ -457,7 +461,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                 {/* Per-user summary */}
                 {users.map(u => {
                   const name = u.full_name || u.username
-                  const userWork = workByUser[name] || { cdn: 0, cap: 0 }
+                  const userWork = workByUser[name] || { cdn: 0, cap: 0, capCusdecs: 0 }
                   const countCost = userWork.cdn * rates.cdn_rate + userWork.cap * rates.cap_rate
                   const owData = otherWorkByUserId[u.id] || { approved: 0, pending: [] }
                   const totalCost = countCost + owData.approved
@@ -479,7 +483,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                           </div>
                         </div>
                         <div className="flex items-center gap-4 text-xs flex-wrap">
-                          <span className="text-gray-500">CDN: <b className="text-green-700">{userWork.cdn}</b> · CAP: <b className="text-purple-700">{userWork.cap}</b></span>
+                          <span className="text-gray-500">CDN: <b className="text-green-700">{userWork.cdn}</b> · CAP: <b className="text-purple-700">{userWork.cap} ({userWork.capCusdecs})</b></span>
                           <span className="text-gray-500">Cost: <b className="text-gray-800">Rs. {fmtLKR(totalCost)}</b></span>
                           {owData.approved > 0 && <span className="text-indigo-600">Other: <b>Rs. {fmtLKR(owData.approved)}</b></span>}
                           {owData.pending.length > 0 && <span className="text-amber-500">Pending: {owData.pending.length}</span>}
@@ -580,7 +584,7 @@ function fmtLKR(n: number) {
   return n.toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function InvoiceBlock({ cdn, cap, rates }: { cdn: number; cap: number; rates: WorkRates }) {
+function InvoiceBlock({ cdn, cap, capCusdecs, rates }: { cdn: number; cap: number; capCusdecs?: number; rates: WorkRates }) {
   const cdnTotal = cdn * rates.cdn_rate
   const capTotal = cap * rates.cap_rate
   const grand = cdnTotal + capTotal
@@ -602,7 +606,7 @@ function InvoiceBlock({ cdn, cap, rates }: { cdn: number; cap: number; rates: Wo
         <div className="px-3 py-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-purple-500 inline-block"/>
-            <span className="text-gray-700">CAP <span className="font-bold text-purple-700">{cap}</span></span>
+            <span className="text-gray-700">CAP <span className="font-bold text-purple-700">{cap}{capCusdecs != null ? ` (${capCusdecs})` : ''}</span></span>
             <span className="text-gray-400">× Rs. {fmtLKR(rates.cap_rate)}</span>
           </div>
           <span className="font-semibold text-gray-800">Rs. {fmtLKR(capTotal)}</span>
@@ -1203,18 +1207,6 @@ function MyTasksContent() {
       {(isAdmin || has('section:my-tasks.upload-count')) && (
         <UploadCountPanel userId={userId} isAdmin={isAdmin}/>
       )}
-
-      <div className="flex gap-2 mb-4">
-        {(['pending','done'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              tab === t ? 'text-white' : 'bg-white text-gray-600 border border-gray-200'
-            }`}
-            style={tab === t ? {background:'#22A87A'} : {}}>
-            {t === 'pending' ? `Pending (${tasks.filter(x=>x.status==='pending').length})` : 'Completed'}
-          </button>
-        ))}
-      </div>
 
       <div className="space-y-3">
         {filtered.map(task => (
