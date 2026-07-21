@@ -52,14 +52,21 @@ export default function UsersPage() {
   }
 
   async function fetchShippers() {
-    const { data } = await supabase.from('cusdec').select('exporter').not('exporter', 'is', null)
+    // cusdec's RLS only allows service-role reads — a direct client-side
+    // supabase.from('cusdec') call (even from a logged-in admin) always
+    // came back empty, which is why this list showed "No exporters found"
+    // regardless of how much data actually existed. Routing through the
+    // existing service-role-backed endpoint is what every other cusdec
+    // read in this app already does.
+    const res = await fetch('/api/list-records?table=cusdec&limit=1000', { headers: await authHeader() })
+    const d = await res.json()
     // exporter is often a multi-line address block — only the first line is
     // the actual company name, and it's what shipment-overview.ts's own
     // access check compares assigned_shippers against (server-side, since
     // that's the endpoint that can leak another shipper's data). Normalizing
     // the same way here is what makes an assignment actually match anything.
     const names: string[] = Array.from(new Set(
-      (data ?? []).map((r: any) => (r.exporter || '').split('\n')[0].trim()).filter(Boolean)
+      ((d.records ?? []) as any[]).map((r: any) => (r.exporter || '').split('\n')[0].trim()).filter(Boolean)
     )).sort() as string[]
     setShipperList(names)
   }
