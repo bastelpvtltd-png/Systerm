@@ -29,12 +29,12 @@ export default function EmailPdfModal({ attachments, defaultSubject, onClose, on
   const [sent, setSent] = useState(false)
 
   useEffect(() => {
-    fetch('/api/saved-recipients').then(r => r.json()).then(d => setEmails(d.emails || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/saved-recipients', { headers: h })).then(r => r.json()).then(d => setEmails(d.emails || [])).catch(() => {})
     if (!defaultSubject) {
       // Auto-prefix the subject with the sender's own name — still fully
       // editable/appendable afterwards, this is just the starting point.
       Promise.all([
-        fetch('/api/email-settings').then(r => r.json()).catch(() => ({})),
+        authHeader().then(h => fetch('/api/email-settings', { headers: h })).then(r => r.json()).catch(() => ({})),
         supabase.auth.getUser().then(async ({ data: { user } }) => {
           if (!user) return ''
           const { data } = await supabase.from('profiles').select('username, full_name').eq('id', user.id).single()
@@ -61,9 +61,9 @@ export default function EmailPdfModal({ attachments, defaultSubject, onClose, on
       // Remember each individual address (comma-separated "To" support), not
       // the whole combined string, so the datalist suggests them one at a time.
       toAddr.split(',').map(e => e.trim()).filter(Boolean).forEach(email => {
-        fetch('/api/saved-recipients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }).catch(() => {})
+        authHeader().then(h => fetch('/api/saved-recipients', { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body: JSON.stringify({ email }) })).catch(() => {})
       })
-      fetch('/api/email-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lastSubject: subject.trim() }) }).catch(() => {})
+      authHeader().then(h => fetch('/api/email-settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body: JSON.stringify({ lastSubject: subject.trim() }) })).catch(() => {})
       setSent(true)
       onSent?.()
     } catch (e: any) { setError(e.message) }

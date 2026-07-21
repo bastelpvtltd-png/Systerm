@@ -122,7 +122,7 @@ export default function DriveFilesPage() {
     if (number) params.set('number', number)
     if (reference) params.set('reference', reference)
     if (invoiceNumber) params.set('invoice_number', invoiceNumber)
-    fetch(`/api/shipment-overview-options?${params.toString()}`)
+    authHeader().then(h => fetch(`/api/shipment-overview-options?${params.toString()}`, { headers: h }))
       .then(r => r.json())
       .then(d => setOptions({
         shippers: d.shippers || [], codes: d.codes || [], numbers: d.numbers || [],

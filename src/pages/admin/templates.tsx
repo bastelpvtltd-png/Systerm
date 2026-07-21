@@ -219,7 +219,7 @@ function DocTemplatesContent() {
   const [routesStatus, setRoutesStatus] = useState('')
 
   useEffect(() => {
-    fetch('/api/list-records?table=cusdec&limit=1000').then(r => r.json()).then(d => {
+    authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=1000', { headers: h })).then(r => r.json()).then(d => {
       const seen = new Set<string>()
       const opts: { tin_vat: string; exporter: string }[] = []
       for (const c of (d.records || [])) {

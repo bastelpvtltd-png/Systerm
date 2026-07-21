@@ -320,9 +320,10 @@ function BoatNoteContent() {
   async function loadCusdecs(silent = false) {
     if (!silent) setLoading(true)
     try {
+      const h = await authHeader()
       const [cr, dr] = await Promise.all([
-        fetch('/api/list-records?table=cusdec&limit=200'),
-        fetch('/api/list-records?table=cdn&limit=1000'),
+        fetch('/api/list-records?table=cusdec&limit=200', { headers: h }),
+        fetch('/api/list-records?table=cdn&limit=1000', { headers: h }),
       ])
       if (cr.ok) { const d = await cr.json(); setCusdecs(d.records || []) }
       if (dr.ok) { const d = await dr.json(); setAllCdns(d.records || []) }
@@ -347,7 +348,7 @@ function BoatNoteContent() {
     const cur = cusdecs.find(c => c.id === selCusdec)
     if (!cur) return
     try {
-      const r = await fetch(`/api/list-records?table=cdn&filter=cusdec_number&value=${cur.number}`)
+      const r = await fetch(`/api/list-records?table=cdn&filter=cusdec_number&value=${cur.number}`, { headers: await authHeader() })
       if (r.ok) { const d = await r.json(); setCdns(d.records || []) }
     } catch {}
   }
@@ -1265,8 +1266,8 @@ function CusdecXmlPanel() {
 
   useEffect(() => {
     function load() {
-      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
-      fetch('/api/list-records?table=cdn&limit=1000').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+      authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=500', { headers: h })).then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+      authHeader().then(h => fetch('/api/list-records?table=cdn&limit=1000', { headers: h })).then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
     }
     load()
     const t = setInterval(load, 20000)
@@ -1292,7 +1293,7 @@ function CusdecXmlPanel() {
     if (!cusdec) return
     setLoading(true)
     try {
-      const res = await fetch(`/api/cusdec-xml?id=${id}`)
+      const res = await fetch(`/api/cusdec-xml?id=${id}`, { headers: await authHeader() })
       const d = await res.json()
       const saved: Partial<XmlValues> = d.xml_data || {}
       const cdnRow = cdns.find(c => c.code === cusdec.code && c.cusdec_number === cusdec.number) || null
@@ -1322,7 +1323,7 @@ function CusdecXmlPanel() {
     setStatus('')
     try {
       const res = await fetch('/api/cusdec-xml', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ id: selected.id, xml_data: values }),
       })
       const d = await res.json()
@@ -1436,8 +1437,8 @@ function PartiesCopyPanel() {
   const [tplDocType, setTplDocType] = useState('')
 
   function load() {
-    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
-    fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=500', { headers: h })).then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/list-records?table=cdn&limit=500', { headers: h })).then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
   }
   useEffect(() => {
     load()
@@ -1761,8 +1762,8 @@ function TricoGatePassPanel({ documentType, label }: { documentType: string; lab
       }
     }
     load()
-    fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
-    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/list-records?table=cdn&limit=500', { headers: h })).then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=500', { headers: h })).then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
     authHeader().then(h => fetch('/api/automation-credentials', { headers: h })).then(r => r.json())
       .then(d => setCredentials((d.credentials || []).filter((c: TricoCredential) => c.identity_name === 'Trico'))).catch(() => {})
   }, [documentType])
@@ -1941,8 +1942,8 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
 
   useEffect(() => {
     if (entryMode !== 'cusdec' || cusdecs.length) return
-    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
-    fetch('/api/list-records?table=cdn&limit=1000').then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=500', { headers: h })).then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/list-records?table=cdn&limit=1000', { headers: h })).then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
   }, [entryMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

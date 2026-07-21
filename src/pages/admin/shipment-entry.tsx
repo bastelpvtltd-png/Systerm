@@ -135,7 +135,7 @@ function ShipmentEntryContent() {
 
   useEffect(() => {
     loadRows()
-    fetch('/api/temp-shipment-options').then(r => r.json()).then(d => setOptions({ shippers: d.shippers || [], consignees: d.consignees || [] })).catch(() => {})
+    authHeader().then(h => fetch('/api/temp-shipment-options', { headers: h })).then(r => r.json()).then(d => setOptions({ shippers: d.shippers || [], consignees: d.consignees || [] })).catch(() => {})
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return
       setCurrentUserId(user.id)

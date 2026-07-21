@@ -35,7 +35,7 @@ export function useBoatNoteCreator() {
   async function loadCusdecs(silent = false) {
     if (!silent) setLoading(true)
     try {
-      const r = await fetch('/api/list-records?table=cusdec&limit=200')
+      const r = await fetch('/api/list-records?table=cusdec&limit=200', { headers: await authHeader() })
       if (r.ok) { const d = await r.json(); setCusdecs(d.records || []) }
     } finally { if (!silent) setLoading(false) }
   }
@@ -44,7 +44,7 @@ export function useBoatNoteCreator() {
     const cur = cusdecs.find(c => c.id === selCusdec)
     if (!cur) return
     try {
-      const r = await fetch(`/api/list-records?table=cdn&filter=cusdec_number&value=${cur.number}`)
+      const r = await fetch(`/api/list-records?table=cdn&filter=cusdec_number&value=${cur.number}`, { headers: await authHeader() })
       if (r.ok) { const d = await r.json(); setCdns(d.records || []) }
     } catch {}
   }

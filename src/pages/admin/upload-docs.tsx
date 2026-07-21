@@ -275,10 +275,10 @@ function DocumentsUploadContent() {
     if (!selectedRec || !selectedRec.drive_url) return
     if (recPageImages[selectedRec.id]?.[recPage]) return
     setRecLoadingImg(true)
-    fetch('/api/render-drive-page', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    authHeader().then(h => fetch('/api/render-drive-page', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
       body: JSON.stringify({ driveUrl: selectedRec.drive_url, page: recPage }),
-    })
+    }))
       .then(r => r.json())
       .then(d => {
         if (d.png) {
@@ -302,7 +302,7 @@ function DocumentsUploadContent() {
     updateItem(itemId, { base64, status: 'extracting', error: '' })
     try {
       const res = await fetch('/api/extract-pdf', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ base64 }),
       })
       const json = await res.json()
@@ -575,7 +575,7 @@ function DocumentsUploadContent() {
     const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
     try {
       const res = await fetch('/api/check-document-match', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ doc_type: docType, data }),
       })
       const d = await res.json()
@@ -702,10 +702,10 @@ function DocumentsUploadContent() {
   useEffect(() => {
     if (!selectedItem || selectedItem.pageImages[viewPage] || !selectedItem.base64) return
     const id = selectedItem.id
-    fetch('/api/render-page', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    authHeader().then(h => fetch('/api/render-page', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
       body: JSON.stringify({ base64: selectedItem.base64, page: viewPage }),
-    })
+    }))
       .then(r => r.json())
       .then(d => {
         if (d.png) updateItem(id, {
@@ -786,7 +786,7 @@ function DocumentsUploadContent() {
     setExtractingBox(true)
     try {
       const res = await fetch('/api/extract-box', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ base64: item.base64, box }),
       })
       const d = await res.json()

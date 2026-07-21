@@ -57,7 +57,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 // site instead of best-guess selectors.
 async function notConnectedYet(action: string): Promise<string> {
   const res = await fetch('/api/automation-rpa', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
     body: JSON.stringify({ action }),
   })
   const d = await res.json()
@@ -464,7 +464,7 @@ function MergePdfPanel() {
   const [tempDriveUrl, setTempDriveUrl] = useState('')
 
   useEffect(() => {
-    fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
+    authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=500', { headers: h })).then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -665,9 +665,10 @@ function BoatNoteCheckPanel() {
   const [adhocResult, setAdhocResult] = useState<{ containerNo: string; vessel: string; level: string; status: string; passed: boolean } | null>(null)
 
   async function load() {
+    const h = await authHeader()
     const [cr, dr] = await Promise.all([
-      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()),
-      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()),
+      fetch('/api/list-records?table=cusdec&limit=500', { headers: h }).then(r => r.json()),
+      fetch('/api/list-records?table=cdn&limit=500', { headers: h }).then(r => r.json()),
     ])
     setCusdecs(cr.records || [])
     setCdns(dr.records || [])
@@ -871,9 +872,10 @@ function ExportReleaseCheckPanel() {
   const [result, setResult] = useState<{ found: boolean; message?: string; text?: string; passed?: boolean | null; releaseDate?: string | null } | null>(null)
 
   async function load() {
+    const h = await authHeader()
     const [cr, dr] = await Promise.all([
-      fetch('/api/list-records?table=cusdec&limit=500').then(r => r.json()),
-      fetch('/api/list-records?table=cdn&limit=500').then(r => r.json()),
+      fetch('/api/list-records?table=cusdec&limit=500', { headers: h }).then(r => r.json()),
+      fetch('/api/list-records?table=cdn&limit=500', { headers: h }).then(r => r.json()),
     ])
     setCusdecs(cr.records || [])
     setCdns(dr.records || [])
