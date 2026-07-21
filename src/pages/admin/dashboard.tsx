@@ -740,9 +740,18 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     const ids = new Set(selectedTasks.map(t => t.id))
     for (const t of selectedTasks) {
       if (!t.document_uploads?.drive_url) continue
+      window.open(t.document_uploads.drive_url, '_blank')
+    }
+    // There's no browser event for "the save dialog was cancelled" on a new-
+    // tab Drive link — clicking Download used to mark every file downloaded
+    // (and remove it from this list) the instant the tab opened, whether or
+    // not the file was actually saved. Asking here instead of assuming means
+    // a cancelled/interrupted download doesn't silently vanish from the list.
+    if (!window.confirm(`${selectedTasks.length} file${selectedTasks.length === 1 ? '' : 's'} download unada? "OK" kaloth okkoma My Picked Tasks eken ain wenawa.`)) return
+    for (const t of selectedTasks) {
+      if (!t.document_uploads?.drive_url) continue
       logAction(t.document_uploads.id, 'download')
       if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
-      window.open(t.document_uploads.drive_url, '_blank')
     }
     setTasks(prev => prev.filter(t => !ids.has(t.id)))
     setSelected({})
@@ -827,9 +836,10 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                   <>
                     <button onClick={() => {
                       if (!confirmReasonDelete(t.document_uploads)) return
+                      window.open(t.document_uploads.drive_url, '_blank')
+                      if (!window.confirm('PDF eka download unada? "OK" kaloth me task eka My Picked Tasks eken ain wenawa.')) return
                       logAction(t.document_uploads.id, 'download')
                       if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
-                      window.open(t.document_uploads.drive_url, '_blank')
                       setTasks(prev => prev.filter(x => x.id !== t.id))
                     }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                       <Download size={12}/>

@@ -19,6 +19,11 @@ interface Profile {
   created_at: string
 }
 
+// Sentinel stored in assigned_shippers meaning "every shipper" — checked for
+// server-side in shipment-overview.ts instead of trying to enumerate and
+// store every current + future exporter name.
+const ALL_SHIPPERS = '__ALL__'
+
 const emptyForm = {
   username: '', full_name: '', position: '', designation: '',
   personal_email: '', official_email: '', whatsapp_number: '', contact_number: '',
@@ -48,7 +53,14 @@ export default function UsersPage() {
 
   async function fetchShippers() {
     const { data } = await supabase.from('cusdec').select('exporter').not('exporter', 'is', null)
-    const names: string[] = Array.from(new Set((data ?? []).map((r: any) => r.exporter).filter(Boolean))).sort() as string[]
+    // exporter is often a multi-line address block — only the first line is
+    // the actual company name, and it's what shipment-overview.ts's own
+    // access check compares assigned_shippers against (server-side, since
+    // that's the endpoint that can leak another shipper's data). Normalizing
+    // the same way here is what makes an assignment actually match anything.
+    const names: string[] = Array.from(new Set(
+      (data ?? []).map((r: any) => (r.exporter || '').split('\n')[0].trim()).filter(Boolean)
+    )).sort() as string[]
     setShipperList(names)
   }
 
@@ -188,9 +200,14 @@ export default function UsersPage() {
               {!form.is_admin && (
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Assigned Shippers — {form.assigned_shippers.length === 0 ? 'none selected (sees none)' : `${form.assigned_shippers.length} selected`}
+                    Assigned Shippers — {form.assigned_shippers.includes(ALL_SHIPPERS) ? 'All shippers' : form.assigned_shippers.length === 0 ? 'none selected (sees none)' : `${form.assigned_shippers.length} selected`}
                   </label>
-                  <div className="space-y-1 max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                  <label className="flex items-center gap-2 text-sm py-1 px-1 mb-1 rounded hover:bg-gray-50 cursor-pointer font-medium">
+                    <input type="checkbox" checked={form.assigned_shippers.includes(ALL_SHIPPERS)}
+                      onChange={e => setForm(f => ({ ...f, assigned_shippers: e.target.checked ? [ALL_SHIPPERS] : [] }))}/>
+                    <span>All shippers</span>
+                  </label>
+                  <div className={`space-y-1 max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-2 ${form.assigned_shippers.includes(ALL_SHIPPERS) ? 'opacity-40 pointer-events-none' : ''}`}>
                     {shipperList.length === 0
                       ? <p className="text-xs text-gray-400 px-1 py-1">No exporters found in CUSDEC records yet.</p>
                       : shipperList.map(name => (

@@ -20,6 +20,37 @@ const DRIVE_URL_COLUMN: Record<string, string> = {
   uploaded_documents: 'drive_url',
 }
 
+async function cascadeDeleteCdn(cdnRow: any): Promise<void> {
+  if (!cdnRow?.container_no) return
+  const { data: barcodeRows } = await supabaseAdmin.from('barcode').select('*').eq('container_no', cdnRow.container_no)
+  for (const b of (barcodeRows || [])) {
+    if (b.pdf_url) await deleteDriveFileByUrl(b.pdf_url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message))
+    await supabaseAdmin.from('barcode').delete().eq('id', b.id)
+  }
+}
+
+async function cascadeDeleteCusdec(cusdecRow: any): Promise<void> {
+  if (!cusdecRow?.code || !cusdecRow?.number) return
+  const { data: cdnRows } = await supabaseAdmin.from('cdn').select('*').eq('code', cusdecRow.code).eq('cusdec_number', cusdecRow.number)
+  const containerNos: string[] = []
+  for (const c of (cdnRows || [])) {
+    if (c.container_no) containerNos.push(c.container_no)
+    await cascadeDeleteCdn(c)
+    if (c.pdf_url) await deleteDriveFileByUrl(c.pdf_url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message))
+    await supabaseAdmin.from('cdn').delete().eq('id', c.id)
+  }
+  // boat_notes has no dedicated cusdec_number column — it carries the same
+  // container_no (inside its jsonb `details` blob) as the CDN row it was made
+  // for (see shipment-overview.ts, which links them back the same way).
+  if (containerNos.length) {
+    const { data: boatNotes } = await supabaseAdmin.from('boat_notes').select('*').in('details->>container_no', containerNos)
+    for (const bn of (boatNotes || [])) {
+      if (bn.pdf_url) await deleteDriveFileByUrl(bn.pdf_url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message))
+      await supabaseAdmin.from('boat_notes').delete().eq('id', bn.id)
+    }
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const auth = await requireAuth(req)
   if (!auth.ok) return res.status(auth.status).json({ error: auth.error })
@@ -73,11 +104,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.json({ ok: true })
       }
       if (!id) return res.status(400).json({ error: 'id required' })
+      const { data: row } = await supabaseAdmin.from(table).select('*').eq('id', id).maybeSingle()
       if (urlColumn) {
-        const { data: row } = await supabaseAdmin.from(table).select('*').eq('id', id).maybeSingle()
         const url = row ? (row as any)[urlColumn] : null
         if (url) await deleteDriveFileByUrl(url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message))
       }
+      // cusdec/cdn/barcode/boat_notes are all one shipment's paperwork —
+      // deleting the parent without its children just leaves orphaned rows
+      // (and orphaned Drive PDFs) with nothing to find them by.
+      if (table === 'cusdec' && row) await cascadeDeleteCusdec(row)
+      else if (table === 'cdn' && row) await cascadeDeleteCdn(row)
       const { error } = await supabaseAdmin.from(table).delete().eq('id', id)
       if (error) return res.status(400).json({ error: error.message })
       return res.json({ ok: true })

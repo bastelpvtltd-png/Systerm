@@ -76,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    if (!isAdmin) {
+    if (!isAdmin && !assignedShippers.includes('__ALL__')) {
       const allowed = new Set(assignedShippers.map(s => s.toLowerCase()))
       cusdecRows = cusdecRows.filter(c => allowed.has((c.exporter || '').split('\n')[0].trim().toLowerCase()))
     }
