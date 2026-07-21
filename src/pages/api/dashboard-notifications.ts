@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { requireAuth } from '@/lib/serverAuth'
+import { requireAuth, requireAdmin } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -36,6 +36,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       if (error) throw error
       await supabaseAdmin.from('document_uploads').update({ status: 'notified' }).eq('id', document_id)
+      return res.json({ ok: true })
+    }
+
+    if (req.method === 'DELETE') {
+      // Dismisses from the Activity Log only — is_active=false, same flag GET
+      // already filters on, so the document/upload itself is never touched.
+      // Admin-only, same as every other bulk-purge control in the app.
+      const gated = await requireAdmin(req)
+      if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
+      const { ids } = req.body as { ids: string[] }
+      if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' })
+      const { error } = await supabaseAdmin.from('dashboard_notifications').update({ is_active: false }).in('id', ids)
+      if (error) throw error
       return res.json({ ok: true })
     }
 

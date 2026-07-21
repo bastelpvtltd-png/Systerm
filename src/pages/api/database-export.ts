@@ -86,27 +86,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const docsByCusdec: Record<string, { label: string; url: string }[]> = {}
 
     for (const c of matched) {
-      const key = c.number || c.id
-      const docs: { label: string; url: string }[] = []
-      if (c.pdf_url) docs.push({ label: 'CUSDEC', url: c.pdf_url })
+      // One bad row (a stale/deleted Drive file, an unexpected null) must not
+      // sink the whole export — skip that row's document gathering and keep
+      // going, the data sheets still include it either way.
+      try {
+        const key = c.number || c.id
+        const docs: { label: string; url: string }[] = []
+        if (c.pdf_url) docs.push({ label: 'CUSDEC', url: c.pdf_url })
 
-      const { data: cdns } = await supabaseAdmin.from('cdn').select('*').eq('code', c.code).eq('cusdec_number', c.number)
-      for (const cdn of (cdns || [])) {
-        allCdn.push(cdn)
-        if (cdn.pdf_url) docs.push({ label: `CDN_${cdn.container_no || cdn.id}`, url: cdn.pdf_url })
-        if (cdn.container_no) {
-          const { data: barcodeRows } = await supabaseAdmin.from('barcode').select('*').eq('container_no', cdn.container_no)
-          for (const b of (barcodeRows || [])) {
-            allBarcode.push(b)
-            if (b.pdf_url) docs.push({ label: `Barcode_${cdn.container_no}`, url: b.pdf_url })
+        const { data: cdns } = await supabaseAdmin.from('cdn').select('*').eq('code', c.code).eq('cusdec_number', c.number)
+        for (const cdn of (cdns || [])) {
+          allCdn.push(cdn)
+          if (cdn.pdf_url) docs.push({ label: `CDN_${cdn.container_no || cdn.id}`, url: cdn.pdf_url })
+          if (cdn.container_no) {
+            const { data: barcodeRows } = await supabaseAdmin.from('barcode').select('*').eq('container_no', cdn.container_no)
+            for (const b of (barcodeRows || [])) {
+              allBarcode.push(b)
+              if (b.pdf_url) docs.push({ label: `Barcode_${cdn.container_no}`, url: b.pdf_url })
+            }
           }
         }
+
+        const { data: docLinks } = await supabaseAdmin.from('cusdec_document_links').select('*').eq('cusdec_id', c.id)
+        for (const dl of (docLinks || [])) if (dl.drive_url) docs.push({ label: dl.document_type || 'Document', url: dl.drive_url })
+
+        docsByCusdec[c.number || c.id] = docs
+      } catch (e: any) {
+        console.error('[database-export] failed gathering docs for cusdec', c.id, e.message)
       }
-
-      const { data: docLinks } = await supabaseAdmin.from('cusdec_document_links').select('*').eq('cusdec_id', c.id)
-      for (const dl of (docLinks || [])) if (dl.drive_url) docs.push({ label: dl.document_type || 'Document', url: dl.drive_url })
-
-      docsByCusdec[key] = docs
     }
 
     const wb = new ExcelJS.Workbook()

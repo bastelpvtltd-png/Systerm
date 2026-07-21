@@ -23,7 +23,11 @@ const DRIVE_URL_COLUMN: Record<string, string> = {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const auth = await requireAuth(req)
   if (!auth.ok) return res.status(auth.status).json({ error: auth.error })
-  const table = String(req.query.table || '')
+  // GET/DELETE pass table as a query param; PATCH (database.tsx's saveRow,
+  // and the new row-color picker) sends it in the body instead — read
+  // whichever is present so neither path 400s with "Unknown or disallowed
+  // table" from a table that's actually on the allow-list.
+  const table = String(req.query.table || req.body?.table || '')
   if (!ALLOWED_TABLES.includes(table)) return res.status(400).json({ error: 'Unknown or disallowed table' })
 
   try {

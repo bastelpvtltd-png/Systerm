@@ -8,6 +8,15 @@ import {
   DollarSign, Check,
 } from 'lucide-react'
 
+// A stored Drive URL is the "view" link (drive.google.com/file/d/<id>/view)
+// — opening that in a new tab lands on Drive's preview page, not an actual
+// download. Rewriting to the uc?export=download form makes the browser
+// download the file directly instead, matching what "Download" should do.
+function toDriveDownloadUrl(url: string): string {
+  const m = url.match(/\/d\/([a-zA-Z0-9_-]+)/)
+  return m ? `https://drive.google.com/uc?export=download&id=${m[1]}` : url
+}
+
 interface PendingGroup<T> { count: number; items: T[] }
 // Vessel Trigger detail attached to a CDN Pending/Boat Note Pending
 // container — only present when that vessel+voyage was actually found in
@@ -508,10 +517,12 @@ function DashboardContent() {
 // notification; Pick locks it to just them (see pick-task.ts's atomic claim).
 // Multiple can be ticked and picked together in one go.
 function IncomingPanel({ onPicked }: { onPicked: () => void }) {
+  const { isAdmin } = usePermission()
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [pickingId, setPickingId] = useState<string | null>(null)
   const [pickingAll, setPickingAll] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [viewing, setViewing] = useState<any | null>(null)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
 
@@ -584,15 +595,41 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
     }
   }
 
+  // Admin-only — dismisses from this log (is_active=false server-side), the
+  // document/upload itself is never touched, same spirit as Processed
+  // History's "clears the log, not the file" delete.
+  async function deleteSelected() {
+    const ids = selectedIds
+    if (!ids.length || !confirm(`Remove ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'} from the Activity Log? The uploaded files themselves are not affected.`)) return
+    setDeleting(true)
+    try {
+      const res = await fetch('/api/dashboard-notifications', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ ids }),
+      })
+      if (res.ok) { setItems(prev => prev.filter(x => !ids.includes(x.id))); setSelected({}) }
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
         <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Bell size={16} className="text-amber-500"/>Activity Log</h2>
         {selectedIds.length > 0 && (
-          <button onClick={pickSelected} disabled={pickingAll}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
-            {pickingAll ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Pick Selected ({selectedIds.length})
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button onClick={pickSelected} disabled={pickingAll}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+              {pickingAll ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Pick Selected ({selectedIds.length})
+            </button>
+            {isAdmin && (
+              <button onClick={deleteSelected} disabled={deleting}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
+                {deleting ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>} Delete Selected ({selectedIds.length})
+              </button>
+            )}
+          </div>
         )}
       </div>
       {loading ? (
@@ -763,7 +800,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     const ids = new Set(selectedTasks.map(t => t.id))
     for (const t of selectedTasks) {
       if (!t.document_uploads?.drive_url) continue
-      window.open(t.document_uploads.drive_url, '_blank')
+      window.open(toDriveDownloadUrl(t.document_uploads.drive_url), '_blank')
     }
     // There's no browser event for "the save dialog was cancelled" on a new-
     // tab Drive link — clicking Download used to mark every file downloaded
@@ -859,7 +896,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                   <>
                     <button onClick={() => {
                       if (!confirmReasonDelete(t.document_uploads)) return
-                      window.open(t.document_uploads.drive_url, '_blank')
+                      window.open(toDriveDownloadUrl(t.document_uploads.drive_url), '_blank')
                       if (!window.confirm('PDF eka download unada? "OK" kaloth me task eka My Picked Tasks eken ain wenawa.')) return
                       logAction(t.document_uploads.id, 'download')
                       if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)

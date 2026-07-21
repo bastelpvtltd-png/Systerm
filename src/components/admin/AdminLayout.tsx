@@ -20,9 +20,10 @@ interface ErrorEntry { id: string; time: string; message: string; detail?: strin
 // fetch responses (unauthorized/forbidden — the thing most worth surfacing
 // immediately instead of silently failing in some panel). Purely additive:
 // every original console.error/fetch call still runs exactly as before.
-function GlobalErrorWidget() {
+function GlobalErrorWidget({ isAdmin }: { isAdmin: boolean }) {
   const [errors, setErrors] = useState<ErrorEntry[]>([])
   const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     function push(message: string, detail?: string) {
@@ -63,19 +64,27 @@ function GlobalErrorWidget() {
     }
   }, [])
 
-  if (!errors.length) return null
+  // Admin-only display — every fetch/console still gets patched regardless
+  // (harmless), but a non-admin account never sees the badge itself.
+  if (!isAdmin || !errors.length) return null
+
+  function copyAll() {
+    const text = errors.map(e => `[${e.time}] ${e.message}${e.detail ? ' — ' + e.detail : ''}`).join('\n')
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+  }
 
   return (
     <>
       <button onClick={() => setOpen(o => !o)} title="Errors"
-        className="fixed top-3 left-3 z-[100] w-7 h-7 rounded-full bg-red-600 text-white text-[11px] font-bold flex items-center justify-center shadow-lg hover:bg-red-700">
+        className="fixed top-3 right-3 z-[100] w-7 h-7 rounded-full bg-red-600 text-white text-[11px] font-bold flex items-center justify-center shadow-lg hover:bg-red-700">
         {errors.length > 99 ? '99+' : errors.length}
       </button>
       {open && (
-        <div className="fixed top-12 left-3 z-[100] w-96 max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-2xl p-3">
+        <div className="fixed top-12 right-3 z-[100] w-96 max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-2xl p-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-gray-700 flex items-center gap-1"><AlertTriangle size={13} className="text-red-500"/>Errors ({errors.length})</p>
             <div className="flex items-center gap-2">
+              <button onClick={copyAll} className="text-[11px] text-blue-600 hover:text-blue-800 font-medium">{copied ? 'Copied!' : 'Copy all'}</button>
               <button onClick={() => setErrors([])} className="text-[11px] text-gray-400 hover:text-gray-600">Clear</button>
               <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={14}/></button>
             </div>
@@ -921,7 +930,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <PermissionContext.Provider value={permValue}>
-      <GlobalErrorWidget/>
+      <GlobalErrorWidget isAdmin={isAdmin}/>
       <div className="flex min-h-screen">
         {/* Sidebar */}
         <aside className={`sidebar flex flex-col transition-all duration-300 ${collapsed ? 'w-16' : 'w-56'}`}>

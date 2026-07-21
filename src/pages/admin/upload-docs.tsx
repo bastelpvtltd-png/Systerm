@@ -1731,7 +1731,7 @@ function DocumentsUploadContent() {
           shows here, editable in place, deletable-and-replaceable one at a
           time, or the new one can be added alongside them anyway. */}
       {matchModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[80] p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
             <div className="p-5 border-b border-gray-100">
               <h3 className="font-semibold text-gray-900 flex items-center gap-2"><AlertTriangle size={16} className="text-amber-500"/>
@@ -1776,7 +1776,7 @@ function DocumentsUploadContent() {
           rows it should have; adding one more would go over. Blocked until a
           slot is freed or the CUSDEC's CAP is corrected. */}
       {capModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[80] p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
             <div className="p-5 border-b border-gray-100">
               <h3 className="font-semibold text-gray-900 flex items-center gap-2"><AlertTriangle size={16} className="text-red-500"/>CDN count exceeds this CUSDEC's CAP</h3>
@@ -1816,7 +1816,7 @@ function DocumentsUploadContent() {
       )}
 
       {shipmentPickModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[80] p-4">
           <div className="bg-white rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
             <div className="p-5 border-b border-gray-100">
               <h3 className="font-semibold text-gray-900">No matching Shipment found automatically</h3>
@@ -1906,9 +1906,12 @@ interface BillRecord {
   uploaded_by_name: string
   created_at: string
 }
-interface CusdecMatch { id: string; code: string; number: string; exporter: string; reference?: string }
+interface CusdecMatch { id: string; code: string; number: string; exporter: string; reference?: string; cap?: string }
 
 function BillsPanel() {
+  const { isAdmin } = usePermission()
+  const [cdnHistory, setCdnHistory] = useState<any[]>([])
+  const [loadingCdnHistory, setLoadingCdnHistory] = useState(false)
   const [search, setSearch] = useState('')
   const [searching, setSearching] = useState(false)
   const [matches, setMatches] = useState<CusdecMatch[]>([])
@@ -1927,7 +1930,7 @@ function BillsPanel() {
   async function doSearch(term: string) {
     setSearching(true)
     try {
-      let q = supabase.from('cusdec').select('id, code, number, exporter, reference')
+      let q = supabase.from('cusdec').select('id, code, number, exporter, reference, cap')
       if (term.trim()) {
         q = q.or(`number.ilike.%${term.trim()}%,reference.ilike.%${term.trim()}%,exporter.ilike.%${term.trim()}%,code.ilike.%${term.trim()}%`)
       }
@@ -1961,6 +1964,21 @@ function BillsPanel() {
     setShowDropdown(false)
     setSearch(`${c.number}${c.reference ? ' · ' + c.reference : ''}`)
     loadBills(c.number)
+    if (isAdmin) loadCdnHistory(c.number)
+  }
+
+  // Admin-only visibility into who uploaded each CDN against this CUSDEC's
+  // CAP — the Bills panel already has the CUSDEC search/select UI, so this
+  // reuses it instead of duplicating a second picker elsewhere.
+  async function loadCdnHistory(cusdecNumber: string) {
+    setLoadingCdnHistory(true)
+    try {
+      const h = await authHeader()
+      const r = await fetch(`/api/list-records?table=cdn&filter=cusdec_number&value=${encodeURIComponent(cusdecNumber)}`, { headers: h })
+      const d = await r.json()
+      setCdnHistory(d.records || [])
+    } catch { setCdnHistory([]) }
+    finally { setLoadingCdnHistory(false) }
   }
 
   async function loadBills(cusdecNumber: string) {
@@ -2174,6 +2192,30 @@ function BillsPanel() {
           </div>
         )}
       </div>
+
+      {isAdmin && selected && (
+        <div className="card lg:col-span-2">
+          <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2">
+            <FileText size={15} className="text-gray-400"/>
+            CDN CAP History — {selected.number} {selected.cap ? `(CAP ${selected.cap}, ${cdnHistory.length} uploaded)` : `(${cdnHistory.length} uploaded)`}
+          </h2>
+          {loadingCdnHistory ? (
+            <div className="flex items-center justify-center py-6"><Loader size={18} className="animate-spin text-gray-300"/></div>
+          ) : cdnHistory.length === 0 ? (
+            <p className="text-xs text-gray-400 py-4 text-center">No CDN rows uploaded for this CUSDEC yet</p>
+          ) : (
+            <div className="space-y-1.5 max-h-64 overflow-y-auto">
+              {cdnHistory.map(cdn => (
+                <div key={cdn.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg px-3 py-2">
+                  <span className="font-mono font-medium text-gray-800">{cdn.container_no || '—'}</span>
+                  <span className="text-gray-400">{cdn.uploaded_by || ''} {cdn.created_at ? new Date(cdn.created_at).toLocaleString('en-GB') : ''}</span>
+                  {cdn.boat_note_passed && <span className="text-blue-600">· boat note passed</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
