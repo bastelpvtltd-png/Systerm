@@ -4,7 +4,9 @@ import { authHeader } from '@/lib/supabase'
 import {
   Database, RefreshCw, Trash2, Save, Loader, AlertTriangle,
   ArrowUp, ArrowDown, ArrowUpDown, HardDrive, ChevronDown, ChevronUp,
+  Archive, Download, Mail, ExternalLink,
 } from 'lucide-react'
+import EmailPdfModal from '@/components/admin/EmailPdfModal'
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B'
@@ -101,6 +103,139 @@ function StorageStatsPanel() {
   )
 }
 
+// Date-range export/cleanup for CUSDEC — filters (date range on either
+// created_at or payment_complete_at, then shipper/reference/CUSDEC number,
+// cascading in that order) build a zip of the 3 data sheets (CUSDEC/CDN/
+// Barcode) plus every matched shipment's PDFs in its own Documents/<number>
+// folder. Generating never deletes anything — cleanup is a separate,
+// explicit, admin-only action after the zip is safely in hand.
+function CusdecExportPanel() {
+  const [expanded, setExpanded] = useState(false)
+  const [dateField, setDateField] = useState<'created_at' | 'payment_complete_at'>('created_at')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [shipper, setShipper] = useState('')
+  const [reference, setReference] = useState('')
+  const [code, setCode] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<{ count: number; zipUrl: string; fileName: string; rangeLabel: string; matchedIds: string[] } | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleted, setDeleted] = useState(false)
+  const [emailAttachments, setEmailAttachments] = useState<{ filename: string; url: string }[] | null>(null)
+
+  async function generate() {
+    if (!startDate || !endDate) { setError('Start and end date required'); return }
+    setGenerating(true); setError(''); setResult(null); setDeleted(false)
+    try {
+      const res = await fetch('/api/database-export', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ startDate, endDate, dateField, shipper: shipper || undefined, reference: reference || undefined, code: code || undefined }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Export failed')
+      if (!d.count) { setError('No matching CUSDECs for these filters'); return }
+      setResult(d)
+    } catch (e: any) { setError(e.message) }
+    finally { setGenerating(false) }
+  }
+
+  async function deleteMatched() {
+    if (!result) return
+    if (!confirm(`Permanently delete ${result.count} CUSDEC row${result.count === 1 ? '' : 's'} and every linked CDN/Barcode/Boat Note row + Drive PDF? The zip you just generated is the only copy left afterward. This cannot be undone.`)) return
+    setDeleting(true)
+    try {
+      const res = await fetch('/api/database-export', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ action: 'delete', ids: result.matchedIds }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Delete failed')
+      setDeleted(true)
+    } catch (e: any) { setError(e.message) }
+    finally { setDeleting(false) }
+  }
+
+  return (
+    <div className="card mb-4">
+      <button onClick={() => setExpanded(x => !x)} className="w-full flex items-center justify-between">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Archive size={16}/>Date-Range Export (ZIP)</h2>
+        {expanded ? <ChevronUp size={16} className="text-gray-400"/> : <ChevronDown size={16} className="text-gray-400"/>}
+      </button>
+
+      {expanded && (
+        <div className="mt-4 space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Date field</label>
+              <select value={dateField} onChange={e => setDateField(e.target.value as any)} className="input text-sm w-full">
+                <option value="created_at">Created At</option>
+                <option value="payment_complete_at">Payment Done Date</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">From</label>
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="input text-sm w-full"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">To</label>
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="input text-sm w-full"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Shipper (optional)</label>
+              <input value={shipper} onChange={e => setShipper(e.target.value)} placeholder="First line of exporter" className="input text-sm w-full"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Reference (optional)</label>
+              <input value={reference} onChange={e => setReference(e.target.value)} className="input text-sm w-full"/>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">CUSDEC Number (optional)</label>
+              <input value={code} onChange={e => setCode(e.target.value)} className="input text-sm w-full"/>
+            </div>
+          </div>
+          <p className="text-[11px] text-gray-400">Shipper/Reference/CUSDEC Number narrow further within the date range — leave all three blank to include every shipper in range.</p>
+
+          <button onClick={generate} disabled={generating} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50" style={{ background: '#1B3A5C' }}>
+            {generating ? <Loader size={14} className="animate-spin"/> : <Archive size={14}/>} Filter and Generate
+          </button>
+
+          {error && <p className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle size={12}/>{error}</p>}
+
+          {result && !deleted && (
+            <div className="border border-gray-100 rounded-lg p-3 bg-gray-50/60">
+              <p className="text-sm text-gray-800 font-medium mb-2">{result.fileName} — {result.count} CUSDEC{result.count === 1 ? '' : 's'}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <a href={result.zipUrl} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-white" style={{ background: '#1B3A5C' }}>
+                  <Download size={12}/>Download
+                </a>
+                <button onClick={() => setEmailAttachments([{ filename: result.fileName, url: result.zipUrl }])}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-white" style={{ background: '#22A87A' }}>
+                  <Mail size={12}/>Email
+                </button>
+                <a href={result.zipUrl} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline flex items-center gap-1"><ExternalLink size={11}/>Open in Drive</a>
+                <button onClick={deleteMatched} disabled={deleting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 disabled:opacity-50 ml-auto">
+                  {deleting ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>} Delete these from the database
+                </button>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-2">The zip is already saved to Drive's "Export Archives" folder — safe to download/email whenever. Only click delete once you've confirmed the zip actually has what you need.</p>
+            </div>
+          )}
+          {deleted && (
+            <p className="text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">Deleted {result?.count} CUSDEC{result?.count === 1 ? '' : 's'} and all linked data. The zip in Drive is unaffected.</p>
+          )}
+        </div>
+      )}
+
+      {emailAttachments && (
+        <EmailPdfModal attachments={emailAttachments} documentReason={`Database Export — ${result?.rangeLabel}`} onClose={() => setEmailAttachments(null)}/>
+      )}
+    </div>
+  )
+}
+
 const TABLES = [
   { key: 'cusdec', label: 'CUSDEC' },
   { key: 'cdn', label: 'CDN' },
@@ -134,7 +269,7 @@ const ROW_COLORS = [
 const ROW_COLOR_BG: Record<string, string> = { green: 'bg-green-50', blue: 'bg-blue-50' }
 
 function DatabaseContent() {
-  const { has } = usePermission()
+  const { has, isAdmin } = usePermission()
   const visibleTables = TABLES.filter(t => has(`section:database.${t.key}`))
   const canDelete = has('section:database.delete')
   const [table, setTable] = useState('cusdec')
@@ -319,6 +454,8 @@ function DatabaseContent() {
         </div>
 
         <StorageStatsPanel/>
+
+        {table === 'cusdec' && isAdmin && <CusdecExportPanel/>}
 
         {/* Table tabs */}
         <div className="flex gap-1.5 mb-4 flex-wrap">

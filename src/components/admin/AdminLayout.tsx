@@ -7,9 +7,93 @@ import {
   BarChart2, Users, Settings, LogOut,
   ChevronLeft, ChevronRight, Shield, DollarSign, Anchor,
   Database, Loader, MessageSquare, CheckCircle, FileStack, Zap, Clock, Sun, Moon,
-  Send, X, Bell, Anchor as AnchorIcon, Trash2, Pencil,
+  Send, X, Bell, Anchor as AnchorIcon, Trash2, Pencil, AlertTriangle,
 } from 'lucide-react'
 import { formatSLDateTime } from '@/lib/slTime'
+
+interface ErrorEntry { id: string; time: string; message: string; detail?: string }
+
+// A single always-on error catcher, mounted once here (AdminLayout persists
+// across every admin page — see _app.tsx) so nothing has to opt in per-page.
+// Three sources: console.error (React/library errors already logged
+// somewhere), window error/unhandledrejection (uncaught JS), and 401/403
+// fetch responses (unauthorized/forbidden — the thing most worth surfacing
+// immediately instead of silently failing in some panel). Purely additive:
+// every original console.error/fetch call still runs exactly as before.
+function GlobalErrorWidget() {
+  const [errors, setErrors] = useState<ErrorEntry[]>([])
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    function push(message: string, detail?: string) {
+      setErrors(prev => [{ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, time: new Date().toLocaleTimeString('en-GB'), message, detail }, ...prev].slice(0, 50))
+    }
+
+    const origConsoleError = console.error
+    console.error = (...args: any[]) => {
+      origConsoleError(...args)
+      push(args.map(a => (a instanceof Error ? a.message : typeof a === 'string' ? a : JSON.stringify(a))).join(' '))
+    }
+
+    function onError(e: ErrorEvent) {
+      push(e.message, e.filename ? `${e.filename}:${e.lineno}` : undefined)
+    }
+    function onRejection(e: PromiseRejectionEvent) {
+      push('Unhandled error: ' + (e.reason?.message || String(e.reason)))
+    }
+    window.addEventListener('error', onError)
+    window.addEventListener('unhandledrejection', onRejection)
+
+    const origFetch = window.fetch.bind(window)
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const res = await origFetch(...args)
+      if (res.status === 401 || res.status === 403) {
+        const input = args[0]
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url
+        push(`${res.status === 401 ? 'Unauthorized' : 'Forbidden'} — ${url}`)
+      }
+      return res
+    }
+
+    return () => {
+      console.error = origConsoleError
+      window.removeEventListener('error', onError)
+      window.removeEventListener('unhandledrejection', onRejection)
+      window.fetch = origFetch
+    }
+  }, [])
+
+  if (!errors.length) return null
+
+  return (
+    <>
+      <button onClick={() => setOpen(o => !o)} title="Errors"
+        className="fixed top-3 left-3 z-[100] w-7 h-7 rounded-full bg-red-600 text-white text-[11px] font-bold flex items-center justify-center shadow-lg hover:bg-red-700">
+        {errors.length > 99 ? '99+' : errors.length}
+      </button>
+      {open && (
+        <div className="fixed top-12 left-3 z-[100] w-96 max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-2xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-gray-700 flex items-center gap-1"><AlertTriangle size={13} className="text-red-500"/>Errors ({errors.length})</p>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setErrors([])} className="text-[11px] text-gray-400 hover:text-gray-600">Clear</button>
+              <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={14}/></button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {errors.map(e => (
+              <div key={e.id} className="text-[11px] border-b border-gray-50 pb-1.5">
+                <p className="text-gray-400">{e.time}</p>
+                <p className="text-red-600 break-words">{e.message}</p>
+                {e.detail && <p className="text-gray-400 break-words">{e.detail}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
 
 function SidebarClock({ collapsed }: { collapsed: boolean }) {
   const [now, setNow] = useState(new Date())
@@ -648,7 +732,8 @@ export const SECTION_ITEMS = [
   { key: 'section:dashboard.my-picked-tasks',  tabHref: '/admin/dashboard', label: 'My Picked Tasks panel' },
   { key: 'section:dashboard.pick-history',     tabHref: '/admin/dashboard', label: 'Pick History panel' },
   { key: 'section:dashboard.final-documents',  tabHref: '/admin/dashboard', label: 'Pending Final Document panel' },
-  { key: 'section:pick-history.delete',        tabHref: '/admin/dashboard', label: 'Pick History: delete entries' },
+  { key: 'section:dashboard.not-complete-shipment', tabHref: '/admin/dashboard', label: 'Not Complete Shipment panel' },
+  { key: 'section:dashboard.not-payment-complete',  tabHref: '/admin/dashboard', label: 'Not Payment Complete Shipment panel' },
   { key: 'section:shipment-entry.form',        tabHref: '/admin/shipment-entry', label: 'Shipment entry form' },
   { key: 'section:templates.manage',           tabHref: '/admin/templates', label: 'Template upload & fill' },
   { key: 'section:my-tasks.balance',           tabHref: '/admin/my-tasks', label: 'Balance panel' },
@@ -836,6 +921,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <PermissionContext.Provider value={permValue}>
+      <GlobalErrorWidget/>
       <div className="flex min-h-screen">
         {/* Sidebar */}
         <aside className={`sidebar flex flex-col transition-all duration-300 ${collapsed ? 'w-16' : 'w-56'}`}>

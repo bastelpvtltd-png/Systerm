@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { getTableColumns } from '@/lib/docTables'
+import { getTableColumns, cascadeDeleteCusdec, cascadeDeleteCdn } from '@/lib/docTables'
 import { requireAuth, requireSection } from '@/lib/serverAuth'
 import { deleteDriveFileByUrl } from '@/lib/driveFolders'
 
@@ -18,37 +18,6 @@ const HAS_UPDATED_AT = new Set(['cusdec', 'cdn', 'barcode', 'boat_notes', 'uploa
 const DRIVE_URL_COLUMN: Record<string, string> = {
   cusdec: 'pdf_url', cdn: 'pdf_url', barcode: 'pdf_url', boat_notes: 'pdf_url',
   uploaded_documents: 'drive_url',
-}
-
-async function cascadeDeleteCdn(cdnRow: any): Promise<void> {
-  if (!cdnRow?.container_no) return
-  const { data: barcodeRows } = await supabaseAdmin.from('barcode').select('*').eq('container_no', cdnRow.container_no)
-  for (const b of (barcodeRows || [])) {
-    if (b.pdf_url) await deleteDriveFileByUrl(b.pdf_url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message))
-    await supabaseAdmin.from('barcode').delete().eq('id', b.id)
-  }
-}
-
-async function cascadeDeleteCusdec(cusdecRow: any): Promise<void> {
-  if (!cusdecRow?.code || !cusdecRow?.number) return
-  const { data: cdnRows } = await supabaseAdmin.from('cdn').select('*').eq('code', cusdecRow.code).eq('cusdec_number', cusdecRow.number)
-  const containerNos: string[] = []
-  for (const c of (cdnRows || [])) {
-    if (c.container_no) containerNos.push(c.container_no)
-    await cascadeDeleteCdn(c)
-    if (c.pdf_url) await deleteDriveFileByUrl(c.pdf_url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message))
-    await supabaseAdmin.from('cdn').delete().eq('id', c.id)
-  }
-  // boat_notes has no dedicated cusdec_number column — it carries the same
-  // container_no (inside its jsonb `details` blob) as the CDN row it was made
-  // for (see shipment-overview.ts, which links them back the same way).
-  if (containerNos.length) {
-    const { data: boatNotes } = await supabaseAdmin.from('boat_notes').select('*').in('details->>container_no', containerNos)
-    for (const bn of (boatNotes || [])) {
-      if (bn.pdf_url) await deleteDriveFileByUrl(bn.pdf_url).catch((e: any) => console.error('[admin-data] Drive delete failed:', e.message))
-      await supabaseAdmin.from('boat_notes').delete().eq('id', bn.id)
-    }
-  }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

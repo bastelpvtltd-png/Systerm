@@ -202,7 +202,6 @@ function DocumentsUploadContent() {
   // Upload workflow's Save/Mail/Notify "Send" modal (replaces the old
   // immediate one-click Save in the simple popup).
   const [sendModalItem, setSendModalItem] = useState<UploadItem | null>(null)
-  const [sendModalAll, setSendModalAll] = useState(false)
   // Preview's "select just the PDFs you need" multi-email, mirroring Shipment
   // Overview's picker.
   const [selectedPreviewDocs, setSelectedPreviewDocs] = useState<Record<string, EmailAttachment>>({})
@@ -613,11 +612,22 @@ function DocumentsUploadContent() {
     return await persistItem(item, 'insert', undefined, referenceOverride)
   }
 
+  // A batch Send steps through one SendModal per file (see batchQueue below)
+  // — but match/cap conflicts are resolved through matchModal/capModal, a
+  // separate popup outside that SendModal entirely. Once one of those
+  // resolves the CURRENT batch item, the stuck SendModal (still showing
+  // "resolve it above" from the original check-document-match failure)
+  // needs to be swapped out for the next file instead of sitting there.
+  function settleBatchItem(itemId: string) {
+    setBatchQueue(prev => (prev && prev[0]?.id === itemId) ? (prev.length > 1 ? prev.slice(1) : null) : prev)
+  }
+
   async function resolveMatchReplace(matchId: string) {
     if (!matchModal) return
     const { item } = matchModal
     setMatchModal(null)
     await persistItem(item, 'replace', matchId)
+    settleBatchItem(item.id)
   }
 
   async function resolveMatchAddNew() {
@@ -629,6 +639,7 @@ function DocumentsUploadContent() {
       return
     }
     await persistItem(item, 'insert')
+    settleBatchItem(item.id)
   }
 
   function updateMatchDraft(matchId: string, key: string, value: string) {
@@ -696,6 +707,7 @@ function DocumentsUploadContent() {
     const { item } = capModal
     setCapModal(null)
     await persistItem(item, 'insert')
+    settleBatchItem(item.id)
   }
 
   const selectedItem = items.find(it => it.id === selectedId) || null
@@ -972,30 +984,30 @@ function DocumentsUploadContent() {
     setSavingAll(false)
   }
 
-  // "Send All" batch path for SendModal — saves (or just Drive-uploads, if
-  // Save was unticked) every ready/error item in this list, one at a time,
-  // and reports back only the ones that actually succeeded.
-  async function sendAllSave(referenceOverride?: string): Promise<{ ok: boolean; results: SendResultFile[] }> {
-    setSavingAll(true)
-    const toSave = items.filter(it => it.status === 'ready' || it.status === 'error')
-    const results: SendResultFile[] = []
-    for (const it of toSave) {
-      const r = await saveOne(it, referenceOverride)
-      if (r?.ok && r.driveLink) results.push({ fileName: it.fileName, driveLink: r.driveLink, docType: it.detectedType, cusdecId: r.cusdecId })
-    }
-    setSavingAll(false)
-    return { ok: true, results }
-  }
-  async function sendAllDriveLinksOnly(): Promise<SendResultFile[]> {
+  // "Send All" used to run every ready/error item through ONE shared
+  // Save/Mail/Notify/Reason choice in a tight non-interactive loop — a
+  // duplicate found mid-batch (check-document-match) popped matchModal but
+  // the loop kept going regardless, so that file silently never actually
+  // got resolved one way or the other. Batch send now steps through the
+  // exact same single-file SendModal (+ its matchModal/capModal/
+  // shipmentPickModal handling, unchanged) once per file — every file gets
+  // its own real Skip/Save/Notify/Mail decision, resolved before the next
+  // one opens. Order matters for CDN's CAP check (needs its CUSDEC to
+  // already exist) and Barcode matching CDN's container_no, so the queue is
+  // sorted cusdec -> cdn -> barcode -> everything else, not upload order.
+  const BATCH_SAVE_ORDER: Record<string, number> = { cusdec: 0, cdn: 1, barcode: 2 }
+  const [batchQueue, setBatchQueue] = useState<UploadItem[] | null>(null)
+  function startBatchSend() {
     const toSend = items.filter(it => it.status === 'ready' || it.status === 'error')
-    const results: SendResultFile[] = []
-    for (const it of toSend) {
-      try {
-        const link = await uploadToDriveOnly(it)
-        results.push({ fileName: it.fileName, driveLink: link, docType: it.detectedType })
-      } catch { /* skip files that fail to upload, keep going */ }
-    }
-    return results
+    const sorted = [...toSend].sort((a, b) =>
+      (BATCH_SAVE_ORDER[a.detectedType || ''] ?? 99) - (BATCH_SAVE_ORDER[b.detectedType || ''] ?? 99))
+    if (sorted.length) setBatchQueue(sorted)
+  }
+  function advanceBatch() {
+    setBatchQueue(prev => {
+      if (!prev || prev.length <= 1) return null
+      return prev.slice(1)
+    })
   }
   function handleDeleteAll() {
     if (!items.length) return
@@ -1075,9 +1087,9 @@ function DocumentsUploadContent() {
               <h2 className="font-semibold text-gray-900 text-sm">Uploaded ({items.length})</h2>
               {items.length > 0 && (
                 <div className="flex items-center gap-1.5">
-                  <button onClick={() => setSendModalAll(true)} disabled={savingAll || readyCount === 0}
-                    title="Send all — same Save/Mail/Notify choice as a single file" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
-                    {savingAll ? <Loader size={11} className="animate-spin"/> : <Send size={11}/>} Send All
+                  <button onClick={startBatchSend} disabled={!!batchQueue || readyCount === 0}
+                    title="Step through each file — Skip/Save/Notify/Mail per file, cusdec first then cdn then barcode" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
+                    {batchQueue ? <Loader size={11} className="animate-spin"/> : <Send size={11}/>} Send All
                   </button>
                   <button onClick={handleDeleteAll}
                     title="Remove all from this list" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-red-600 border border-red-200 hover:bg-red-50">
@@ -1320,9 +1332,9 @@ function DocumentsUploadContent() {
               </h2>
               {items.length > 0 && (
                 <div className="flex items-center gap-1.5">
-                  <button onClick={() => setSendModalAll(true)} disabled={savingAll || readyCount === 0}
-                    title="Send all — same Save/Mail/Notify choice as a single file" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
-                    {savingAll ? <Loader size={11} className="animate-spin"/> : <Send size={11}/>} Send All
+                  <button onClick={startBatchSend} disabled={!!batchQueue || readyCount === 0}
+                    title="Step through each file — Skip/Save/Notify/Mail per file, cusdec first then cdn then barcode" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-white bg-[#1B3A5C] disabled:opacity-40">
+                    {batchQueue ? <Loader size={11} className="animate-spin"/> : <Send size={11}/>} Send All
                   </button>
                   <button onClick={handleDeleteAll}
                     title="Remove all from this list" className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-red-600 border border-red-200 hover:bg-red-50">
@@ -1751,7 +1763,7 @@ function DocumentsUploadContent() {
                 className="w-full py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: '#22A87A' }}>
                 Keep all existing, add this as a new row
               </button>
-              <button onClick={() => { skipItem(matchModal.item.id); setMatchModal(null) }}
+              <button onClick={() => { skipItem(matchModal.item.id); settleBatchItem(matchModal.item.id); setMatchModal(null) }}
                 className="w-full py-2 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100">
                 Skip — don't save this PDF
               </button>
@@ -1858,14 +1870,19 @@ function DocumentsUploadContent() {
         />
       )}
 
-      {sendModalAll && (
+      {batchQueue && batchQueue.length > 0 && (
         <SendModal
-          label={`${readyCount} file${readyCount !== 1 ? 's' : ''}`}
+          key={batchQueue[0].id}
+          label={`${batchQueue[0].fileName} (${batchQueue.length} left in this batch)`}
           uploaderName={uploaderName}
-          onSave={sendAllSave}
-          onGetDriveLinks={sendAllDriveLinksOnly}
-          onClose={() => setSendModalAll(false)}
-          onDone={() => setSendModalAll(false)}
+          docType={batchQueue[0].detectedType}
+          onSave={async (referenceOverride?: string) => {
+            const r = await saveOne(batchQueue[0], referenceOverride)
+            return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: batchQueue[0].fileName, driveLink: r.driveLink, docType: batchQueue[0].detectedType, cusdecId: r.cusdecId }] : [] }
+          }}
+          onGetDriveLinks={async () => [{ fileName: batchQueue[0].fileName, driveLink: await uploadToDriveOnly(batchQueue[0]), docType: batchQueue[0].detectedType }]}
+          onClose={() => setBatchQueue(null)}
+          onDone={advanceBatch}
         />
       )}
     </>

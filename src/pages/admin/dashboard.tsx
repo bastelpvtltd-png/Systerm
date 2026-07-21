@@ -5,6 +5,7 @@ import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdf
 import {
   Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
   Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square, Trash2, FileCheck,
+  DollarSign, Check,
 } from 'lucide-react'
 
 interface PendingGroup<T> { count: number; items: T[] }
@@ -82,6 +83,8 @@ function DashboardContent() {
   const [pickRefreshKey, setPickRefreshKey] = useState(0)
   const [currentUserId, setCurrentUserId] = useState('')
   const [finalDocsCount, setFinalDocsCount] = useState(0)
+  const [notCompleteCount, setNotCompleteCount] = useState(0)
+  const [notPaymentCount, setNotPaymentCount] = useState(0)
   const [pickingShipmentId, setPickingShipmentId] = useState<string | null>(null)
   const [shipmentPickError, setShipmentPickError] = useState('')
 
@@ -207,6 +210,8 @@ function DashboardContent() {
     { key: 'section:dashboard.release-pending',  id: 'release',  label: 'Export Release Pending',  value: summary.releasePending.count,     icon: AlertCircle, color: '#ef4444' },
     { key: 'section:dashboard.closing-passed',   id: 'closingPassed', label: 'Closing Time Passed', value: summary.closingPassed.count,  icon: AlertCircle, color: '#dc2626' },
     { key: 'section:dashboard.final-documents',  id: 'finalDocs', label: 'Pending Final Document', value: finalDocsCount, icon: FileCheck, color: '#22A87A' },
+    { key: 'section:dashboard.not-complete-shipment', id: 'notComplete', label: 'Not Complete Shipment', value: notCompleteCount, icon: AlertCircle, color: '#f97316' },
+    { key: 'section:dashboard.not-payment-complete',  id: 'notPayment',  label: 'Not Payment Complete Shipment', value: notPaymentCount, icon: DollarSign, color: '#eab308' },
   ].filter(s => has(s.key))
 
   return (
@@ -469,6 +474,24 @@ function DashboardContent() {
             expanded, so mount it invisibly when collapsed just for the count. */}
         {expanded !== 'finalDocs' && has('section:dashboard.final-documents') && (
           <div className="hidden"><PendingFinalDocumentsPanel currentUserId={currentUserId} onCountChange={setFinalDocsCount}/></div>
+        )}
+
+        {expanded === 'notComplete' && (
+          <div className="mb-4">
+            <ShipmentCompletionPanel mode="shipment" onCountChange={setNotCompleteCount}/>
+          </div>
+        )}
+        {expanded !== 'notComplete' && has('section:dashboard.not-complete-shipment') && (
+          <div className="hidden"><ShipmentCompletionPanel mode="shipment" onCountChange={setNotCompleteCount}/></div>
+        )}
+
+        {expanded === 'notPayment' && (
+          <div className="mb-4">
+            <ShipmentCompletionPanel mode="payment" onCountChange={setNotPaymentCount}/>
+          </div>
+        )}
+        {expanded !== 'notPayment' && has('section:dashboard.not-payment-complete') && (
+          <div className="hidden"><ShipmentCompletionPanel mode="payment" onCountChange={setNotPaymentCount}/></div>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
@@ -1035,9 +1058,96 @@ function PendingFinalDocumentsPanel({ currentUserId, onCountChange }: { currentU
   )
 }
 
+// "Not Complete Shipment" shows every green (export_release_passed) CUSDEC
+// that hasn't been marked shipment_complete yet; "Not Payment Complete
+// Shipment" shows every shipment_complete CUSDEC that hasn't been marked
+// payment_complete yet (payment only makes sense once the shipment itself
+// is done) — same panel shape, different column/filter, so one component
+// covers both via `mode`.
+function ShipmentCompletionPanel({ mode, onCountChange }: { mode: 'shipment' | 'payment'; onCountChange?: (n: number) => void }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const doneCol = mode === 'shipment' ? 'shipment_complete' : 'payment_complete'
+  const doneAtCol = mode === 'shipment' ? 'shipment_complete_at' : 'payment_complete_at'
+  const title = mode === 'shipment' ? 'Not Complete Shipment' : 'Not Payment Complete Shipment'
+
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
+    try {
+      const res = await fetch('/api/list-records?table=cusdec&limit=500', { headers: await authHeader() })
+      const d = await res.json()
+      const filtered = (d.records || []).filter((c: any) =>
+        mode === 'shipment' ? (c.export_release_passed && !c.shipment_complete) : (c.shipment_complete && !c.payment_complete)
+      )
+      setRows(filtered)
+      onCountChange?.(filtered.length)
+    } finally {
+      if (!silent) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+    const t = setInterval(() => load(true), 20000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode])
+
+  async function markDone(id: string) {
+    setBusyId(id)
+    try {
+      const res = await fetch('/api/admin-data', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ table: 'cusdec', id, updates: { [doneCol]: true, [doneAtCol]: new Date().toISOString() } }),
+      })
+      if (res.ok) setRows(prev => { const next = prev.filter(r => r.id !== id); onCountChange?.(next.length); return next })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2 className="font-semibold text-gray-900 mb-3 text-sm">{title}</h2>
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-gray-400 py-4 text-center">None pending</p>
+      ) : (
+        <div className="space-y-1.5 max-h-96 overflow-y-auto">
+          {rows.map(r => (
+            <div key={r.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
+              <div className="min-w-0">
+                <p className="font-medium text-gray-800">CUSDEC {r.code} {r.number} <span className="text-gray-400 font-normal">· {r.exporter}</span></p>
+                <p className="text-gray-400">
+                  {r.reference && <>Ref: <span className="text-gray-600">{r.reference}</span> · </>}
+                  CAP: {r.cap || '—'} · Created: {r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB') : '—'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {r.reference && (
+                  <a href={`/admin/shipment-overview?reference=${encodeURIComponent(r.reference)}`} className="text-blue-600 hover:underline">View →</a>
+                )}
+                <button onClick={() => markDone(r.id)} disabled={busyId === r.id}
+                  className="flex items-center gap-1 px-2 py-1.5 rounded-md text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                  {busyId === r.id ? <Loader size={12} className="animate-spin"/> : <Check size={12}/>} Done
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PickHistoryPanel() {
-  const { has } = usePermission()
-  const canDelete = has('section:pick-history.delete')
+  const { isAdmin } = usePermission()
+  // Deliberately not grantable via allowed_tabs (unlike every other
+  // section:* permission) — bulk-purging the audit log itself should stay
+  // admin-only, not something an admin can hand off to a regular user.
+  const canDelete = isAdmin
   const [items, setItems] = useState<DocHistoryRow[]>([])
   const [loading, setLoading] = useState(false)
   const [fileName, setFileName] = useState('')

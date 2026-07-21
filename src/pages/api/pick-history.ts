@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { requireAuth, requireSection } from '@/lib/serverAuth'
+import { requireAuth, requireAdmin } from '@/lib/serverAuth'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -95,13 +95,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'DELETE') {
     // Deleting audit-trail entries is a lot more sensitive than reading
-    // them — grantable per-user via section:pick-history.delete (default:
-    // only admins have it) instead of a hardcoded is_admin check, same
-    // granular-panel-access model as Database/Recycle Bin. Deletes every
+    // them — kept admin-only (not grantable via allowed_tabs like most
+    // section:* panels) since purging the audit log itself isn't something
+    // an admin should be able to hand off to a regular user. Deletes every
     // pick_history_log row for the document (the whole row this panel now
     // shows), not a single action-line — the document itself and its
     // extracted data are never touched.
-    const gated = await requireSection(req, 'section:pick-history.delete')
+    const gated = await requireAdmin(req)
     if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
     try {
       const documentId = String(req.query.document_id || req.query.id || '')

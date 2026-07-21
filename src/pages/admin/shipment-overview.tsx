@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/router'
 import AdminLayout from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
-import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine, Anchor, Mail, CheckSquare, Square } from 'lucide-react'
+import { Search, Loader, AlertTriangle, ExternalLink, Package, FileText, ScanLine, Anchor, Mail, Download, CheckSquare, Square } from 'lucide-react'
 import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
 
 // Shipment-wise overview: search by shipper / CUSDEC code / CUSDEC number /
@@ -270,6 +270,11 @@ export default function DriveFilesPage() {
                   <span className="text-xs text-gray-400">{entry.cusdec.exporter}</span>
                   {entry.cusdec.reference && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">Ref: {entry.cusdec.reference}</span>}
                   {entry.cusdec.invoice_number && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">Inv: {entry.cusdec.invoice_number}</span>}
+                  {entry.cusdec.shipment_complete && (
+                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium" title={entry.cusdec.shipment_complete_at ? new Date(entry.cusdec.shipment_complete_at).toLocaleString('en-GB') : undefined}>
+                      Done{entry.cusdec.payment_complete ? ' · Paid' : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-xs font-medium px-2 py-1 rounded-md ${cdnCountMatchesCap(entry) ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
@@ -400,6 +405,10 @@ export default function DriveFilesPage() {
           <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2">
             <button onClick={() => setSelectedDocs({})} className="text-xs text-gray-500 bg-white border border-gray-200 rounded-full px-3 py-2 shadow-lg hover:bg-gray-50">
               Clear ({Object.keys(selectedDocs).length})
+            </button>
+            <button onClick={() => { Object.values(selectedDocs).forEach(d => window.open(d.url, '_blank')) }}
+              className="flex items-center gap-2 text-sm font-medium text-white rounded-full px-4 py-2.5 shadow-lg" style={{ background: '#1B3A5C' }}>
+              <Download size={15}/>Download Selected ({Object.keys(selectedDocs).length})
             </button>
             <button onClick={() => setEmailAttachments(Object.values(selectedDocs))}
               className="flex items-center gap-2 text-sm font-medium text-white rounded-full px-4 py-2.5 shadow-lg" style={{ background: '#22A87A' }}>

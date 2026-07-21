@@ -1,0 +1,153 @@
+import type { NextApiRequest, NextApiResponse } from 'next'
+import { createClient } from '@supabase/supabase-js'
+import { requireAdmin } from '@/lib/serverAuth'
+import { getDriveClient, getOrCreateSubfolder, driveFileIdFromUrl, deleteDriveFileByUrl } from '@/lib/driveFolders'
+import { cascadeDeleteCusdec } from '@/lib/docTables'
+import ExcelJS from 'exceljs'
+import JSZip from 'jszip'
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
+
+async function fetchDriveFileBuffer(drive: any, url: string): Promise<Buffer | null> {
+  const fileId = driveFileIdFromUrl(url)
+  if (!fileId) return null
+  try {
+    const res = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'arraybuffer' })
+    return Buffer.from(res.data as ArrayBuffer)
+  } catch (e: any) {
+    console.error('[database-export] Drive file fetch failed:', e.message)
+    return null
+  }
+}
+
+function addSheet(wb: ExcelJS.Workbook, name: string, rows: any[]) {
+  const ws = wb.addWorksheet(name)
+  if (!rows.length) return
+  const cols: string[] = Array.from(rows.reduce((set: Set<string>, r) => { Object.keys(r).forEach(k => set.add(k)); return set }, new Set<string>()))
+  ws.columns = cols.map(c => ({ header: c, key: c, width: 18 }))
+  rows.forEach(r => ws.addRow(r))
+}
+
+// This is genuinely heavy (fetches every matched shipment's PDFs from Drive
+// into one zip) — deliberately admin-only, and everything happens server-
+// side into a Drive archive folder rather than streaming a huge response
+// back through Vercel, so the client only ever gets a link.
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const authed = await requireAdmin(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
+  if (req.method !== 'POST') return res.status(405).end()
+
+  try {
+    // Cleanup step is a SEPARATE explicit call from generating the zip —
+    // never bundled into download/mail, since it permanently deletes these
+    // CUSDECs and everything cascaded from them (cdn/barcode/boat_notes +
+    // their Drive PDFs). The zip already made is what makes this safe to
+    // offer at all.
+    if (req.body.action === 'delete') {
+      const { ids } = req.body as { ids: string[] }
+      if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' })
+      let deleted = 0
+      for (const id of ids) {
+        const { data: row } = await supabaseAdmin.from('cusdec').select('*').eq('id', id).maybeSingle()
+        if (!row) continue
+        await cascadeDeleteCusdec(row)
+        if (row.pdf_url) await deleteDriveFileByUrl(row.pdf_url).catch(() => {})
+        await supabaseAdmin.from('cusdec').delete().eq('id', id)
+        deleted++
+      }
+      return res.json({ ok: true, deleted })
+    }
+
+    const { startDate, endDate, dateField, shipper, reference, code } = req.body as {
+      startDate: string; endDate: string; dateField?: 'created_at' | 'payment_complete_at'
+      shipper?: string; reference?: string; code?: string
+    }
+    if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate required' })
+    const field = dateField === 'payment_complete_at' ? 'payment_complete_at' : 'created_at'
+
+    let q = supabaseAdmin.from('cusdec').select('*').gte(field, startDate).lte(field, `${endDate}T23:59:59`)
+    if (reference) q = q.eq('reference', reference)
+    if (code) q = q.eq('number', code)
+    const { data: cusdecRows, error } = await q.limit(500)
+    if (error) return res.status(400).json({ error: error.message })
+
+    let matched = cusdecRows || []
+    if (shipper) {
+      const s = shipper.trim().toLowerCase()
+      matched = matched.filter(c => (c.exporter || '').split('\n')[0].trim().toLowerCase().includes(s))
+    }
+    if (!matched.length) return res.json({ ok: true, count: 0 })
+
+    const allCdn: any[] = []
+    const allBarcode: any[] = []
+    const docsByCusdec: Record<string, { label: string; url: string }[]> = {}
+
+    for (const c of matched) {
+      const key = c.number || c.id
+      const docs: { label: string; url: string }[] = []
+      if (c.pdf_url) docs.push({ label: 'CUSDEC', url: c.pdf_url })
+
+      const { data: cdns } = await supabaseAdmin.from('cdn').select('*').eq('code', c.code).eq('cusdec_number', c.number)
+      for (const cdn of (cdns || [])) {
+        allCdn.push(cdn)
+        if (cdn.pdf_url) docs.push({ label: `CDN_${cdn.container_no || cdn.id}`, url: cdn.pdf_url })
+        if (cdn.container_no) {
+          const { data: barcodeRows } = await supabaseAdmin.from('barcode').select('*').eq('container_no', cdn.container_no)
+          for (const b of (barcodeRows || [])) {
+            allBarcode.push(b)
+            if (b.pdf_url) docs.push({ label: `Barcode_${cdn.container_no}`, url: b.pdf_url })
+          }
+        }
+      }
+
+      const { data: docLinks } = await supabaseAdmin.from('cusdec_document_links').select('*').eq('cusdec_id', c.id)
+      for (const dl of (docLinks || [])) if (dl.drive_url) docs.push({ label: dl.document_type || 'Document', url: dl.drive_url })
+
+      docsByCusdec[key] = docs
+    }
+
+    const wb = new ExcelJS.Workbook()
+    addSheet(wb, 'CUSDEC', matched)
+    addSheet(wb, 'CDN', allCdn)
+    addSheet(wb, 'Barcode', allBarcode)
+    const excelBuffer = await wb.xlsx.writeBuffer()
+
+    const zip = new JSZip()
+    zip.file('Data/export-data.xlsx', excelBuffer as any)
+    const drive = getDriveClient()
+    for (const c of matched) {
+      const key = c.number || c.id
+      const safeKey = String(key || 'unknown').replace(/[/\\:*?"<>|]/g, '_')
+      const folder = zip.folder(`Documents/${safeKey}`)!
+      for (const doc of (docsByCusdec[key] || [])) {
+        const buf = await fetchDriveFileBuffer(drive, doc.url)
+        if (buf) folder.file(`${doc.label}.pdf`, buf)
+      }
+    }
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } })
+
+    const mainFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID || ''
+    if (!mainFolderId) return res.status(500).json({ error: 'GOOGLE_DRIVE_FOLDER_ID not configured' })
+    const archiveFolderId = await getOrCreateSubfolder(drive, mainFolderId, 'Export Archives')
+    const rangeLabel = `${startDate}_to_${endDate}`
+    const fileName = `Export_${rangeLabel}.zip`
+    const { Readable } = await import('stream')
+    const uploaded = await drive.files.create({
+      requestBody: { name: fileName, parents: [archiveFolderId] },
+      media: { mimeType: 'application/zip', body: Readable.from(zipBuffer) },
+      fields: 'id, webViewLink',
+    })
+    await drive.permissions.create({ fileId: uploaded.data.id!, requestBody: { role: 'reader', type: 'anyone' } })
+
+    res.json({
+      ok: true, count: matched.length, zipUrl: uploaded.data.webViewLink, fileName, rangeLabel,
+      matchedIds: matched.map(c => c.id),
+    })
+  } catch (err: any) {
+    console.error('[database-export] error:', err)
+    res.status(500).json({ error: err.message })
+  }
+}
