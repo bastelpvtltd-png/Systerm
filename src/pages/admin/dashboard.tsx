@@ -643,6 +643,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   const [deleting, setDeleting] = useState(false)
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
   const [pendingMailActions, setPendingMailActions] = useState<{ taskIds: string[]; docIds: { id: string; ephemeral: boolean }[] } | null>(null)
+  const [emailReason, setEmailReason] = useState<{ reason: string | null; note: string | null } | null>(null)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
 
   async function load(silent = false) {
@@ -756,6 +757,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     const docIds = eligible.map(t => ({ id: t.document_uploads.id, ephemeral: isEphemeralReason(t.document_uploads) }))
     setEmailAttachments(attachments)
     setPendingMailActions({ taskIds, docIds })
+    setEmailReason({ reason: eligible[0].document_uploads.reason ?? null, note: eligible[0].document_uploads.reason_note ?? null })
     setSelected({})
   }
 
@@ -836,6 +838,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                       if (!confirmReasonDelete(t.document_uploads)) return
                       setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }])
                       setPendingMailActions({ taskIds: [t.id], docIds: [{ id: t.document_uploads.id, ephemeral: isEphemeralReason(t.document_uploads) }] })
+                      setEmailReason({ reason: t.document_uploads.reason ?? null, note: t.document_uploads.reason_note ?? null })
                     }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
                       <Mail size={12}/>
                     </button>
@@ -858,7 +861,9 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
       {emailAttachments && (
         <EmailPdfModal
           attachments={emailAttachments}
-          onClose={() => { setEmailAttachments(null); setPendingMailActions(null) }}
+          documentReason={emailReason?.reason}
+          documentReasonNote={emailReason?.note}
+          onClose={() => { setEmailAttachments(null); setPendingMailActions(null); setEmailReason(null) }}
           onSent={() => {
             if (pendingMailActions) {
               const idSet = new Set(pendingMailActions.taskIds)

@@ -126,6 +126,13 @@ export default function DatabasePage() {
 }
 DatabasePage.getLayout = (page: React.ReactElement) => <AdminLayout>{page}</AdminLayout>
 
+const ROW_COLORS = [
+  { value: '', label: 'None', dot: 'bg-gray-200' },
+  { value: 'green', label: 'Green', dot: 'bg-green-500' },
+  { value: 'blue', label: 'Blue', dot: 'bg-blue-500' },
+]
+const ROW_COLOR_BG: Record<string, string> = { green: 'bg-green-50', blue: 'bg-blue-50' }
+
 function DatabaseContent() {
   const { has } = usePermission()
   const visibleTables = TABLES.filter(t => has(`section:database.${t.key}`))
@@ -141,6 +148,10 @@ function DatabaseContent() {
   const [columns, setColumns] = useState<string[]>([])
   const [sortCol, setSortCol] = useState('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  // CUSDEC's own color picks, keyed by "code|number" — looked up when viewing
+  // the CDN table so a CDN row can inherit its parent CUSDEC's color without
+  // storing the color a second time on the cdn row itself.
+  const [cusdecColors, setCusdecColors] = useState<Record<string, string>>({})
 
   // Tracks whether there are any unsaved cell edits right now, without
   // making the polling effect below depend on (and re-create its interval
@@ -180,9 +191,46 @@ function DatabaseContent() {
     if (visibleTables.length && !visibleTables.some(t => t.key === table)) setTable(visibleTables[0].key)
   }, [visibleTables, table])
 
+  // On the CUSDEC tab the color lives right on `rows`; on the CDN tab (or any
+  // other) fetch just the CUSDEC color map so CDN rows can show their parent's
+  // color automatically.
+  useEffect(() => {
+    if (table === 'cusdec' || !has('section:database.cusdec')) return
+    let cancelled = false
+    async function loadColors() {
+      try {
+        const res = await fetch('/api/admin-data?table=cusdec', { headers: await authHeader() })
+        const d = await res.json()
+        if (cancelled || !res.ok) return
+        const map: Record<string, string> = {}
+        for (const r of (d.rows || [])) if (r.row_color) map[`${r.code}|${r.number}`] = r.row_color
+        setCusdecColors(map)
+      } catch {}
+    }
+    loadColors()
+    const t = setInterval(loadColors, 15000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [table]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function setRowColor(rowId: string, color: string) {
+    try {
+      const res = await fetch('/api/admin-data', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ table: 'cusdec', id: rowId, updates: { row_color: color || null } }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Save failed')
+      setRows(prev => prev.map(r => r.id === rowId ? { ...r, row_color: color || null } : r))
+    } catch (e: any) {
+      alert('Color update failed: ' + e.message)
+    }
+  }
+
   function draftFor(row: Row): Row {
     return drafts[row.id] || row
   }
+
+  const visibleColumns = columns.filter(col => col !== 'row_color')
 
   const sortedRows = [...rows].sort((a, b) => {
     const av = a[sortCol], bv = b[sortCol]
@@ -299,7 +347,7 @@ function DatabaseContent() {
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-gray-50 z-10">
                 <tr>
-                  {columns.map(col => (
+                  {visibleColumns.map(col => (
                     <th key={col} onClick={() => setSortCol(prev => {
                         if (prev === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); return prev }
                         setSortDir('asc'); return col
@@ -317,15 +365,17 @@ function DatabaseContent() {
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={columns.length + 1} className="text-center py-10 text-gray-400">No rows in "{table}" yet</td></tr>
+                  <tr><td colSpan={visibleColumns.length + 1} className="text-center py-10 text-gray-400">No rows in "{table}" yet</td></tr>
                 )}
                 {sortedRows.map(row => {
                   const draft = draftFor(row)
                   const dirty = !!drafts[row.id]
                   const statusColor = row.export_release_passed ? 'border-l-4 border-l-green-500' : row.boat_note_passed ? 'border-l-4 border-l-blue-500' : ''
+                  const manualColor = table === 'cusdec' ? (row.row_color || '') : (cusdecColors[`${row.code}|${row.cusdec_number}`] || '')
+                  const colorBg = ROW_COLOR_BG[manualColor] || ''
                   return (
-                    <tr key={row.id} className={`border-b border-gray-50 ${dirty ? 'bg-amber-50' : 'hover:bg-gray-50'} ${statusColor}`}>
-                      {columns.map(col => {
+                    <tr key={row.id} className={`border-b border-gray-50 ${dirty ? 'bg-amber-50' : colorBg || 'hover:bg-gray-50'} ${statusColor}`}>
+                      {visibleColumns.map(col => {
                         const val = draft[col]
                         const readOnly = col === 'id' || col === 'created_at'
                         if (isJsonValue(val)) {
@@ -363,6 +413,13 @@ function DatabaseContent() {
                       })}
                       <td className="px-2 py-1.5 whitespace-nowrap">
                         <div className="flex items-center gap-1">
+                          {table === 'cusdec' && (
+                            <select value={row.row_color || ''} onChange={e => setRowColor(row.id, e.target.value)}
+                              title="Row color (also applied to this CUSDEC's CDN rows)"
+                              className="text-[10px] border border-gray-200 rounded px-1 py-1 bg-white text-gray-600">
+                              {ROW_COLORS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                            </select>
+                          )}
                           {dirty && (
                             <button onClick={() => saveRow(row.id)} disabled={savingId === row.id}
                               title="Save changes"

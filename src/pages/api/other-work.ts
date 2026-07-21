@@ -33,12 +33,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
-    const adminAuthed = await requireAdmin(req)
-    if (!adminAuthed.ok) return res.status(adminAuthed.status).json({ error: adminAuthed.error })
+    // Admin can add on behalf of any user; a regular user can only add their
+    // own (the UI's "Add Other Work (for yourself)" form, my-tasks.tsx) —
+    // this used to require admin unconditionally, so a non-admin's own
+    // submission always 403'd despite the UI inviting them to submit one.
+    const { data: prof } = await sb.from('profiles').select('is_admin').eq('id', authed.userId).maybeSingle()
+    const isAdmin = !!prof?.is_admin
     const { user_id, user_name, description, amount } = req.body
-    if (!user_id || !description?.trim() || !amount) return res.status(400).json({ error: 'user_id, description and amount required' })
+    if (!isAdmin && user_id && user_id !== authed.userId) {
+      return res.status(403).json({ error: 'Can only add work for yourself' })
+    }
+    const targetUserId = isAdmin ? user_id : authed.userId
+    if (!targetUserId || !description?.trim() || !amount) return res.status(400).json({ error: 'user_id, description and amount required' })
     const { data, error } = await sb.from('other_work').insert({
-      user_id, user_name: user_name || null, description: description.trim(),
+      user_id: targetUserId, user_name: user_name || null, description: description.trim(),
       amount: Number(amount), status: 'pending', created_by: authed.userId,
     }).select().single()
     if (error) return res.status(500).json({ error: error.message })

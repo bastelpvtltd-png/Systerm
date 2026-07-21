@@ -11,9 +11,11 @@ export interface EmailAttachment { filename: string; url: string }
 // recipient (saved_recipients) and the last subject used (email_settings)
 // so neither has to be retyped next time. "To" accepts more than one address
 // (comma-separated), plus CC/BCC.
-export default function EmailPdfModal({ attachments, defaultSubject, onClose, onSent }: {
+export default function EmailPdfModal({ attachments, defaultSubject, documentReason, documentReasonNote, onClose, onSent }: {
   attachments: EmailAttachment[]
   defaultSubject?: string
+  documentReason?: string | null
+  documentReasonNote?: string | null
   onClose: () => void
   onSent?: () => void
 }) {
@@ -31,21 +33,21 @@ export default function EmailPdfModal({ attachments, defaultSubject, onClose, on
   useEffect(() => {
     authHeader().then(h => fetch('/api/saved-recipients', { headers: h })).then(r => r.json()).then(d => setEmails(d.emails || [])).catch(() => {})
     if (!defaultSubject) {
-      // Auto-prefix the subject with the sender's own name — still fully
-      // editable/appendable afterwards, this is just the starting point.
-      Promise.all([
-        authHeader().then(h => fetch('/api/email-settings', { headers: h })).then(r => r.json()).catch(() => ({})),
-        supabase.auth.getUser().then(async ({ data: { user } }) => {
-          if (!user) return ''
-          const { data } = await supabase.from('profiles').select('username, full_name').eq('id', user.id).single()
-          return data?.full_name || data?.username || ''
-        }).catch(() => ''),
-      ]).then(([settings, name]) => {
-        const last = settings?.lastSubject || ''
-        setSubject(name ? (last.startsWith(name) ? last : `${name} - ${last}`) : last)
+      // Subject is "<sender name> - <document reason>" when the caller knows
+      // why this document was sent (e.g. "CUSDEC Passed", picked from the
+      // reason typed at upload time) — that's a far more useful default than
+      // whatever subject line happened to be typed last time. Falls back to
+      // just the sender's name when no reason is available for this send.
+      supabase.auth.getUser().then(async ({ data: { user } }) => {
+        if (!user) return ''
+        const { data } = await supabase.from('profiles').select('username, full_name').eq('id', user.id).single()
+        return data?.full_name || data?.username || ''
+      }).catch(() => '').then(name => {
+        const reasonText = documentReason ? `${documentReason}${documentReasonNote ? ` (${documentReasonNote})` : ''}` : ''
+        setSubject(reasonText ? (name ? `${name} - ${reasonText}` : reasonText) : name)
       })
     }
-  }, [defaultSubject])
+  }, [defaultSubject, documentReason, documentReasonNote])
 
   async function send() {
     const toAddr = to.trim()
