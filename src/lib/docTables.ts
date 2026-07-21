@@ -244,8 +244,13 @@ export async function matchAndMergeShipment(cusdecRow: any, actingUserId?: strin
     }
   }
 
-  // No matching shipment — leave reference blank; it only gets set when a
-  // shipment entry existed before the CUSDEC upload (see mergeShipmentIntoCusdec).
+  // No matching shipment — every CUSDEC still gets its own reference number
+  // (same generator Shipment Entry itself uses), not just the ones that
+  // happen to merge with a pre-existing Shipment Entry.
+  if (!cusdecRow.reference) {
+    const reference = generateReference(cusdecRow.exporter)
+    await supabaseAdmin.from('cusdec').update({ reference }).eq('id', cusdecRow.id)
+  }
   return { matched: false }
 }
 

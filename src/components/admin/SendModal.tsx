@@ -3,7 +3,7 @@ import { X, Loader, Save, Mail, Bell, AlertTriangle, Link2 } from 'lucide-react'
 import { authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from './EmailPdfModal'
 
-export interface SendResultFile { fileName: string; driveLink: string; docType?: string }
+export interface SendResultFile { fileName: string; driveLink: string; docType?: string; cusdecId?: string }
 
 // The Upload Docs "Send" workflow: Save is ticked by default (matches the
 // old one-click Save behavior), Mail/Notify are opt-in. Nothing touches
@@ -130,7 +130,12 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
             file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: effectiveSave, notify: effectiveNotify, uploaded_by_name: uploaderName,
             reason: reason || undefined, reason_note: reason === 'Other' ? reasonNote.trim() : undefined,
             doc_type: f.docType || docType || undefined,
-            cusdec_id: cusdecId || undefined, cusdec_number: cusdecNumber || undefined,
+            // f.cusdecId (the row this specific file's Save just created/matched)
+            // is only known per-file for a fresh upload — the cusdecId PROP is
+            // only ever populated by callers already working an existing saved
+            // CUSDEC (e.g. Database mode's Party's Copy), not Upload Docs' own
+            // Save flow, so prefer the per-file id when both are present.
+            cusdec_id: f.cusdecId || cusdecId || undefined, cusdec_number: cusdecNumber || undefined,
           }),
         })
       ))
@@ -149,7 +154,11 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
   }
 
   if (emailAttachments) {
-    return <EmailPdfModal attachments={emailAttachments} onClose={() => { setEmailAttachments(null); onDone() }}/>
+    return (
+      <EmailPdfModal attachments={emailAttachments}
+        documentReason={reason || undefined} documentReasonNote={reason === 'Other' ? reasonNote : undefined}
+        onClose={() => { setEmailAttachments(null); onDone() }}/>
+    )
   }
 
   return (

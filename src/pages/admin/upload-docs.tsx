@@ -499,21 +499,25 @@ function DocumentsUploadContent() {
       const sd = await sr.json()
       if (!sr.ok) throw new Error(sd.error || 'Save failed')
 
+      let cusdecId: string | undefined
       if (tablePromise) {
         const tr = await tablePromise
         const td = await tr.json()
         if (!tr.ok) setError(td.error || 'Table save failed')
-        else if (docType === 'cusdec' && td.cusdecId && td.shipmentMatch && !td.shipmentMatch.matched) {
-          // No auto-match — offer manual matching against open shipment entries.
-          fetch('/api/temp-shipments', { headers: await authHeader() })
-            .then(r => r.json())
-            .then(d => { if (d.shipments?.length) setShipmentPickModal({ cusdecId: td.cusdecId, shipments: d.shipments }) })
-            .catch(() => {})
+        else if (docType === 'cusdec' && td.cusdecId) {
+          cusdecId = td.cusdecId
+          if (td.shipmentMatch && !td.shipmentMatch.matched) {
+            // No auto-match — offer manual matching against open shipment entries.
+            fetch('/api/temp-shipments', { headers: await authHeader() })
+              .then(r => r.json())
+              .then(d => { if (d.shipments?.length) setShipmentPickModal({ cusdecId: td.cusdecId, shipments: d.shipments }) })
+              .catch(() => {})
+          }
         }
       }
 
       updateItem(item.id, { status: 'saved', driveLink: link, savedReference: referenceOverride || undefined })
-      return { ok: true, driveLink: link }
+      return { ok: true, driveLink: link, cusdecId }
     } catch (e: any) {
       updateItem(item.id, { status: 'error', error: e.message })
       setError(e.message)
@@ -978,7 +982,7 @@ function DocumentsUploadContent() {
     const results: SendResultFile[] = []
     for (const it of toSave) {
       const r = await saveOne(it, referenceOverride)
-      if (r?.ok && r.driveLink) results.push({ fileName: it.fileName, driveLink: r.driveLink, docType: it.detectedType })
+      if (r?.ok && r.driveLink) results.push({ fileName: it.fileName, driveLink: r.driveLink, docType: it.detectedType, cusdecId: r.cusdecId })
     }
     setSavingAll(false)
     return { ok: true, results }
@@ -1859,7 +1863,7 @@ function DocumentsUploadContent() {
           docType={sendModalItem.detectedType}
           onSave={async (referenceOverride?: string) => {
             const r = await saveOne(sendModalItem, referenceOverride)
-            return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink, docType: sendModalItem.detectedType }] : [] }
+            return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink, docType: sendModalItem.detectedType, cusdecId: r.cusdecId }] : [] }
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}
           onClose={() => setSendModalItem(null)}

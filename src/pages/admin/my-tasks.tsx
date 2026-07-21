@@ -617,9 +617,13 @@ function OtherWorkPanel({ userId, isAdmin }: { userId: string | null; isAdmin: b
   const [allItems, setAllItems] = useState<OtherWorkItem[]>([])
   const [users, setUsers]       = useState<Profile[]>([])
   const [error, setError]       = useState('')
+  const [types, setTypes]       = useState<{ id: string; label: string }[]>([])
 
   // form
   const [owTargetUser, setOwTargetUser] = useState('')
+  const [owType, setOwType]             = useState('')
+  const [addingType, setAddingType]     = useState(false)
+  const [newTypeLabel, setNewTypeLabel] = useState('')
   const [owDesc, setOwDesc]             = useState('')
   const [owItem, setOwItem]             = useState('')
   const [owCost, setOwCost]             = useState('')
@@ -642,7 +646,34 @@ function OtherWorkPanel({ userId, isAdmin }: { userId: string | null; isAdmin: b
     }
   }
 
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  async function loadTypes() {
+    const r = await fetch('/api/other-work-types', { headers: await authHeader() })
+    const d = await r.json()
+    setTypes(d.types || [])
+  }
+
+  async function addType() {
+    if (!newTypeLabel.trim()) return
+    const r = await fetch('/api/other-work-types', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+      body: JSON.stringify({ label: newTypeLabel.trim() }),
+    })
+    const d = await r.json()
+    if (r.ok) {
+      setTypes(prev => [...prev, d.type])
+      setOwType(d.type.label)
+      setNewTypeLabel(''); setAddingType(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+    loadTypes()
+    // Live — so Approve/Reject done elsewhere (or by another admin) shows up
+    // for the submitting user without a manual refresh.
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function addWork() {
     const computedAmount = Number(owAmount) || (Number(owItem) * Number(owCost))
@@ -651,16 +682,17 @@ function OtherWorkPanel({ userId, isAdmin }: { userId: string | null; isAdmin: b
     setOwSaving(true); setError('')
     try {
       const targetUser = isAdmin ? users.find(u => u.id === targetId) : null
+      const fullDesc = owType ? `${owType} ${owDesc.trim()}` : owDesc.trim()
       const descWithCalc = (owItem && owCost)
-        ? `${owDesc.trim()} (${owItem} × Rs.${fmtLKR(Number(owCost))})`
-        : owDesc.trim()
+        ? `${fullDesc} (${owItem} × Rs.${fmtLKR(Number(owCost))})`
+        : fullDesc
       const res = await fetch('/api/other-work', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ user_id: targetId, user_name: targetUser ? (targetUser.full_name || targetUser.username) : undefined, description: descWithCalc, amount: computedAmount }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setOwTargetUser(''); setOwDesc(''); setOwItem(''); setOwCost(''); setOwAmount('')
+      setOwTargetUser(''); setOwType(''); setOwDesc(''); setOwItem(''); setOwCost(''); setOwAmount('')
       await load()
     } catch (e: any) { setError(e.message) }
     finally { setOwSaving(false) }
@@ -711,7 +743,23 @@ function OtherWorkPanel({ userId, isAdmin }: { userId: string | null; isAdmin: b
               {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
             </select>
           )}
-          <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder="Description" className="input text-sm"/>
+          {addingType ? (
+            <div className="flex items-center gap-1.5">
+              <input value={newTypeLabel} onChange={e => setNewTypeLabel(e.target.value)} placeholder="New type name" className="input text-sm flex-1"/>
+              <button onClick={addType} className="btn-primary text-sm px-3">Save</button>
+              <button onClick={() => { setAddingType(false); setNewTypeLabel('') }} className="text-gray-400 hover:text-gray-600"><X size={16}/></button>
+            </div>
+          ) : (
+            <select value={owType} onChange={e => {
+              if (e.target.value === '__new__') { setAddingType(true); return }
+              setOwType(e.target.value)
+            }} className="input text-sm">
+              <option value="">— Type (optional) —</option>
+              {types.map(t => <option key={t.id} value={t.label}>{t.label}</option>)}
+              {isAdmin && <option value="__new__">+ Add new type</option>}
+            </select>
+          )}
+          <input value={owDesc} onChange={e => setOwDesc(e.target.value)} placeholder={owType ? `${owType} description (e.g. E-40525)` : 'Description'} className="input text-sm"/>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <input type="number" value={owItem} onChange={e => { setOwItem(e.target.value); setOwAmount(String(Number(e.target.value) * Number(owCost))) }}
