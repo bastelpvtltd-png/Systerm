@@ -66,6 +66,14 @@ alter table balance_reports add column if not exists status text default 'receiv
 -- resets to 0 each period but received kept summing every payment ever).
 alter table salary_payments add column if not exists reported boolean default false;
 
+-- Superseded the synthetic-carry-forward-payment approach above with a real
+-- opening balance on the report itself — each report's opening_balance is
+-- simply the previous report's closing `amount`, and period_earned/
+-- period_received make the statement's own math fully transparent.
+alter table balance_reports add column if not exists opening_balance numeric default 0;
+alter table balance_reports add column if not exists period_earned numeric default 0;
+alter table balance_reports add column if not exists period_received numeric default 0;
+
 -- Owner/Director — a new account tier alongside admin/staff/shipper: full
 -- navigation/view access like admin (see AdminLayout's has()), but every
 -- individual admin-only WRITE/DELETE server check (requireAdmin) is

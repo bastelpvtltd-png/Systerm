@@ -52,6 +52,12 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   const [rates,       setRates]       = useState<WorkRates>({ cdn_rate: 0, cap_rate: 0 })
   const [myOtherWork,  setMyOtherWork]  = useState<OtherWorkItem[]>([])
   const [allOtherWork, setAllOtherWork] = useState<OtherWorkItem[]>([])
+  // Opening balance = the closing `amount` of this user's most recent
+  // generated report (0 if they've never had one) — the running balance
+  // below is opening + unreported received - unreported earned, so it
+  // stays continuous across reports instead of resetting to a bare 0.
+  const [myOpeningBalance, setMyOpeningBalance] = useState(0)
+  const [openingBalanceByUser, setOpeningBalanceByUser] = useState<Record<string, number>>({})
   // ── ui state ──────────────────────────────────────────────────────────────
   const [showCost,     setShowCost]     = useState(false)
   const [showReceived, setShowReceived] = useState(false)
@@ -79,28 +85,38 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   async function load() {
     try {
       const h = await authHeader()
-      const [sp, wc, wr, ow] = await Promise.all([
+      const [sp, wc, wr, ow, br] = await Promise.all([
         fetch('/api/salary-payments', { headers: h }).then(r => r.json()),
         fetch('/api/work-counts', { headers: h }).then(r => r.json()),
         fetch('/api/work-rates', { headers: h }).then(r => r.json()),
         fetch('/api/other-work', { headers: h }).then(r => r.json()),
+        fetch('/api/balance-reports', { headers: h }).then(r => r.json()),
       ])
       if (sp.payments) setPayments(sp.payments)
       if (wc.rows) setMyWorkRows(wc.rows)
       if (wr.cdn_rate !== undefined) setRates(wr)
       if (ow.items) setMyOtherWork(ow.items)
+      if (br.reports?.length) setMyOpeningBalance(Number(br.reports[0].amount) || 0)
     } catch {}
   }
 
   async function loadAllWork() {
     try {
       const h = await authHeader()
-      const [wc, ow] = await Promise.all([
+      const [wc, ow, br] = await Promise.all([
         fetch('/api/work-counts?all=1', { headers: h }).then(r => r.json()),
         fetch('/api/other-work?all=1', { headers: h }).then(r => r.json()),
+        fetch('/api/balance-reports?all=1', { headers: h }).then(r => r.json()),
       ])
       if (wc.rows) setAllWorkRows(wc.rows || [])
       if (ow.items) setAllOtherWork(ow.items || [])
+      if (br.reports) {
+        // Reports come back newest-first — first one seen per user_id is
+        // that user's most recent, i.e. their current opening balance.
+        const map: Record<string, number> = {}
+        for (const r of br.reports) if (!(r.user_id in map)) map[r.user_id] = Number(r.amount) || 0
+        setOpeningBalanceByUser(map)
+      }
     } catch {}
   }
 
@@ -257,7 +273,9 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   // ones do. myReceivedPayments (all confirmed, ever) stays the full history
   // list below; only this filtered sum feeds myBalance.
   const myReceived = myReceivedPayments.filter(p => !p.reported).reduce((s, p) => s + Number(p.amount), 0)
-  const myBalance = myReceived - myEarned
+  // Continuous across reports: whatever the last report closed at, plus
+  // this period's received minus this period's earned so far.
+  const myBalance = myOpeningBalance + myReceived - myEarned
   const myPendingOtherWork = myOtherWork.filter(x => x.status === 'pending')
 
   // Admin: per-user work earned from allWorkRows — same unreported-only rule.
@@ -556,7 +574,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                   const totalCost = countCost + owData.approved
                   const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
                   const received = userConfirmedPayments.filter(p => !p.reported).reduce((s, p) => s + Number(p.amount), 0)
-                  const bal = received - totalCost
+                  const bal = (openingBalanceByUser[u.id] || 0) + received - totalCost
                   const isExpanded = expandedUser === u.id
                   return (
                     <div key={u.id} className="border border-gray-200 rounded-xl overflow-hidden">
@@ -675,15 +693,25 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                   <span className="text-gray-600">{p.to_display_name} — Rs. {fmtLKR(Number(p.amount))}</span>
                   <div className="flex items-center gap-2">
                     {statusBadge(p.status)}
-                    {/* Only a declined payment can be returned — once the
-                        recipient has confirmed it landed (or it's still
-                        pending their response), the sender can't unilaterally
-                        erase that record. */}
+                    {/* Only a declined payment can be returned by the sender
+                        themselves — once the recipient has confirmed it
+                        landed (or it's still pending their response), the
+                        sender can't unilaterally erase that record. */}
                     {p.status === 'declined' && (
                       <button onClick={() => { if (confirm('Return this payment?')) deletePayment(p.id, true) }}
                         disabled={returningId === p.id}
                         className="flex items-center gap-0.5 text-[10px] text-gray-400 hover:text-amber-600 disabled:opacity-40">
                         {returningId === p.id ? <Loader size={10} className="animate-spin"/> : <Undo2 size={10}/>}Return
+                      </button>
+                    )}
+                    {/* Admin can delete a payment history entry outright,
+                        any status — the server's own DELETE handler already
+                        allows this for admin regardless of who sent it. */}
+                    {isAdmin && (
+                      <button onClick={() => { if (confirm('Permanently delete this payment record?')) deletePayment(p.id) }}
+                        disabled={deletingId === p.id}
+                        className="text-gray-300 hover:text-red-500 disabled:opacity-40">
+                        {deletingId === p.id ? <Loader size={10} className="animate-spin"/> : <Trash2 size={10}/>}
                       </button>
                     )}
                   </div>

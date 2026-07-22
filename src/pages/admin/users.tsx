@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import AdminLayout, { TAB_ITEMS, SECTION_ITEMS } from '@/components/admin/AdminLayout'
+import AdminLayout, { TAB_ITEMS, SECTION_ITEMS, usePermission } from '@/components/admin/AdminLayout'
 import { supabase, authHeader } from '@/lib/supabase'
-import { Users, Plus, Edit2, X, Save, Trash2, Loader } from 'lucide-react'
+import { Users, Plus, Edit2, X, Save, Trash2, Loader, BarChart2 } from 'lucide-react'
 
 interface Profile {
   id: string
@@ -35,6 +35,7 @@ const emptyForm = {
 }
 
 export default function UsersPage() {
+  const { isAdmin } = usePermission()
   const [users, setUsers] = useState<Profile[]>([])
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string|null>(null)
@@ -129,6 +130,20 @@ export default function UsersPage() {
     }
   }
 
+  const [workUser, setWorkUser] = useState<Profile | null>(null)
+  const [workReports, setWorkReports] = useState<any[]>([])
+  const [workLoading, setWorkLoading] = useState(false)
+  async function openUserWork(u: Profile) {
+    setWorkUser(u); setWorkLoading(true); setWorkReports([])
+    try {
+      const res = await fetch(`/api/balance-reports?user_id=${u.id}`, { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setWorkReports(d.reports || [])
+    } finally {
+      setWorkLoading(false)
+    }
+  }
+
   const [deletingId, setDeletingId] = useState<string | null>(null)
   async function handleDelete(u: Profile) {
     if (!confirm(`Permanently delete "${u.full_name || u.username}"? This removes their login and all their work counts, payments, and approval history. Their uploaded documents stay in the system.`)) return
@@ -196,10 +211,16 @@ export default function UsersPage() {
                       setEditId(u.id); setSaveError(''); setModal(true)
                     }}
                       className="p-1.5 rounded hover:bg-blue-50 text-blue-600"><Edit2 size={14}/></button>
-                    <button onClick={() => handleDelete(u)} disabled={deletingId === u.id}
-                      className="p-1.5 rounded hover:bg-red-50 text-red-500 disabled:opacity-50">
-                      {deletingId === u.id ? <Loader size={14} className="animate-spin"/> : <Trash2 size={14}/>}
-                    </button>
+                    {!u.is_shipper && (
+                      <button onClick={() => openUserWork(u)} title="User Work — full report history"
+                        className="p-1.5 rounded hover:bg-purple-50 text-purple-600"><BarChart2 size={14}/></button>
+                    )}
+                    {isAdmin && (
+                      <button onClick={() => handleDelete(u)} disabled={deletingId === u.id}
+                        className="p-1.5 rounded hover:bg-red-50 text-red-500 disabled:opacity-50">
+                        {deletingId === u.id ? <Loader size={14} className="animate-spin"/> : <Trash2 size={14}/>}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -325,6 +346,38 @@ export default function UsersPage() {
               <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-50">
                 <Save size={16}/>{saving ? 'Saving...' : 'Save'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {workUser && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setWorkUser(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0">
+              <div>
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2"><BarChart2 size={16} className="text-purple-600"/>User Work — {workUser.full_name || workUser.username}</h3>
+                <p className="text-xs text-gray-400 mt-0.5">Full report-wise achievement history</p>
+              </div>
+              <button onClick={() => setWorkUser(null)} className="text-gray-400 hover:text-gray-600"><X size={18}/></button>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-2">
+              {workLoading ? (
+                <div className="flex justify-center py-10"><Loader size={18} className="animate-spin text-gray-300"/></div>
+              ) : workReports.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-10">No reports generated for this person yet.</p>
+              ) : workReports.map(r => (
+                <div key={r.id} className="border border-gray-100 rounded-lg p-3 text-sm">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-medium text-gray-800">{r.range_label}</span>
+                    <a href={r.drive_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">View PDF</a>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Brought forward Rs.{Number(r.opening_balance || 0).toFixed(2)} · Earned Rs.{Number(r.period_earned || 0).toFixed(2)} ·
+                    Received Rs.{Number(r.period_received || 0).toFixed(2)} · Closing <span className="font-semibold text-gray-700">Rs.{Number(r.amount).toFixed(2)}</span>
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
         </div>

@@ -9,16 +9,18 @@ const sb = createClient(
 
 // Lists generated Monthly/Balance Reports (balance_reports, see
 // generate-balance-report.ts) — every user sees only their own by default;
-// admin can pass ?all=1 to see everyone's, same pattern as work-counts.ts.
+// admin can pass ?all=1 to see everyone's, or ?user_id=X (the Users tab's
+// "User Work" view) to see one specific person's full report history.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     const authed = await requireAuth(req)
     if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
 
     let q = sb.from('balance_reports').select('*').order('generated_at', { ascending: false })
-    if (req.query.all) {
+    if (req.query.all || req.query.user_id) {
       const { data: prof } = await sb.from('profiles').select('is_admin').eq('id', authed.userId).maybeSingle()
       if (!prof?.is_admin) return res.status(403).json({ error: 'Admin only' })
+      if (req.query.user_id) q = q.eq('user_id', req.query.user_id as string)
     } else {
       q = q.eq('user_id', authed.userId)
     }
