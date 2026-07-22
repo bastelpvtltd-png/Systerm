@@ -30,20 +30,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const mine = (rows || []).filter(c => (c.exporter || '').split('\n')[0].trim().toLowerCase() === shipperName)
     const completed = mine.filter(c => c.shipment_complete && c.payment_complete)
     const inProgress = mine.filter(c => !(c.shipment_complete && c.payment_complete))
-    return res.json({ completed, inProgress })
+
+    // Shipment Entries this account itself submitted — deliberately
+    // filtered by created_by (this login), not by shipper name, so one
+    // shipper account never sees another's entries even if two accounts
+    // somehow share a shipper_name.
+    const { data: myEntries } = await sb.from('temporary_shipments')
+      .select('*').eq('created_by', authed.userId).order('created_at', { ascending: false })
+
+    return res.json({ completed, inProgress, myEntries: myEntries || [] })
   }
 
   if (req.method === 'POST') {
-    // Create a Shipment Entry — same table/shape temp-shipments.ts's own
-    // POST uses, but the shipper field is always forced to this account's
-    // own shipper_name (never trusts whatever the client sent).
-    const { invoice_number, packing_number } = req.body
+    // Create a Shipment Entry — same table/fields/validation temp-shipments.ts's
+    // own POST uses (the real Shipment Entry form's shape, incl. real_cap /
+    // divide_cap sibling validation and the three Drive doc URLs, uploaded
+    // client-side via the same /api/upload-to-drive every staff account
+    // uses), but shipper is always forced to this account's own shipper_name
+    // (never trusts whatever the client sent) and created_by is this login,
+    // so "my entries" above only ever shows what this account actually submitted.
+    const {
+      invoice_number, packing_number, consignee, real_cap, cap: divide_cap,
+      invoice_drive_url, packing_drive_url, license_drive_url,
+    } = req.body
     if (!invoice_number) return res.status(400).json({ error: 'invoice_number required' })
+
+    if (invoice_number) {
+      const { data: siblings } = await sb.from('temporary_shipments')
+        .select('real_cap, cap').eq('invoice_number', invoice_number)
+      if (siblings && siblings.length > 0) {
+        const existingRealCap = siblings.find(s => s.real_cap)?.real_cap
+        if (existingRealCap && real_cap && existingRealCap !== real_cap) {
+          return res.status(400).json({
+            error: `Real CAP must match across all entries for invoice ${invoice_number} (existing: ${existingRealCap})`
+          })
+        }
+        const effectiveRealCap = parseInt(real_cap || existingRealCap || '0', 10)
+        if (divide_cap && effectiveRealCap > 0) {
+          const existingSum = siblings.reduce((sum, s) => sum + (parseInt(s.cap || '0', 10)), 0)
+          const newTotal = existingSum + parseInt(divide_cap, 10)
+          if (newTotal > effectiveRealCap) {
+            return res.status(400).json({
+              error: `Divide CAPs would exceed Real CAP: ${existingSum} existing + ${divide_cap} new = ${newTotal} > ${effectiveRealCap}`
+            })
+          }
+        }
+      }
+    }
+
     const code = prof.shipper_name.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4) || 'GEN'
     const now = new Date()
     const reference = `${code}-${now.getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`
     const { data, error } = await sb.from('temporary_shipments').insert({
       reference, shipper: prof.shipper_name, invoice_number, packing_number: packing_number || null,
+      consignee: consignee || null, real_cap: real_cap || null, cap: divide_cap || null,
+      invoice_drive_url: invoice_drive_url || null, packing_drive_url: packing_drive_url || null,
+      license_drive_url: license_drive_url || null,
       created_by: authed.userId,
     }).select().single()
     if (error) return res.status(500).json({ error: error.message })

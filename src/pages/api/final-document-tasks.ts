@@ -67,7 +67,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (link?.drive_url === task.drive_url) {
           await sb.from('cusdec_document_links').delete().eq('cusdec_id', task.cusdec_id).eq('document_type', task.document_type)
         }
-        await sb.from('final_document_tasks').update({ status: 'rejected', resolved_at: new Date().toISOString() }).eq('id', task_id)
+        // Reject reopens it rather than terminating it — back to 'pending'
+        // (picked_by cleared) so it's pickable by anyone again instead of
+        // permanently stuck rejected with no way to redo the document.
+        await sb.from('final_document_tasks').update({
+          status: 'pending', picked_by: null, picked_by_name: null, picked_at: null,
+          drive_url: null, file_name: null,
+        }).eq('id', task_id)
         await sb.from('pick_history_log').insert({ document_id: task.document_id, user_id: authed.userId, user_name: name, action: 'reject' })
         return res.json({ ok: true })
       }

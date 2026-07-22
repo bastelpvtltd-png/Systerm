@@ -297,6 +297,10 @@ function DatabaseContent() {
   const [columns, setColumns] = useState<string[]>([])
   const [sortCol, setSortCol] = useState('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  // cusdec has no boat_note_passed column — it's a computed status (every
+  // one of that CUSDEC's own CDN rows has boat_note_passed=true), same rule
+  // shipment-overview.tsx's cusdecBoatNotePassed uses. Keyed by "code|number".
+  const [cusdecBoatNote, setCusdecBoatNote] = useState<Record<string, boolean>>({})
 
   // Tracks whether there are any unsaved cell edits right now, without
   // making the polling effect below depend on (and re-create its interval
@@ -331,6 +335,29 @@ function DatabaseContent() {
     return () => clearInterval(t)
   }, [load])
 
+  // Computed Boat Note Passed status per CUSDEC (see cusdecBoatNote above) —
+  // only needed while looking at the cusdec table itself.
+  useEffect(() => {
+    if (table !== 'cusdec' || !rows.length) return
+    let cancelled = false
+    authHeader().then(h => fetch('/api/list-records?table=cdn&limit=2000', { headers: h }))
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled) return
+        const cdnRows: any[] = d.records || []
+        const map: Record<string, boolean> = {}
+        for (const c of rows) {
+          const own = cdnRows.filter(d2 => d2.code === c.code && d2.cusdec_number === c.number)
+          const cap = parseInt(c.cap || '', 10)
+          const capKnown = !!cap && !Number.isNaN(cap)
+          const capComplete = !capKnown || own.length >= cap
+          map[`${c.code}|${c.number}`] = capComplete && own.length > 0 && own.every(d2 => d2.boat_note_passed)
+        }
+        setCusdecBoatNote(map)
+      }).catch(() => {})
+    return () => { cancelled = true }
+  }, [table, rows])
+
   // Jump to the first table this account is actually allowed to see
   useEffect(() => {
     if (visibleTables.length && !visibleTables.some(t => t.key === table)) setTable(visibleTables[0].key)
@@ -346,16 +373,23 @@ function DatabaseContent() {
   // display via the existing green/blue left-border indicator, no separate
   // color storage or lookup needed for them.
   async function setRowColor(rowId: string, code: string, number: string, color: string) {
+    // cusdec has NO boat_note_passed column of its own — "Blue" is a status
+    // computed from every one of a CUSDEC's CDN rows having boat_note_passed
+    // = true (see cusdecBoatNotePassed in shipment-overview.tsx), never a
+    // flag stored on the CUSDEC row directly. Writing it there 500'd
+    // ("Could not find the 'boat_note_passed' column of 'cusdec'"). Only
+    // export_release_passed genuinely lives on cusdec; boat_note_passed
+    // only ever gets written to the CDN rows, cascaded below.
     const exportReleasePassed = color === 'green'
     const boatNotePassed = color === 'green' || color === 'blue'
     try {
       const res = await fetch('/api/admin-data', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ table: 'cusdec', id: rowId, updates: { export_release_passed: exportReleasePassed, boat_note_passed: boatNotePassed } }),
+        body: JSON.stringify({ table: 'cusdec', id: rowId, updates: { export_release_passed: exportReleasePassed } }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Save failed')
-      setRows(prev => prev.map(r => r.id === rowId ? { ...r, export_release_passed: exportReleasePassed, boat_note_passed: boatNotePassed } : r))
+      setRows(prev => prev.map(r => r.id === rowId ? { ...r, export_release_passed: exportReleasePassed } : r))
 
       const h = await authHeader()
       const cdnRes = await fetch(`/api/list-records?table=cdn&filter=cusdec_number&value=${encodeURIComponent(number)}`, { headers: h })
@@ -365,6 +399,7 @@ function DatabaseContent() {
         method: 'PATCH', headers: { 'Content-Type': 'application/json', ...h },
         body: JSON.stringify({ table: 'cdn', id: c.id, updates: { export_release_passed: exportReleasePassed, boat_note_passed: boatNotePassed } }),
       })))
+      setCusdecBoatNote(prev => ({ ...prev, [`${code}|${number}`]: boatNotePassed }))
     } catch (e: any) {
       alert('Color update failed: ' + e.message)
     }
@@ -516,8 +551,9 @@ function DatabaseContent() {
                 {sortedRows.map(row => {
                   const draft = draftFor(row)
                   const dirty = !!drafts[row.id]
-                  const statusColor = row.export_release_passed ? 'border-l-4 border-l-green-500' : row.boat_note_passed ? 'border-l-4 border-l-blue-500' : ''
-                  const colorBg = row.export_release_passed ? ROW_COLOR_BG.green : row.boat_note_passed ? ROW_COLOR_BG.blue : ''
+                  const boatNotePassed = table === 'cusdec' ? (cusdecBoatNote[`${row.code}|${row.number}`] || false) : !!row.boat_note_passed
+                  const statusColor = row.export_release_passed ? 'border-l-4 border-l-green-500' : boatNotePassed ? 'border-l-4 border-l-blue-500' : ''
+                  const colorBg = row.export_release_passed ? ROW_COLOR_BG.green : boatNotePassed ? ROW_COLOR_BG.blue : ''
                   return (
                     <tr key={row.id} className={`border-b border-gray-50 ${dirty ? 'bg-amber-50' : colorBg || 'hover:bg-gray-50'} ${statusColor}`}>
                       {visibleColumns.map(col => {
@@ -559,7 +595,7 @@ function DatabaseContent() {
                       <td className="px-2 py-1.5 whitespace-nowrap">
                         <div className="flex items-center gap-1">
                           {table === 'cusdec' && (
-                            <select value={row.export_release_passed ? 'green' : row.boat_note_passed ? 'blue' : ''}
+                            <select value={row.export_release_passed ? 'green' : boatNotePassed ? 'blue' : ''}
                               onChange={e => setRowColor(row.id, row.code, row.number, e.target.value)}
                               title="Green = Export Release passed, Blue = Boat Note passed — also applied to this CUSDEC's CDN rows"
                               className="text-[10px] border border-gray-200 rounded px-1 py-1 bg-white text-gray-600">

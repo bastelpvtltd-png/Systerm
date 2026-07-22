@@ -61,29 +61,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
 
-      // Upload-time work count: insert immediately when doc is saved so the
-      // count reflects uploads, not just mail/downloads (log-document-action
-      // handles the mail/download side separately for the existing salary flow).
-      // CUSDEC Passed is the one exception — its upload count AND billing
-      // (CAP) count only ever credit once an admin-authorized approval
-      // happens (see doc-approvals.ts), never automatically on upload.
+      // Upload-time count is gated by admin-authorized approval now, for
+      // both CDN (Container Moved) and CUSDEC (CUSDEC Passed) — a doc never
+      // auto-credits just for being uploaded. See doc-approvals.ts; the
+      // second (billing/CAP) approval stage happens separately once the
+      // picked task is actually completed (mail/download), in
+      // log-document-action.ts.
       try {
-        if (doc_type === 'cdn' && reason === 'Container Moved') {
-          await supabaseAdmin.from('work_counts').insert({
-            user_id: authed.userId, user_name: uploadedByName,
-            document_id: data.id, file_name,
-            reason, action: 'upload',
-            cdn_inc: 1, cusdec_inc: 0, cap_inc: 0,
-          })
-        } else if (doc_type === 'cusdec' && reason === 'CUSDEC Passed') {
+        if ((doc_type === 'cdn' && reason === 'Container Moved') || (doc_type === 'cusdec' && reason === 'CUSDEC Passed')) {
           await supabaseAdmin.from('doc_approvals').insert({
             document_id: data.id, cusdec_id: cusdec_id || null, doc_type, reason,
-            uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
+            uploaded_by: authed.userId, uploaded_by_name: uploadedByName, stage: 'upload',
           })
         }
-      } catch { /* non-fatal — work_counts/doc_approvals is supplemental */ }
+      } catch { /* non-fatal — doc_approvals is supplemental */ }
 
-      if (notify) {
+      // Final Document already has its own dedicated pending queue
+      // (final_document_tasks, above) — also dropping it into the generic
+      // Active Log (dashboard_notifications) made it pickable two different
+      // ways at once, so a document could show as "pending" in the Final
+      // Document panel after it had already been picked via Active Log (or
+      // vice versa). Final Document sends skip this generic path entirely.
+      if (notify && reason !== 'Final Document') {
         const nowIso = new Date().toISOString()
         await supabaseAdmin.from('dashboard_notifications').insert({
           document_id: data.id, uploaded_by: authed.userId, uploaded_by_name: uploadedByName,

@@ -110,6 +110,7 @@ interface UploadItem {
   boxes: Record<string, PctBox>
   variant: 'native' | 'scanned'
   savedReference?: string
+  nameManuallySet?: boolean
 }
 
 interface DbRecord {
@@ -398,20 +399,26 @@ function DocumentsUploadContent() {
     setRenameValue(item.fileName)
   }
   function commitRename(id: string) {
-    updateItem(id, { fileName: renameValue.trim() || 'document.pdf' })
+    updateItem(id, { fileName: renameValue.trim() || 'document.pdf', nameManuallySet: true })
     setRenamingId(null)
   }
 
+  // Correcting an extracted field (e.g. a misread container/CUSDEC number)
+  // used to leave the auto-suggested file name stuck on the original, wrong
+  // value — the naming convention only ever ran once, right after
+  // extraction. Now it re-derives the name from the corrected fields every
+  // time, as long as the user hasn't manually typed their own name in via
+  // the rename box (commitRename sets nameManuallySet so we never clobber that).
   function updateItemField(id: string, idx: number, val: string) {
     setItems(prev => prev.map(it => {
       if (it.id !== id) return it
-      return {
-        ...it, fields: it.fields.map((f, i) => {
-          if (i !== idx) return f
-          const normalized = normalizeFieldValue(it.detectedType, f.key, val)
-          return { ...f, value: normalized, rawValue: val }
-        }),
-      }
+      const fields = it.fields.map((f, i) => {
+        if (i !== idx) return f
+        const normalized = normalizeFieldValue(it.detectedType, f.key, val)
+        return { ...f, value: normalized, rawValue: val }
+      })
+      const fileName = it.nameManuallySet ? it.fileName : (suggestFileName(it.detectedType, fields) || it.fileName)
+      return { ...it, fields, fileName }
     }))
   }
 
@@ -1467,7 +1474,15 @@ function DocumentsUploadContent() {
                       return
                     }
                   }
-                  updateItem(selectedItem.id, { detectedType: newType })
+                  // Correcting a wrong auto-detected type (e.g. it guessed
+                  // CUSDEC but this is actually a CDN) previously left the
+                  // file name built for the old type — re-derive it from
+                  // the same already-extracted fields under the new type,
+                  // unless the user already typed their own name manually.
+                  const fileName = selectedItem.nameManuallySet
+                    ? selectedItem.fileName
+                    : (suggestFileName(newType, selectedItem.fields) || selectedItem.fileName)
+                  updateItem(selectedItem.id, { detectedType: newType, fileName })
                 }}
                 className="text-xs font-medium border border-gray-200 rounded-md px-2 py-1 bg-white">
                 <option value="">— select —</option>

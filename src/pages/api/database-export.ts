@@ -185,7 +185,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     addSheet(wb, 'CUSDEC', matched)
     addSheet(wb, 'CDN', allCdn)
     addSheet(wb, 'Barcode', allBarcode)
-    addSheet(wb, 'History', allHistory)
+    // "History" is a reserved/protected worksheet name in Excel itself
+    // (used for legacy change-tracking) — ExcelJS refuses it outright.
+    addSheet(wb, 'Pick History', allHistory)
     const excelBuffer = await wb.xlsx.writeBuffer()
 
     const zip = new JSZip()

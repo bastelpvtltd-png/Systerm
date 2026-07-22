@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { requireAdmin } from '@/lib/serverAuth'
 import { getDriveClient, getOrCreateSubfolder } from '@/lib/driveFolders'
 import { jsPDF } from 'jspdf'
+import { Readable } from 'stream'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -90,7 +91,6 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   const drive = getDriveClient()
   const reportsFolderId = await getOrCreateSubfolder(drive, mainFolderId, 'Balance Reports')
   const fileName = `${userName.replace(/[/\\:*?"<>|]/g, '_')}_Report_${rangeLabel}.pdf`
-  const { Readable } = await import('stream')
   const uploaded = await drive.files.create({
     requestBody: { name: fileName, parents: [reportsFolderId] },
     media: { mimeType: 'application/pdf', body: Readable.from(pdfBuffer) },

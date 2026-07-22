@@ -1298,15 +1298,23 @@ function MyTasksContent() {
 // counts. Counts are inserted at upload time by document-uploads.ts with
 // action='upload'. View-only for regular users; admin can delete rows.
 
-interface DocApproval { id: string; document_id: string; cusdec_id: string | null; doc_type: string; reason: string; uploaded_by_name: string; created_at: string }
+interface DocApproval {
+  id: string; document_id: string; cusdec_id: string | null; doc_type: string; reason: string
+  uploaded_by_name: string; created_at: string; stage: 'upload' | 'billing'
+  status?: 'approved' | 'rejected'; decided_by_name?: string; decided_at?: string
+}
 
-// Gate: a CUSDEC Passed upload's upload-count and CAP/billing count never
-// credit anyone automatically — this panel (admin-authorized users only,
-// see section:my-tasks.cusdec-approval) is the only place that can turn a
-// pending upload into a real count, exactly once, via Approve. Reject
-// leaves it permanently uncounted.
+// Gate: a CDN/CUSDEC document's upload count AND its CAP/billing count each
+// need their own admin-authorized approval (see doc-approvals.ts) — neither
+// ever credits automatically. This panel (section:my-tasks.cusdec-approval)
+// is the only place Approve turns a pending stage into a real count, exactly
+// once; Reject leaves that stage permanently uncounted. History shows the
+// last 10 decided ones, with an admin-only delete for the record itself.
 function CusdecApprovalsPanel() {
+  const { isAdmin } = usePermission()
   const [items, setItems] = useState<DocApproval[]>([])
+  const [history, setHistory] = useState<DocApproval[]>([])
+  const [showHistory, setShowHistory] = useState(false)
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -1320,6 +1328,11 @@ function CusdecApprovalsPanel() {
     } finally {
       if (!silent) setLoading(false)
     }
+  }
+  async function loadHistory() {
+    const res = await fetch('/api/doc-approvals?history=1', { headers: await authHeader() })
+    const d = await res.json()
+    if (res.ok) setHistory(d.history || [])
   }
   useEffect(() => {
     load()
@@ -1337,24 +1350,58 @@ function CusdecApprovalsPanel() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setItems(prev => prev.filter(x => x.id !== id))
+      if (showHistory) loadHistory()
     } catch (e: any) { setError(e.message) }
     finally { setBusyId(null) }
   }
 
+  async function deleteHistoryEntry(id: string) {
+    if (!confirm('Delete this approval history entry? The count it already credited (if approved) is not affected.')) return
+    const res = await fetch(`/api/doc-approvals?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+    if (res.ok) setHistory(prev => prev.filter(x => x.id !== id))
+  }
+
+  const stageLabel = (s: string) => s === 'billing' ? 'Billing (CAP)' : 'Upload Count'
+
   return (
     <div className="card mb-5">
-      <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2 mb-3"><CheckCircle size={15} className="text-indigo-500"/>CUSDEC Approvals</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><CheckCircle size={15} className="text-indigo-500"/>Upload/Billing Approvals</h2>
+        <button onClick={() => { setShowHistory(x => !x); if (!showHistory) loadHistory() }} className="text-[11px] text-gray-500 hover:text-gray-700">
+          {showHistory ? 'Hide history' : 'Show history'}
+        </button>
+      </div>
       {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
-      {loading ? (
+      {showHistory ? (
+        history.length === 0 ? (
+          <p className="text-xs text-gray-400 py-4 text-center">No decided approvals yet</p>
+        ) : (
+          <div className="space-y-1.5">
+            {history.map(it => (
+              <div key={it.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
+                <div>
+                  <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}
+                    <span className={`ml-1.5 font-semibold ${it.status === 'approved' ? 'text-green-600' : 'text-red-500'}`}>{it.status}</span>
+                  </p>
+                  <p className="text-gray-400">by {it.decided_by_name} · {it.decided_at ? new Date(it.decided_at).toLocaleString('en-GB') : ''}</p>
+                </div>
+                {isAdmin && (
+                  <button onClick={() => deleteHistoryEntry(it.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={12}/></button>
+                )}
+              </div>
+            ))}
+          </div>
+        )
+      ) : loading ? (
         <div className="flex justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
       ) : items.length === 0 ? (
-        <p className="text-xs text-gray-400 py-4 text-center">No CUSDEC uploads waiting for approval</p>
+        <p className="text-xs text-gray-400 py-4 text-center">Nothing waiting for approval</p>
       ) : (
         <div className="space-y-1.5">
           {items.map(it => (
             <div key={it.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
               <div>
-                <p className="font-medium text-gray-800">{it.uploaded_by_name}</p>
+                <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}</p>
                 <p className="text-gray-400">{it.reason} · {new Date(it.created_at).toLocaleString('en-GB')}</p>
               </div>
               <div className="flex items-center gap-1.5">

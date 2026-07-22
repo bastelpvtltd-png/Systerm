@@ -33,22 +33,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .update({ status: 'completed' })
         .eq('document_id', document_id).eq('user_id', authed.userId).eq('status', 'active')
 
-      // Increment work counts based on document reason (non-fatal if table missing).
-      // CUSDEC Passed is deliberately NOT credited here anymore — its upload
-      // count and CAP/billing count only ever come from an admin-authorized
-      // approval (doc-approvals.ts), not from mail/download, so it can never
-      // count twice or count before it's actually been signed off.
+      // Completing a picked task (Mail/Download) is the SECOND approval
+      // stage — the "billing/CAP" count — for both CDN and CUSDEC reasons,
+      // separate from the upload-stage approval in document-uploads.ts.
+      // Neither stage auto-credits anything; both go through
+      // doc-approvals.ts (admin-authorized), so a document's pay can never
+      // be double-counted or counted before it's actually been signed off.
       try {
         const { data: doc } = await supabaseAdmin
           .from('document_uploads').select('reason, file_name, doc_type, cusdec_id').eq('id', document_id).maybeSingle()
-        if (doc?.reason === 'Container Moved' && doc?.doc_type === 'cdn') {
-          await supabaseAdmin.from('work_counts').insert({
-            user_id: authed.userId, user_name: userName, document_id,
-            file_name: doc.file_name, reason: doc.reason, action,
-            cdn_inc: 1, cusdec_inc: 0, cap_inc: 0,
+        if ((doc?.reason === 'Container Moved' && doc?.doc_type === 'cdn') || (doc?.reason === 'CUSDEC Passed' && doc?.doc_type === 'cusdec')) {
+          await supabaseAdmin.from('doc_approvals').insert({
+            document_id, cusdec_id: doc.cusdec_id || null, doc_type: doc.doc_type, reason: doc.reason,
+            uploaded_by: authed.userId, uploaded_by_name: userName, stage: 'billing',
           })
         }
-      } catch { /* work_counts table not yet created — run the SQL migration */ }
+      } catch { /* non-fatal — doc_approvals is supplemental */ }
     }
 
     res.json({ ok: true })

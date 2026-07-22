@@ -85,7 +85,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
       setSave(true)
     } else {
       setUseReference(false); setReference('')
-      if (value === 'Container Moved') { setNotify(true); setSave(true) }
+      if (value === 'Container Moved' || value === 'Final Document') { setNotify(true); setSave(true) }
     }
   }
   const [error, setError] = useState('')

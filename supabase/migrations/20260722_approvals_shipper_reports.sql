@@ -10,6 +10,7 @@ create table if not exists doc_approvals (
   uploaded_by uuid,
   uploaded_by_name text,
   status text not null default 'pending',
+  stage text not null default 'upload',
   created_at timestamptz default now(),
   decided_by uuid,
   decided_by_name text,

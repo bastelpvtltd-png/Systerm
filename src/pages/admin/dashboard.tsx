@@ -1238,7 +1238,11 @@ function PickHistoryPanel() {
       body: JSON.stringify({ action: 'restore', document_id: row.document_id, user_id: source.user_id, user_name: source.user_name }),
     })
     const d = await res.json()
-    if (!res.ok) alert(d.error || 'Restore failed')
+    if (!res.ok) { alert(d.error || 'Restore failed'); return }
+    // The restore inserts a fresh pick_history_log row server-side — reload
+    // now instead of waiting for the 8s poll so the new "Picked" entry (and
+    // the fact it's active again) shows immediately.
+    load(false, page)
   }
 
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
