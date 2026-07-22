@@ -399,6 +399,24 @@ function DatabaseContent() {
         method: 'PATCH', headers: { 'Content-Type': 'application/json', ...h },
         body: JSON.stringify({ table: 'cdn', id: c.id, updates: { export_release_passed: exportReleasePassed, boat_note_passed: boatNotePassed } }),
       })))
+
+      // Barcode (gate pass) rows are this CUSDEC's paperwork too, linked to
+      // each CDN by container_no — the exact same linkage cascadeDeleteCdn
+      // (docTables.ts) already uses. They were left out of the cascade
+      // above entirely (no boat_note_passed/export_release_passed columns
+      // existed on barcode at all), so a manual color set never reflected
+      // on them the way it does for CDN.
+      const containerNos = cdnRows.map(c => c.container_no).filter(Boolean)
+      if (containerNos.length) {
+        const barcodeRes = await fetch(`/api/list-records?table=barcode&limit=2000`, { headers: h })
+        const barcodeData = await barcodeRes.json()
+        const barcodeRows = ((barcodeData.records || []) as any[]).filter(b => containerNos.includes(b.container_no))
+        await Promise.all(barcodeRows.map(b => fetch('/api/admin-data', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json', ...h },
+          body: JSON.stringify({ table: 'barcode', id: b.id, updates: { export_release_passed: exportReleasePassed, boat_note_passed: boatNotePassed } }),
+        })))
+      }
+
       setCusdecBoatNote(prev => ({ ...prev, [`${code}|${number}`]: boatNotePassed }))
     } catch (e: any) {
       alert('Color update failed: ' + e.message)

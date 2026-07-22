@@ -37,6 +37,13 @@ create table if not exists app_settings (
 
 alter table salary_payments add column if not exists note text;
 
+-- Barcode never had its own boat_note_passed/export_release_passed columns —
+-- the manual color-set on a CUSDEC row (database.tsx) only ever cascaded to
+-- its CDN rows, never to barcode, even though barcode is linked the exact
+-- same way (via container_no, see cascadeDeleteCdn in docTables.ts).
+alter table barcode add column if not exists boat_note_passed boolean default false;
+alter table barcode add column if not exists export_release_passed boolean default false;
+
 create table if not exists balance_reports (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
