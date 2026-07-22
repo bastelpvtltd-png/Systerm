@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase, authHeader } from '@/lib/supabase'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight, Save, Undo2, Briefcase } from 'lucide-react'
+import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight, Save, Undo2, Briefcase, FileCheck } from 'lucide-react'
 
 interface Task {
   id: string
@@ -197,6 +197,23 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
     finally { setClearingUserId(null) }
   }
 
+  const [generatingReportId, setGeneratingReportId] = useState<string | null>(null)
+  const [lastReportUrl, setLastReportUrl] = useState<string | null>(null)
+  async function generateReport(id: string) {
+    setGeneratingReportId(id); setError(''); setLastReportUrl(null)
+    try {
+      const res = await fetch('/api/generate-balance-report', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ user_id: id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setLastReportUrl(d.driveUrl)
+      await Promise.all([load(), loadAllWork()])
+    } catch (e: any) { setError(e.message) }
+    finally { setGeneratingReportId(null) }
+  }
+
   async function saveRates() {
     if (!rateDraft) return
     setSavingRates(true)
@@ -207,7 +224,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setRates({ cdn_rate: d.cdn_rate, cap_rate: d.cap_rate })
+      setRates(d)
       setRateDraft(null)
     } catch (e: any) { setError(e.message) }
     finally { setSavingRates(false) }
@@ -219,7 +236,11 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   // CAP is now the sum of each CUSDEC's own container count, not one per
   // document — showing "total (cusdec count)" keeps both numbers visible.
   const myCapCusdecs = myWorkRows.filter(r => (r.cap_inc || 0) > 0).length
+  const myPytho = myWorkRows.reduce((s, r) => s + (r.pytho_inc || 0), 0)
+  const myCo = myWorkRows.reduce((s, r) => s + (r.co_inc || 0), 0)
+  const mySafta = myWorkRows.reduce((s, r) => s + (r.safta_inc || 0), 0)
   const myCountWorkEarned = myCdn * rates.cdn_rate + myCap * rates.cap_rate
+    + myPytho * (rates.pytho_rate || 0) + myCo * (rates.co_rate || 0) + mySafta * (rates.safta_rate || 0)
   const myApprovedOtherWork = myOtherWork.filter(x => x.status === 'approved')
   const myOtherWorkEarned = myApprovedOtherWork.reduce((s, x) => s + Number(x.amount), 0)
   const myEarned = myCountWorkEarned + myOtherWorkEarned
@@ -230,12 +251,15 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
 
   // Admin: per-user work earned from allWorkRows
   const workByUser = allWorkRows.reduce((acc, r) => {
-    if (!acc[r.user_name]) acc[r.user_name] = { cdn: 0, cap: 0, capCusdecs: 0 }
+    if (!acc[r.user_name]) acc[r.user_name] = { cdn: 0, cap: 0, capCusdecs: 0, pytho: 0, co: 0, safta: 0 }
     acc[r.user_name].cdn += r.cdn_inc || 0
     acc[r.user_name].cap += r.cap_inc || 0
     if (r.cap_inc || 0) acc[r.user_name].capCusdecs += 1
+    acc[r.user_name].pytho += r.pytho_inc || 0
+    acc[r.user_name].co += r.co_inc || 0
+    acc[r.user_name].safta += r.safta_inc || 0
     return acc
-  }, {} as Record<string, { cdn: number; cap: number; capCusdecs: number }>)
+  }, {} as Record<string, { cdn: number; cap: number; capCusdecs: number; pytho: number; co: number; safta: number }>)
 
   // Admin: per-user other work (approved)
   const otherWorkByUserId = allOtherWork.reduce((acc, x) => {
@@ -450,6 +474,27 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                         onChange={e => setRateDraft(prev => ({ ...(prev || rates), cap_rate: Number(e.target.value) || 0 }))}
                         className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-purple-400"/>
                     </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] text-gray-500">Pytho Rate (Rs.)</span>
+                      <input type="number" min={0} step="0.01"
+                        value={rateDraft ? (rateDraft.pytho_rate || 0) : (rates.pytho_rate || 0)}
+                        onChange={e => setRateDraft(prev => ({ ...(prev || rates), pytho_rate: Number(e.target.value) || 0 }))}
+                        className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-blue-400"/>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] text-gray-500">CO Rate (Rs.)</span>
+                      <input type="number" min={0} step="0.01"
+                        value={rateDraft ? (rateDraft.co_rate || 0) : (rates.co_rate || 0)}
+                        onChange={e => setRateDraft(prev => ({ ...(prev || rates), co_rate: Number(e.target.value) || 0 }))}
+                        className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-blue-400"/>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] text-gray-500">SAFTA Rate (Rs.)</span>
+                      <input type="number" min={0} step="0.01"
+                        value={rateDraft ? (rateDraft.safta_rate || 0) : (rates.safta_rate || 0)}
+                        onChange={e => setRateDraft(prev => ({ ...(prev || rates), safta_rate: Number(e.target.value) || 0 }))}
+                        className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-blue-400"/>
+                    </label>
                     {rateDraft && (
                       <button onClick={saveRates} disabled={savingRates}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
@@ -459,11 +504,18 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                   </div>
                 </div>
 
+                {lastReportUrl && (
+                  <p className="text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+                    Report generated — <a href={lastReportUrl} target="_blank" rel="noreferrer" className="underline">open in Drive</a>
+                  </p>
+                )}
+
                 {/* Per-user summary */}
                 {users.map(u => {
                   const name = u.full_name || u.username
-                  const userWork = workByUser[name] || { cdn: 0, cap: 0, capCusdecs: 0 }
+                  const userWork = workByUser[name] || { cdn: 0, cap: 0, capCusdecs: 0, pytho: 0, co: 0, safta: 0 }
                   const countCost = userWork.cdn * rates.cdn_rate + userWork.cap * rates.cap_rate
+                    + userWork.pytho * (rates.pytho_rate || 0) + userWork.co * (rates.co_rate || 0) + userWork.safta * (rates.safta_rate || 0)
                   const owData = otherWorkByUserId[u.id] || { approved: 0, pending: [] }
                   const totalCost = countCost + owData.approved
                   const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
@@ -477,6 +529,10 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                           <p className="font-semibold text-gray-800 text-xs">{name}</p>
                           <div className="flex items-center gap-2">
                             <span className={`text-xs font-bold ${bal >= 0 ? 'text-amber-700' : 'text-red-600'}`}>Balance: Rs. {fmtLKR(bal)}</span>
+                            <button onClick={() => generateReport(u.id)} disabled={generatingReportId === u.id}
+                              title="Generate a PDF balance report — carries the balance forward" className="text-gray-400 hover:text-indigo-600 disabled:opacity-40">
+                              {generatingReportId === u.id ? <Loader size={12} className="animate-spin"/> : <FileCheck size={12}/>}
+                            </button>
                             <button onClick={() => clearUserData(u.id, name)} disabled={clearingUserId === u.id}
                               title="Clear all financial data for this user" className="text-gray-300 hover:text-red-500 disabled:opacity-40">
                               {clearingUserId === u.id ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>}
@@ -487,6 +543,9 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                           <button onClick={() => setHistoryUser(historyUser === name ? null : name)}
                             className="text-gray-500 hover:text-gray-700 flex items-center gap-1">
                             CDN: <b className="text-green-700">{userWork.cdn}</b> · CAP: <b className="text-purple-700">{userWork.cap} ({userWork.capCusdecs})</b>
+                            {(userWork.pytho > 0 || userWork.co > 0 || userWork.safta > 0) && (
+                              <span className="text-blue-700"> · Pytho {userWork.pytho} · CO {userWork.co} · SAFTA {userWork.safta}</span>
+                            )}
                             <span className="text-gray-400 ml-0.5">▾</span>
                           </button>
                           <span className="text-gray-500">Cost: <b className="text-gray-800">Rs. {fmtLKR(totalCost)}</b></span>
@@ -514,6 +573,9 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                               <div className="flex-shrink-0 text-right">
                                 {r.cdn_inc > 0 && <span className="text-green-700 font-medium">CDN +{r.cdn_inc}</span>}
                                 {r.cap_inc > 0 && <span className="text-purple-700 font-medium">CAP +{r.cap_inc}</span>}
+                                {(r.pytho_inc || 0) > 0 && <span className="text-blue-700 font-medium">Pytho +{r.pytho_inc}</span>}
+                                {(r.co_inc || 0) > 0 && <span className="text-blue-700 font-medium">CO +{r.co_inc}</span>}
+                                {(r.safta_inc || 0) > 0 && <span className="text-blue-700 font-medium">SAFTA +{r.safta_inc}</span>}
                               </div>
                             </div>
                           ))}
@@ -601,9 +663,10 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
 interface WorkCountRow {
   id: string; user_id: string; user_name: string; document_id: string; file_name: string
   reason: string; action: string; cdn_inc: number; cusdec_inc: number; cap_inc: number
+  pytho_inc?: number; co_inc?: number; safta_inc?: number
   created_at: string
 }
-interface WorkRates { cdn_rate: number; cap_rate: number }
+interface WorkRates { cdn_rate: number; cap_rate: number; pytho_rate?: number; co_rate?: number; safta_rate?: number }
 
 function fmtLKR(n: number) {
   return n.toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -918,7 +981,7 @@ function CountWork({ userId, isAdmin }: { userId: string | null; isAdmin: boolea
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setRates({ cdn_rate: d.cdn_rate, cap_rate: d.cap_rate })
+      setRates(d)
       setRateDraft(null)
     } catch (e: any) { setError(e.message) }
     finally { setSavingRates(false) }
@@ -1224,6 +1287,8 @@ function MyTasksContent() {
         <UploadCountPanel userId={userId} isAdmin={isAdmin}/>
       )}
 
+      {(isAdmin || has('section:my-tasks.cusdec-approval')) && <CusdecApprovalsPanel/>}
+
     </div>
   )
 }
@@ -1232,6 +1297,83 @@ function MyTasksContent() {
 // Shows per-user CDN (Container Moved) and CUSDEC (CUSDEC Passed) upload
 // counts. Counts are inserted at upload time by document-uploads.ts with
 // action='upload'. View-only for regular users; admin can delete rows.
+
+interface DocApproval { id: string; document_id: string; cusdec_id: string | null; doc_type: string; reason: string; uploaded_by_name: string; created_at: string }
+
+// Gate: a CUSDEC Passed upload's upload-count and CAP/billing count never
+// credit anyone automatically — this panel (admin-authorized users only,
+// see section:my-tasks.cusdec-approval) is the only place that can turn a
+// pending upload into a real count, exactly once, via Approve. Reject
+// leaves it permanently uncounted.
+function CusdecApprovalsPanel() {
+  const [items, setItems] = useState<DocApproval[]>([])
+  const [loading, setLoading] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
+    try {
+      const res = await fetch('/api/doc-approvals', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setItems(d.approvals || [])
+    } finally {
+      if (!silent) setLoading(false)
+    }
+  }
+  useEffect(() => {
+    load()
+    const t = setInterval(() => load(true), 20000)
+    return () => clearInterval(t)
+  }, [])
+
+  async function decide(id: string, action: 'approve' | 'reject') {
+    setBusyId(id); setError('')
+    try {
+      const res = await fetch('/api/doc-approvals', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ id, action }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setItems(prev => prev.filter(x => x.id !== id))
+    } catch (e: any) { setError(e.message) }
+    finally { setBusyId(null) }
+  }
+
+  return (
+    <div className="card mb-5">
+      <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2 mb-3"><CheckCircle size={15} className="text-indigo-500"/>CUSDEC Approvals</h2>
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+      {loading ? (
+        <div className="flex justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-gray-400 py-4 text-center">No CUSDEC uploads waiting for approval</p>
+      ) : (
+        <div className="space-y-1.5">
+          {items.map(it => (
+            <div key={it.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
+              <div>
+                <p className="font-medium text-gray-800">{it.uploaded_by_name}</p>
+                <p className="text-gray-400">{it.reason} · {new Date(it.created_at).toLocaleString('en-GB')}</p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button onClick={() => decide(it.id, 'approve')} disabled={busyId === it.id}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                  {busyId === it.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
+                </button>
+                <button onClick={() => decide(it.id, 'reject')} disabled={busyId === it.id}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
+                  <X size={10}/>Reject
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
   const [myRows,  setMyRows]  = useState<WorkCountRow[]>([])

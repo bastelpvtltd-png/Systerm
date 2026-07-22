@@ -64,6 +64,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Upload-time work count: insert immediately when doc is saved so the
       // count reflects uploads, not just mail/downloads (log-document-action
       // handles the mail/download side separately for the existing salary flow).
+      // CUSDEC Passed is the one exception — its upload count AND billing
+      // (CAP) count only ever credit once an admin-authorized approval
+      // happens (see doc-approvals.ts), never automatically on upload.
       try {
         if (doc_type === 'cdn' && reason === 'Container Moved') {
           await supabaseAdmin.from('work_counts').insert({
@@ -73,14 +76,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             cdn_inc: 1, cusdec_inc: 0, cap_inc: 0,
           })
         } else if (doc_type === 'cusdec' && reason === 'CUSDEC Passed') {
-          await supabaseAdmin.from('work_counts').insert({
-            user_id: authed.userId, user_name: uploadedByName,
-            document_id: data.id, file_name,
-            reason, action: 'upload',
-            cdn_inc: 0, cusdec_inc: 1, cap_inc: 0,
+          await supabaseAdmin.from('doc_approvals').insert({
+            document_id: data.id, cusdec_id: cusdec_id || null, doc_type, reason,
+            uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
           })
         }
-      } catch { /* non-fatal — work_counts is supplemental */ }
+      } catch { /* non-fatal — work_counts/doc_approvals is supplemental */ }
 
       if (notify) {
         const nowIso = new Date().toISOString()

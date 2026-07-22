@@ -33,7 +33,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .update({ status: 'completed' })
         .eq('document_id', document_id).eq('user_id', authed.userId).eq('status', 'active')
 
-      // Increment work counts based on document reason (non-fatal if table missing)
+      // Increment work counts based on document reason (non-fatal if table missing).
+      // CUSDEC Passed is deliberately NOT credited here anymore — its upload
+      // count and CAP/billing count only ever come from an admin-authorized
+      // approval (doc-approvals.ts), not from mail/download, so it can never
+      // count twice or count before it's actually been signed off.
       try {
         const { data: doc } = await supabaseAdmin
           .from('document_uploads').select('reason, file_name, doc_type, cusdec_id').eq('id', document_id).maybeSingle()
@@ -42,21 +46,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             user_id: authed.userId, user_name: userName, document_id,
             file_name: doc.file_name, reason: doc.reason, action,
             cdn_inc: 1, cusdec_inc: 0, cap_inc: 0,
-          })
-        } else if (doc?.reason === 'CUSDEC Passed' && doc?.doc_type === 'cusdec') {
-          // Pay is per container, not per document — a CUSDEC Passed send is
-          // worth that specific shipment's own CAP (container count), read off
-          // the cusdec row this upload was linked to, not a flat "1 document".
-          let capValue = 1
-          if (doc.cusdec_id) {
-            const { data: cusdecRow } = await supabaseAdmin.from('cusdec').select('cap').eq('id', doc.cusdec_id).maybeSingle()
-            const parsed = parseInt(String(cusdecRow?.cap ?? ''), 10)
-            if (parsed > 0) capValue = parsed
-          }
-          await supabaseAdmin.from('work_counts').insert({
-            user_id: authed.userId, user_name: userName, document_id,
-            file_name: doc.file_name, reason: doc.reason, action,
-            cdn_inc: 0, cusdec_inc: 0, cap_inc: capValue,
           })
         }
       } catch { /* work_counts table not yet created — run the SQL migration */ }

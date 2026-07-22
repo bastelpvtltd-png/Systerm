@@ -15,7 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const auth = await requireAdmin(req)
   if (!auth.ok) return res.status(auth.status).json({ error: auth.error })
   try {
-    const { username, password, full_name, position, is_admin, allowed_tabs } = req.body
+    const { username, password, full_name, position, is_admin, allowed_tabs, is_shipper, shipper_name } = req.body
     if (!username || !password) return res.status(400).json({ error: 'username and password required' })
 
     const email = `${username}@exportsys.local`
@@ -27,6 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { error: profileError } = await supabaseAdmin.from('profiles').insert({
       id: authData.user.id, username, full_name: full_name || '', position: position || '',
       is_admin: !!is_admin, allowed_tabs: allowed_tabs || [],
+      is_shipper: !!is_shipper, shipper_name: is_shipper ? (shipper_name || '').trim() : null,
     })
     if (profileError) {
       // Roll back the auth account so we don't leave an orphaned login with no profile

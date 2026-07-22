@@ -86,7 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { startDate, endDate, dateField, shipper, reference, code, status } = req.body as {
       startDate: string; endDate: string; dateField?: 'created_at' | 'payment_complete_at'
       shipper?: string; reference?: string; code?: string
-      status?: 'all' | 'cdn_pending' | 'boat_note_pending' | 'release_pending' | 'not_complete_shipment' | 'not_payment_complete' | 'also_done'
+      status?: 'all' | 'pending_cusdec_passed' | 'cdn_pending' | 'boat_note_pending' | 'release_pending' | 'not_complete_shipment' | 'not_payment_complete' | 'also_done'
     }
     if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate required' })
     const field = dateField === 'payment_complete_at' ? 'payment_complete_at' : 'created_at'
@@ -108,7 +108,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // CUSDEC's own CDN rows to evaluate CAP-complete/all-boat-note-passed,
     // same as the dashboard does.
     if (status && status !== 'all') {
-      if (status === 'not_complete_shipment') {
+      if (status === 'pending_cusdec_passed') {
+        const { data: pending } = await supabaseAdmin.from('doc_approvals').select('cusdec_id').eq('status', 'pending')
+        const pendingIds = new Set((pending || []).map(p => p.cusdec_id).filter(Boolean))
+        matched = matched.filter(c => pendingIds.has(c.id))
+      } else if (status === 'not_complete_shipment') {
         matched = matched.filter(c => c.export_release_passed && !c.shipment_complete)
       } else if (status === 'not_payment_complete') {
         matched = matched.filter(c => c.shipment_complete && !c.payment_complete)

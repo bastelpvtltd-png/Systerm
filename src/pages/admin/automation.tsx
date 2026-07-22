@@ -16,7 +16,7 @@ type AutomationTab =
   | 'barcode' | 'trico' | 'data-updates'
   | 'boat-note-create' | 'party-copy-create' | 'merge-pdf'
   | 'boat-note-check' | 'export-release' | 'vessel-trigger'
-  | 'conflict-review' | 'cdn-approval' | 'notes' | 'pdf-editor'
+  | 'conflict-review' | 'cdn-approval' | 'notes' | 'pdf-editor' | 'monthly-reports'
 
 interface CusdecRec { id: string; code: string; number: string; date: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; cap: string; hs_code: string; preference: string; procedure_code: string; delivery_terms: string; amount: string; pkges: string; export_release_passed?: boolean; tin_vat?: string }
 
@@ -39,6 +39,7 @@ const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: stri
   { key: 'cdn-approval', label: 'CDN Approval', icon: CheckSquare, permission: 'section:automation.cdn-approval' },
   { key: 'notes', label: 'System Logic & Integration Notes', icon: StickyNote, permission: 'section:automation.notes' },
   { key: 'pdf-editor', label: 'PDF Editor', icon: FilePen, permission: 'section:automation.pdf-editor' },
+  { key: 'monthly-reports', label: 'Monthly Reports', icon: Clock, permission: 'section:automation.monthly-reports' },
 ]
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -108,6 +109,56 @@ function AutomationContent() {
       {tab === 'cdn-approval' && <CdnApprovalPanel/>}
       {tab === 'notes' && <SystemNotes/>}
       {tab === 'pdf-editor' && <PdfEditorPanel/>}
+      {tab === 'monthly-reports' && <MonthlyReportsPanel/>}
+    </div>
+  )
+}
+
+// Off by default — the cron itself (cron-monthly-reports.ts, runs daily,
+// only acts on the 10th) checks this same flag before generating anything,
+// so flipping it here is the one switch that actually controls whether
+// auto-reports happen at all.
+function MonthlyReportsPanel() {
+  const [enabled, setEnabled] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    authHeader().then(h => fetch('/api/app-settings?key=monthly_reports_enabled', { headers: h }))
+      .then(r => r.json()).then(d => setEnabled(d.value === 'true'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function toggle() {
+    setSaving(true)
+    try {
+      const next = !enabled
+      const res = await fetch('/api/app-settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ key: 'monthly_reports_enabled', value: String(next) }),
+      })
+      if (res.ok) setEnabled(next)
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="card max-w-lg">
+      <h2 className="font-semibold text-gray-900 text-sm mb-2">Monthly Reports</h2>
+      <p className="text-xs text-gray-500 mb-4">
+        When ON, a balance report (PDF) is generated automatically for every user on the 10th of each
+        month — same as clicking "Generate Report" in My Tasks' Balance panel for each of them.
+        Off by default so nothing runs unattended until this is explicitly turned on.
+      </p>
+      {loading ? (
+        <Loader size={16} className="animate-spin text-gray-400"/>
+      ) : (
+        <button onClick={toggle} disabled={saving}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 ${enabled ? '' : ''}`}
+          style={{ background: enabled ? '#22A87A' : '#9ca3af' }}>
+          {saving ? <Loader size={13} className="animate-spin"/> : null}
+          {enabled ? 'ON — click to turn off' : 'OFF — click to turn on'}
+        </button>
+      )}
     </div>
   )
 }

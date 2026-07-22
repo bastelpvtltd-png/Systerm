@@ -87,6 +87,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           status: 'done', resolved_at: new Date().toISOString(), drive_url, file_name: file_name || null,
         }).eq('id', task_id)
         await sb.from('pick_history_log').insert({ document_id: task.document_id, user_id: authed.userId, user_name: name, action: 'done' })
+
+        // Final Document count — per doc type (pytho/co/safta each have their
+        // own rate, see work-rates.ts), credited to whoever actually did it
+        // (the picker), and only once Done is clicked — a rejected task
+        // never counts, same idea as the CUSDEC/CDN approval gate.
+        const incCol = task.document_type === 'pytho' ? 'pytho_inc' : task.document_type === 'co' ? 'co_inc' : task.document_type === 'safta' ? 'safta_inc' : null
+        if (incCol) {
+          try {
+            await sb.from('work_counts').insert({
+              user_id: task.picked_by, user_name: task.picked_by_name || name,
+              document_id: task.document_id, file_name: file_name || task.file_name,
+              reason: 'Final Document', action: 'done',
+              cdn_inc: 0, cusdec_inc: 0, cap_inc: 0, [incCol]: 1,
+            })
+          } catch { /* non-fatal — work_counts is supplemental */ }
+        }
         return res.json({ ok: true })
       }
 

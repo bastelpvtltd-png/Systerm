@@ -64,6 +64,33 @@ function normalizeFieldValue(docType: string, key: string, value: string): strin
   return value
 }
 
+// Suggested file name per doc type, built from what extraction actually
+// found — still just fills the rename box, so it's editable before Save
+// like any other name. CDN: container + CDN number, "C..." joined.
+// CUSDEC: number + CAP. Barcode: container + truck/lorry number. Only
+// applies when the relevant field(s) actually extracted something —
+// otherwise the original PDF file name is left alone.
+function suggestFileName(docType: string, fields: PdfField[]): string | null {
+  const get = (key: string) => fields.find(f => f.key === key)?.value?.trim() || ''
+  const clean = (s: string) => s.replace(/[/\\:*?"<>|]/g, '-')
+  if (docType === 'cdn') {
+    const container = get('container_no'), cdnNo = get('cdn_no')
+    if (!container && !cdnNo) return null
+    return clean(`C${[container, cdnNo].filter(Boolean).join('_')}.pdf`)
+  }
+  if (docType === 'cusdec') {
+    const number = get('number'), cap = get('cap')
+    if (!number) return null
+    return clean(`${number}${cap ? ' -' + cap : ''}.pdf`)
+  }
+  if (docType === 'barcode') {
+    const container = get('container_no'), truck = get('truck_no')
+    if (!container && !truck) return null
+    return clean(`${[container, truck].filter(Boolean).join('-')}.pdf`)
+  }
+  return null
+}
+
 interface PctBox { x: number; y: number; w: number; h: number; page?: number }
 
 interface UploadItem {
@@ -306,17 +333,19 @@ function DocumentsUploadContent() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Extraction failed')
+      const fields = (json.fields || []).map((f: PdfField) => {
+        const normalized = normalizeFieldValue(json.detectedDocType || '', f.key, f.value)
+        return { ...f, rawValue: f.value, value: normalized }
+      })
       updateItem(itemId, {
         status: 'ready',
         detectedType: (json.detectedDocType as DocType) || '',
-        fields: (json.fields || []).map((f: PdfField) => {
-          const normalized = normalizeFieldValue(json.detectedDocType || '', f.key, f.value)
-          return { ...f, rawValue: f.value, value: normalized }
-        }),
+        fields,
         rawText: json.rawText || '',
         scanned: !!json.scanned,
         boxes: json.boxes || {},
         variant: json.variant === 'scanned' ? 'scanned' : 'native',
+        fileName: suggestFileName(json.detectedDocType, fields) || items.find(it => it.id === itemId)?.fileName || 'document.pdf',
       })
     } catch (e: any) {
       updateItem(itemId, { status: 'error', error: e.message })
@@ -1423,7 +1452,23 @@ function DocumentsUploadContent() {
             <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
               <span className="text-xs text-gray-500">Type:</span>
               <select value={selectedItem.detectedType}
-                onChange={e => updateItem(selectedItem.id, { detectedType: e.target.value as DocType })}
+                onChange={e => {
+                  const newType = e.target.value as DocType
+                  // Boat Note / Party's Copy never go through extraction (no
+                  // fields to build a name from — see suggestFileName), so
+                  // ask for the CUSDEC number right here instead: B<number>
+                  // / P<number>, same naming convention every other type
+                  // gets automatically once its fields extract.
+                  if (newType === 'boat_note' || newType === 'party_copy') {
+                    const num = window.prompt('CUSDEC number this document belongs to (for naming, e.g. 12345):')?.trim()
+                    if (num) {
+                      const prefix = newType === 'boat_note' ? 'B' : 'P'
+                      updateItem(selectedItem.id, { detectedType: newType, fileName: `${prefix}${num.replace(/[/\\:*?"<>|]/g, '-')}.pdf` })
+                      return
+                    }
+                  }
+                  updateItem(selectedItem.id, { detectedType: newType })
+                }}
                 className="text-xs font-medium border border-gray-200 rounded-md px-2 py-1 bg-white">
                 <option value="">— select —</option>
                 {DOC_TYPES.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}

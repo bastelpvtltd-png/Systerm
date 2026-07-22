@@ -755,6 +755,7 @@ export const SECTION_ITEMS = [
   { key: 'section:my-tasks.daily-cost',        tabHref: '/admin/my-tasks', label: 'Daily Cost entry' },
   { key: 'section:my-tasks.balance-update',    tabHref: '/admin/my-tasks', label: 'Balance deposit/top-up' },
   { key: 'section:my-tasks.upload-count',      tabHref: '/admin/my-tasks', label: 'Upload Count panel' },
+  { key: 'section:my-tasks.cusdec-approval',   tabHref: '/admin/my-tasks', label: 'CUSDEC Approvals panel' },
   { key: 'section:documents-upload.upload',    tabHref: '/admin/upload-docs', label: 'Upload PDFs card' },
   { key: 'section:documents-upload.uploaded',  tabHref: '/admin/upload-docs', label: 'Uploaded list card' },
   { key: 'section:documents-upload.preview',   tabHref: '/admin/upload-docs', label: 'All Documents preview panel' },
@@ -798,6 +799,7 @@ export const SECTION_ITEMS = [
   { key: 'section:automation.conflict-review',       tabHref: '/admin/automation', label: 'Conflict Review panel (admin)' },
   { key: 'section:automation.cdn-approval',          tabHref: '/admin/automation', label: 'CDN Approval (admin)' },
   { key: 'section:automation.notes',                tabHref: '/admin/automation', label: 'System Logic & Integration Notes' },
+  { key: 'section:automation.monthly-reports',      tabHref: '/admin/automation', label: 'Monthly Reports toggle' },
 ]
 
 interface PermissionValue { isAdmin: boolean; has: (key: string) => boolean }

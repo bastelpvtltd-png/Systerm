@@ -16,6 +16,8 @@ interface Profile {
   is_admin: boolean
   allowed_tabs: string[]
   assigned_shippers: string[]
+  is_shipper?: boolean
+  shipper_name?: string
   created_at: string
 }
 
@@ -28,6 +30,7 @@ const emptyForm = {
   username: '', full_name: '', position: '', designation: '',
   personal_email: '', official_email: '', whatsapp_number: '', contact_number: '',
   password: '', is_admin: false, allowed_tabs: [] as string[], assigned_shippers: [] as string[],
+  is_shipper: false, shipper_name: '',
 }
 
 export default function UsersPage() {
@@ -101,6 +104,7 @@ export default function UsersPage() {
       whatsapp_number: form.whatsapp_number, contact_number: form.contact_number,
       is_admin: form.is_admin, allowed_tabs: form.allowed_tabs,
       assigned_shippers: form.assigned_shippers,
+      is_shipper: form.is_shipper, shipper_name: form.is_shipper ? form.shipper_name.trim() : null,
     }
     try {
       if (editId) {
@@ -165,6 +169,7 @@ export default function UsersPage() {
                         whatsapp_number: u.whatsapp_number || '', contact_number: u.contact_number || '',
                         password: '', is_admin: !!u.is_admin, allowed_tabs: u.allowed_tabs || [],
                         assigned_shippers: u.assigned_shippers || [],
+                        is_shipper: !!u.is_shipper, shipper_name: u.shipper_name || '',
                       })
                       setEditId(u.id); setSaveError(''); setModal(true)
                     }}
@@ -204,7 +209,21 @@ export default function UsersPage() {
                 Full access (sees every tab)
               </label>
 
-              {!form.is_admin && (
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                <input type="checkbox" checked={form.is_shipper} onChange={e => setForm({...form, is_shipper: e.target.checked})}/>
+                Shipper account (external — separate /shipper portal, not admin)
+              </label>
+              {form.is_shipper && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Shipper name (must match CUSDEC exporter's first line exactly)</label>
+                  <input value={form.shipper_name} onChange={e => setForm({...form, shipper_name: e.target.value})}
+                    list="shipper-name-options"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+                  <datalist id="shipper-name-options">{shipperList.map(s => <option key={s} value={s}/>)}</datalist>
+                </div>
+              )}
+
+              {!form.is_admin && !form.is_shipper && (
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
                     Assigned Shippers — {form.assigned_shippers.includes(ALL_SHIPPERS) ? 'All shippers' : form.assigned_shippers.length === 0 ? 'none selected (sees none)' : `${form.assigned_shippers.length} selected`}

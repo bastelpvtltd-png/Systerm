@@ -3,6 +3,10 @@
     {
       "path": "/api/cron-check-pending",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron-monthly-reports",
+      "schedule": "0 4 * * *"
     }
   ]
 }

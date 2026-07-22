@@ -50,12 +50,14 @@ export default function LoginPage() {
       return
     }
 
-    const { data: profile } = await supabase.from('profiles').select('is_admin').eq('id', data.user.id).single()
+    const { data: profile } = await supabase.from('profiles').select('is_admin, is_shipper').eq('id', data.user.id).single()
 
+    // Shippers get their own separate portal entirely — never /admin.
     // Admins keep the /admin/* URL; everyone else lands on the bare alias
     // (see next.config.js rewrites) — AdminLayout redirects on to whichever
     // bare tab a non-admin account is actually allowed on if this isn't it.
-    router.push(profile?.is_admin ? '/admin/dashboard' : '/dashboard')
+    if (profile?.is_shipper) router.push('/shipper')
+    else router.push(profile?.is_admin ? '/admin/dashboard' : '/dashboard')
   }
 
   return (

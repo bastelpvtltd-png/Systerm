@@ -178,6 +178,7 @@ function CusdecExportPanel() {
               <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
               <select value={status} onChange={e => setStatus(e.target.value)} className="input text-sm w-full">
                 <option value="all">All</option>
+                <option value="pending_cusdec_passed">Pending CUSDEC Passed</option>
                 <option value="cdn_pending">CDN Pending</option>
                 <option value="boat_note_pending">Boat Note Pending</option>
                 <option value="release_pending">Export Release Pending</option>
