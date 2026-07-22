@@ -49,16 +49,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // saved (the exact state a Final Document send is normally in), and its
       // "pending item" shape (a flat file list) doesn't carry the CUSDEC
       // number + document type the Dashboard panel needs to show.
-      if (reason === 'Final Document' && cusdec_id && doc_type && drive_url) {
-        await supabaseAdmin.from('final_document_tasks').insert({
-          cusdec_id, cusdec_number: cusdec_number || null, document_type: doc_type,
-          drive_url, file_name, status: 'pending',
-          created_by: authed.userId, created_by_name: uploadedByName,
-          document_id: data.id,
-        })
-        await supabaseAdmin.from('pick_history_log').insert({
-          document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'final_document_pending',
-        })
+      //
+      // Only actually queue a task the FIRST time this cusdec+doc_type is
+      // sent as Final Document — gated on `notify` (SendModal already knows
+      // not to notify on a replace/re-save via notifyDisabled) and on there
+      // being no pending/picked task for the same pair already. Every later
+      // send for the same doc type is just a replace/update — the Save step
+      // (document-link.ts / final-document-tasks.ts's own `done`/`update`
+      // actions) already keeps cusdec_document_links current without a new
+      // task or a second notify.
+      if (reason === 'Final Document' && cusdec_id && doc_type && drive_url && notify) {
+        const { data: existingTask } = await supabaseAdmin.from('final_document_tasks')
+          .select('id').eq('cusdec_id', cusdec_id).eq('document_type', doc_type).in('status', ['pending', 'picked']).maybeSingle()
+        if (!existingTask) {
+          await supabaseAdmin.from('final_document_tasks').insert({
+            cusdec_id, cusdec_number: cusdec_number || null, document_type: doc_type,
+            drive_url, file_name, status: 'pending',
+            created_by: authed.userId, created_by_name: uploadedByName,
+            document_id: data.id,
+          })
+          await supabaseAdmin.from('pick_history_log').insert({
+            document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'final_document_pending',
+          })
+        }
       }
 
       // Upload-time count is gated by admin-authorized approval now, for

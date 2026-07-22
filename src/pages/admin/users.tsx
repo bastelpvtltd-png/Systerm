@@ -215,11 +215,15 @@ export default function UsersPage() {
               </label>
               {form.is_shipper && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Shipper name (must match CUSDEC exporter's first line exactly)</label>
-                  <input value={form.shipper_name} onChange={e => setForm({...form, shipper_name: e.target.value})}
-                    list="shipper-name-options"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-                  <datalist id="shipper-name-options">{shipperList.map(s => <option key={s} value={s}/>)}</datalist>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Shipper name — pick from known CUSDEC exporters</label>
+                  <select value={form.shipper_name} onChange={e => setForm({...form, shipper_name: e.target.value})}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400">
+                    <option value="">— select —</option>
+                    {shipperList.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  {form.shipper_name && !shipperList.includes(form.shipper_name) && (
+                    <p className="text-[11px] text-amber-600 mt-1">"{form.shipper_name}" doesn't match any known exporter name yet — this account won't see any shipments until a CUSDEC with this exact exporter name exists.</p>
+                  )}
                 </div>
               )}
 
@@ -247,7 +251,7 @@ export default function UsersPage() {
                 </div>
               )}
 
-              {!form.is_admin && (
+              {!form.is_admin && !form.is_shipper && (
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">Tabs this user can access</label>
                   <div className="space-y-1 max-h-52 overflow-y-auto border border-gray-100 rounded-lg p-2">
@@ -261,7 +265,11 @@ export default function UsersPage() {
                 </div>
               )}
 
-              {!form.is_admin && TAB_ITEMS
+              {/* Shipper accounts run under their own /shipper portal and rules
+                  entirely — the staff tab/section permission grants below are
+                  meaningless for them (they never touch AdminLayout/TAB_ITEMS
+                  routes), so skip rendering this whole block for is_shipper. */}
+              {!form.is_admin && !form.is_shipper && TAB_ITEMS
                 .filter(t => form.allowed_tabs.includes(t.href) && SECTION_ITEMS.some(s => s.tabHref === t.href))
                 .map(t => (
                   <div key={t.href}>

@@ -11,19 +11,23 @@ const sb = createClient(
 )
 
 // Builds one user's balance report (same figures the Balance panel already
-// shows — CDN/CAP/Pytho/CO/SAFTA counts, approved Other Work, confirmed
-// payments received) as a PDF, saves it to Drive, records it in
-// balance_reports, and inserts a confirmed salary_payments row for the
-// current owed balance so it carries forward — the report IS what zeroes
-// the running balance, same idea as physically handing over a payslip.
+// shows — CDN/CAP/Pytho/CO/SAFTA/Boat Note counts, approved Other Work,
+// confirmed payments received) as a PDF, saves it to Drive, and records it
+// in balance_reports with status 'received'. Only ever sums work_counts/
+// other_work rows not already claimed by an earlier report (reported=false)
+// — once summarized here, those exact rows get marked reported=true so the
+// next report starts this user's count from zero without losing history
+// (unreported rows since keep accumulating normally). Confirmed
+// salary_payments stay a permanent running ledger of real money handed
+// over — not reset per report, unlike the piece-work counts.
 async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string; rangeLabel: string; amount: number } | { ok: false; error: string }> {
   const { data: prof } = await sb.from('profiles').select('username, full_name').eq('id', userId).maybeSingle()
   if (!prof) return { ok: false, error: 'User not found' }
   const userName = prof.full_name || prof.username || ''
 
   const { data: rates } = await sb.from('work_rates').select('*').eq('id', 'global').single()
-  const { data: workRows } = await sb.from('work_counts').select('*').eq('user_id', userId)
-  const { data: otherWork } = await sb.from('other_work').select('*').eq('user_id', userId)
+  const { data: workRows } = await sb.from('work_counts').select('*').eq('user_id', userId).eq('reported', false)
+  const { data: otherWork } = await sb.from('other_work').select('*').eq('user_id', userId).eq('reported', false)
   const { data: payments } = await sb.from('salary_payments').select('*').or(`to_user_id.eq.${userId}`)
   const { data: approvals } = await sb.from('doc_approvals').select('*').eq('uploaded_by', userId)
 
@@ -32,9 +36,11 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   const pytho = (workRows || []).reduce((s, r) => s + (r.pytho_inc || 0), 0)
   const co = (workRows || []).reduce((s, r) => s + (r.co_inc || 0), 0)
   const safta = (workRows || []).reduce((s, r) => s + (r.safta_inc || 0), 0)
+  const boatNote = (workRows || []).reduce((s, r) => s + (r.boat_note_inc || 0), 0)
   const cdnRate = Number(rates?.cdn_rate) || 0, capRate = Number(rates?.cap_rate) || 0
   const pythoRate = Number(rates?.pytho_rate) || 0, coRate = Number(rates?.co_rate) || 0, saftaRate = Number(rates?.safta_rate) || 0
-  const countEarned = cdn * cdnRate + cap * capRate + pytho * pythoRate + co * coRate + safta * saftaRate
+  const boatNoteRate = Number(rates?.boat_note_rate) || 0
+  const countEarned = cdn * cdnRate + cap * capRate + pytho * pythoRate + co * coRate + safta * saftaRate + boatNote * boatNoteRate
 
   const approvedOther = (otherWork || []).filter(x => x.status === 'approved')
   const otherEarned = approvedOther.reduce((s, x) => s + Number(x.amount), 0)
@@ -64,6 +70,7 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   if (pytho) line(`Pytho: ${pytho} x Rs.${pythoRate.toFixed(2)} = Rs.${(pytho * pythoRate).toFixed(2)}`)
   if (co) line(`CO: ${co} x Rs.${coRate.toFixed(2)} = Rs.${(co * coRate).toFixed(2)}`)
   if (safta) line(`SAFTA: ${safta} x Rs.${saftaRate.toFixed(2)} = Rs.${(safta * saftaRate).toFixed(2)}`)
+  if (boatNote) line(`Boat Note: ${boatNote} x Rs.${boatNoteRate.toFixed(2)} = Rs.${(boatNote * boatNoteRate).toFixed(2)}`)
   y += 2
   line('Bill / Other Work History', 12, true)
   if (!approvedOther.length) line('None')
@@ -99,17 +106,16 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   await drive.permissions.create({ fileId: uploaded.data.id!, requestBody: { role: 'reader', type: 'anyone' } })
   const driveUrl = uploaded.data.webViewLink!
 
-  await sb.from('balance_reports').insert({ user_id: userId, user_name: userName, drive_url: driveUrl, range_label: rangeLabel, amount: owedBalance })
+  await sb.from('balance_reports').insert({ user_id: userId, user_name: userName, drive_url: driveUrl, range_label: rangeLabel, amount: owedBalance, status: 'received' })
 
-  // The report itself is what zeroes the balance going forward — a
-  // confirmed payment record dated today, described by the report.
-  if (owedBalance > 0) {
-    await sb.from('salary_payments').insert({
-      from_user_id: userId, from_user_name: 'System', to_user_id: userId, to_display_name: userName,
-      amount: owedBalance, status: 'confirmed', responded_at: new Date().toISOString(),
-      note: `Report ${rangeLabel}`,
-    })
-  }
+  // Archive exactly the rows this report summarized — this (not a synthetic
+  // payment record) is what makes the next report start this user's count
+  // from zero; unreported rows created after this point keep accumulating
+  // normally, and nothing already-reported is ever double-counted or lost.
+  const workIds = (workRows || []).map(r => r.id)
+  const otherIds = (otherWork || []).map(r => r.id)
+  if (workIds.length) await sb.from('work_counts').update({ reported: true }).in('id', workIds)
+  if (otherIds.length) await sb.from('other_work').update({ reported: true }).in('id', otherIds)
 
   return { ok: true, driveUrl, rangeLabel, amount: owedBalance }
 }

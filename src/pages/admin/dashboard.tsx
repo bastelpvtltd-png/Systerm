@@ -1039,6 +1039,30 @@ function PendingFinalDocumentsPanel({ currentUserId, onCountChange }: { currentU
     finally { setBusyId(null) }
   }
 
+  // Lets the picker swap the attached file on their own in-progress task
+  // (wrong scan attached, etc.) without Reject reopening it to the whole pool.
+  async function updateWithFile(task: any, file: File) {
+    setBusyId(task.id)
+    try {
+      const base64 = await fileToBase64(file)
+      const h = await authHeader()
+      const upRes = await fetch('/api/upload-to-drive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ base64, fileName: file.name, mimeType: file.type || 'application/pdf', docType: task.document_type }),
+      })
+      const upData = await upRes.json()
+      if (!upRes.ok || !upData.driveLink) throw new Error(upData.error || 'Upload failed')
+      const res = await fetch('/api/final-document-tasks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ action: 'update', task_id: task.id, drive_url: upData.driveLink, file_name: file.name }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      await load()
+    } catch (e: any) { alert(e.message) }
+    finally { setBusyId(null) }
+  }
+
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
@@ -1065,20 +1089,28 @@ function PendingFinalDocumentsPanel({ currentUserId, onCountChange }: { currentU
                 {t.status === 'pending' && (
                   <button onClick={() => act(t.id, { action: 'pick' })} disabled={busy}
                     className="btn-secondary text-xs w-full flex items-center justify-center gap-1.5 disabled:opacity-50">
-                    {busy ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Update
+                    {busy ? <Loader size={12} className="animate-spin"/> : <UserCheck size={12}/>} Pick
                   </button>
                 )}
                 {pickedByOther && <p className="text-[11px] text-gray-400">Picked by {t.picked_by_name || '—'}</p>}
                 {pickedByMe && (
-                  <div className="flex gap-1.5">
-                    <button onClick={() => reject(t.id)} disabled={busy}
-                      className="flex-1 text-xs py-1.5 rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50">
-                      Reject
-                    </button>
-                    <label className={`flex-1 text-xs py-1.5 rounded-md text-white text-center font-medium ${busy ? 'bg-gray-300' : 'bg-green-600 hover:bg-green-700 cursor-pointer'}`}>
-                      {busy ? 'Working…' : 'Done — Upload Scan'}
+                  <div className="space-y-1.5">
+                    <div className="flex gap-1.5">
+                      <button onClick={() => reject(t.id)} disabled={busy}
+                        className="flex-1 text-xs py-1.5 rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50">
+                        Reject
+                      </button>
+                      <label className={`flex-1 text-xs py-1.5 rounded-md text-white text-center font-medium ${busy ? 'bg-gray-300' : 'bg-green-600 hover:bg-green-700 cursor-pointer'}`}>
+                        {busy ? 'Working…' : 'Done — Upload Scan'}
+                        <input type="file" accept="application/pdf" className="hidden" disabled={busy}
+                          onChange={e => { const f = e.target.files?.[0]; if (f) doneWithFile(t, f); e.target.value = '' }}/>
+                      </label>
+                    </div>
+                    <label className={`block text-xs py-1.5 rounded-md text-center font-medium border ${busy ? 'border-gray-200 text-gray-300' : 'border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer'}`}
+                      title="Replace the attached file on this in-progress task without rejecting it back to the pool">
+                      {busy ? 'Working…' : 'Update — Replace File'}
                       <input type="file" accept="application/pdf" className="hidden" disabled={busy}
-                        onChange={e => { const f = e.target.files?.[0]; if (f) doneWithFile(t, f); e.target.value = '' }}/>
+                        onChange={e => { const f = e.target.files?.[0]; if (f) updateWithFile(t, f); e.target.value = '' }}/>
                     </label>
                   </div>
                 )}

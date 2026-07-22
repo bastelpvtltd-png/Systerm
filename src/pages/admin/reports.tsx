@@ -81,6 +81,7 @@ function AdminReportsTab() {
 
   return (
     <div className="space-y-6">
+      <BalanceReportsSection all={true}/>
       {/* User Profiles */}
       <div className="card">
         <h2 className="font-semibold text-gray-900 text-sm mb-3 flex items-center gap-2"><Users size={15}/>User Profiles</h2>
@@ -191,6 +192,43 @@ function AdminReportsTab() {
   )
 }
 
+interface BalanceReport { id: string; user_id: string; user_name: string; drive_url: string; range_label: string; amount: number; status: string; generated_at: string }
+
+// Monthly Balance Reports (generate-balance-report.ts) — separate from the
+// hours/tasks MonthlyReport system above. all=false: own reports only.
+function BalanceReportsSection({ all }: { all: boolean }) {
+  const [reports, setReports] = useState<BalanceReport[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    authHeader().then(h => fetch(`/api/balance-reports${all ? '?all=1' : ''}`, { headers: h }))
+      .then(r => r.json()).then(d => setReports(d.reports || [])).catch(() => {})
+      .finally(() => setLoading(false))
+  }, [all])
+
+  if (loading) return null
+  if (reports.length === 0) return null
+
+  return (
+    <div className="card mb-5">
+      <h3 className="font-semibold text-gray-900 text-sm mb-3">Balance Reports</h3>
+      <div className="space-y-2">
+        {reports.map(r => (
+          <div key={r.id} className="flex items-center justify-between border border-gray-100 rounded-lg p-2.5 text-sm">
+            <div>
+              {all && <p className="font-medium text-gray-800">{r.user_name}</p>}
+              <p className="text-gray-400 text-xs">{r.range_label} · Rs.{Number(r.amount).toFixed(2)} ·
+                <span className={`ml-1 font-semibold ${r.status === 'received' ? 'text-green-600' : 'text-amber-600'}`}> {r.status}</span>
+              </p>
+            </div>
+            <a href={r.drive_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs">View</a>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function MyReportTab() {
   const [reports, setReports] = useState<MonthlyReport[]>([])
   const [loading, setLoading] = useState(true)
@@ -208,14 +246,18 @@ function MyReportTab() {
   if (loading) return <div className="flex justify-center py-16"><Loader size={16} className="animate-spin text-gray-300"/></div>
 
   if (reports.length === 0) return (
-    <div className="card text-center py-16">
-      <BarChart2 size={40} className="text-gray-200 mx-auto mb-3"/>
-      <p className="text-sm text-gray-400">No reports yet — reports are generated on the 10th of each month</p>
-    </div>
+    <>
+      <BalanceReportsSection all={false}/>
+      <div className="card text-center py-16">
+        <BarChart2 size={40} className="text-gray-200 mx-auto mb-3"/>
+        <p className="text-sm text-gray-400">No reports yet — reports are generated on the 10th of each month</p>
+      </div>
+    </>
   )
 
   return (
     <div className="space-y-3">
+      <BalanceReportsSection all={false}/>
       {reports.map(r => (
         <div key={r.id} className="card">
           <div className="flex items-center justify-between mb-3">

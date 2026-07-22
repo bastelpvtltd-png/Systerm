@@ -29,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method === 'POST') {
       const { action, task_id, drive_url, file_name, uploaded_by_name } = req.body as {
-        action: 'pick' | 'reject' | 'done'; task_id: string; drive_url?: string; file_name?: string; uploaded_by_name?: string
+        action: 'pick' | 'reject' | 'done' | 'update'; task_id: string; drive_url?: string; file_name?: string; uploaded_by_name?: string
       }
       if (!action || !task_id) return res.status(400).json({ error: 'action and task_id required' })
       const name = await resolveName(authed.userId, uploaded_by_name)
@@ -55,6 +55,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { data: prof } = await sb.from('profiles').select('is_admin').eq('id', authed.userId).maybeSingle()
       if (task.picked_by !== authed.userId && !prof?.is_admin) {
         return res.status(403).json({ error: 'Only the person who picked this can resolve it' })
+      }
+
+      if (action === 'update') {
+        // Lets the picker replace the scanned file on their own in-progress
+        // (still 'picked', not yet Done) task — e.g. they attached the wrong
+        // scan — without going through Reject (which reopens it to the whole
+        // pool) and repicking their own task back.
+        if (!drive_url) return res.status(400).json({ error: 'drive_url required' })
+        if (task.drive_url && task.drive_url !== drive_url) await deleteDriveFileByUrl(task.drive_url).catch(() => {})
+        await sb.from('final_document_tasks').update({ drive_url, file_name: file_name || null }).eq('id', task_id)
+        await sb.from('pick_history_log').insert({ document_id: task.document_id, user_id: authed.userId, user_name: name, action: 'update' })
+        return res.json({ ok: true })
       }
 
       if (action === 'reject') {
@@ -95,19 +107,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await sb.from('pick_history_log').insert({ document_id: task.document_id, user_id: authed.userId, user_name: name, action: 'done' })
 
         // Final Document count — per doc type (pytho/co/safta each have their
-        // own rate, see work-rates.ts), credited to whoever actually did it
-        // (the picker), and only once Done is clicked — a rejected task
-        // never counts, same idea as the CUSDEC/CDN approval gate.
-        const incCol = task.document_type === 'pytho' ? 'pytho_inc' : task.document_type === 'co' ? 'co_inc' : task.document_type === 'safta' ? 'safta_inc' : null
-        if (incCol) {
+        // own rate, see work-rates.ts) — used to credit work_counts directly
+        // the instant Done was clicked. Now routed through the same
+        // doc_approvals admin-authorization gate the CDN/CUSDEC counts use
+        // (see doc-approvals.ts) instead: Done only queues a pending
+        // approval for whoever picked it; the actual pytho_inc/co_inc/
+        // safta_inc credit only happens once an admin-authorized approver
+        // approves it there.
+        if (['pytho', 'co', 'safta'].includes(task.document_type)) {
           try {
-            await sb.from('work_counts').insert({
-              user_id: task.picked_by, user_name: task.picked_by_name || name,
-              document_id: task.document_id, file_name: file_name || task.file_name,
-              reason: 'Final Document', action: 'done',
-              cdn_inc: 0, cusdec_inc: 0, cap_inc: 0, [incCol]: 1,
+            await sb.from('doc_approvals').insert({
+              document_id: task.document_id, cusdec_id: task.cusdec_id, doc_type: task.document_type,
+              reason: 'Final Document', uploaded_by: task.picked_by, uploaded_by_name: task.picked_by_name || name,
+              stage: 'final_document',
             })
-          } catch { /* non-fatal — work_counts is supplemental */ }
+          } catch { /* non-fatal — doc_approvals is supplemental */ }
         }
         return res.json({ ok: true })
       }

@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { requireSection, requireAdmin } from '@/lib/serverAuth'
+import { requireAuth, requireAdmin } from '@/lib/serverAuth'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -17,26 +17,38 @@ const sb = createClient(
 //               the CAP/billing count (cap_inc) — the CUSDEC's own
 //               container count for CUSDEC Passed docs, a flat 1 for CDN.
 // Reject leaves that stage permanently uncounted; the other stage is
-// unaffected either way. Whoever can act here is "admin-authorized" per the
-// user's own wording — gated by section:my-tasks.cusdec-approval like every
-// other grantable admin action, not open to everyone the way Final
-// Document's pick-anyone model is.
+// unaffected either way.
+//
+// Every signed-in user can reach this endpoint now (not just admin-
+// authorized approvers) — but a plain user only ever sees/decides their OWN
+// (uploaded_by = them) pending items and history, read-only otherwise.
+// Approving/rejecting anyone else's item — the actual power this panel
+// gates — still requires section:my-tasks.cusdec-approval (or admin),
+// exactly as before, just no longer gating visibility of one's own queue.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const gated = await requireSection(req, 'section:my-tasks.cusdec-approval')
-  if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
+  const authed = await requireAuth(req)
+  if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
+  const { data: selfProf } = await sb.from('profiles').select('is_admin, allowed_tabs').eq('id', authed.userId).maybeSingle()
+  const isAdmin = !!selfProf?.is_admin
+  const canApproveAll = isAdmin || !!(selfProf?.allowed_tabs || []).includes('section:my-tasks.cusdec-approval')
 
   if (req.method === 'GET') {
     if (req.query.history === '1') {
-      const { data, error } = await sb.from('doc_approvals').select('*').neq('status', 'pending').order('decided_at', { ascending: false }).limit(10)
+      let q = sb.from('doc_approvals').select('*').neq('status', 'pending').order('decided_at', { ascending: false }).limit(10)
+      if (!canApproveAll) q = q.eq('uploaded_by', authed.userId)
+      const { data, error } = await q
       if (error) return res.status(500).json({ error: error.message })
       return res.json({ history: data || [] })
     }
-    const { data, error } = await sb.from('doc_approvals').select('*').eq('status', 'pending').order('created_at', { ascending: true })
+    let q = sb.from('doc_approvals').select('*').eq('status', 'pending').order('created_at', { ascending: true })
+    if (!canApproveAll) q = q.eq('uploaded_by', authed.userId)
+    const { data, error } = await q
     if (error) return res.status(500).json({ error: error.message })
-    return res.json({ approvals: data || [] })
+    return res.json({ approvals: data || [], canApproveAll })
   }
 
   if (req.method === 'POST') {
+    if (!canApproveAll) return res.status(403).json({ error: 'Access required: section:my-tasks.cusdec-approval' })
     const { id, action } = req.body as { id: string; action: 'approve' | 'reject' }
     if (!id || !action) return res.status(400).json({ error: 'id and action required' })
 
@@ -44,16 +56,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!approval) return res.status(404).json({ error: 'Not found' })
     if (approval.status !== 'pending') return res.status(400).json({ error: 'Already decided' })
 
-    const { data: prof } = await sb.from('profiles').select('username, full_name').eq('id', gated.userId).maybeSingle()
+    const { data: prof } = await sb.from('profiles').select('username, full_name').eq('id', authed.userId).maybeSingle()
     const decidedByName = prof?.full_name || prof?.username || ''
 
     if (action === 'reject') {
-      await sb.from('doc_approvals').update({ status: 'rejected', decided_by: gated.userId, decided_by_name: decidedByName, decided_at: new Date().toISOString() }).eq('id', id)
+      await sb.from('doc_approvals').update({ status: 'rejected', decided_by: authed.userId, decided_by_name: decidedByName, decided_at: new Date().toISOString() }).eq('id', id)
       return res.json({ ok: true })
     }
 
     try {
-      if (approval.stage === 'billing') {
+      if (approval.stage === 'boat_note') {
+        // boat_cap is a separate, manually-settable expected count for boat
+        // note billing (distinct from cusdec.cap, which only gates CDN
+        // completeness) — falls back to a flat 1 per document when unset.
+        let boatCapValue = 1
+        if (approval.cusdec_id) {
+          const { data: cusdecRow } = await sb.from('cusdec').select('boat_cap').eq('id', approval.cusdec_id).maybeSingle()
+          const parsed = parseInt(String(cusdecRow?.boat_cap ?? ''), 10)
+          if (parsed > 0) boatCapValue = parsed
+        }
+        await sb.from('work_counts').insert({
+          user_id: approval.uploaded_by, user_name: approval.uploaded_by_name,
+          document_id: approval.document_id, file_name: null,
+          reason: approval.reason, action: 'approved-boat-note',
+          cdn_inc: 0, cusdec_inc: 0, cap_inc: 0, boat_note_inc: boatCapValue,
+        })
+      } else if (approval.stage === 'final_document') {
+        const incCol = approval.doc_type === 'pytho' ? 'pytho_inc' : approval.doc_type === 'co' ? 'co_inc' : approval.doc_type === 'safta' ? 'safta_inc' : null
+        if (incCol) {
+          await sb.from('work_counts').insert({
+            user_id: approval.uploaded_by, user_name: approval.uploaded_by_name,
+            document_id: approval.document_id, file_name: null,
+            reason: approval.reason, action: 'approved-final-document',
+            cdn_inc: 0, cusdec_inc: 0, cap_inc: 0, [incCol]: 1,
+          })
+        }
+      } else if (approval.stage === 'billing') {
         // CAP is the shipment's own container count for CUSDEC Passed —
         // CDN's billing stage has no equivalent per-row cap, so it's a
         // flat 1, same as its old un-gated cdn_inc credit used to be.
@@ -82,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (e: any) {
       return res.status(500).json({ error: 'Approved but crediting the count failed: ' + e.message })
     }
-    await sb.from('doc_approvals').update({ status: 'approved', decided_by: gated.userId, decided_by_name: decidedByName, decided_at: new Date().toISOString() }).eq('id', id)
+    await sb.from('doc_approvals').update({ status: 'approved', decided_by: authed.userId, decided_by_name: decidedByName, decided_at: new Date().toISOString() }).eq('id', id)
     return res.json({ ok: true })
   }
 

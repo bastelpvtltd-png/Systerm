@@ -37,6 +37,23 @@ create table if not exists app_settings (
 
 alter table salary_payments add column if not exists note text;
 
+-- Monthly Report generation used to never reset anything — every report
+-- re-summed the user's ENTIRE work_counts/other_work history, papering over
+-- it with a synthetic self-payment row. `reported` archives exactly the
+-- rows a given report actually summarized, so the next period starts at
+-- zero without losing history (unreported rows keep accumulating normally).
+alter table work_counts add column if not exists reported boolean default false;
+alter table other_work add column if not exists reported boolean default false;
+alter table balance_reports add column if not exists status text default 'received';
+
+-- Boat Note completions (merge-and-pick, reason 'Boat Note Passed') had no
+-- work_counts column of their own and were never gated by doc_approvals —
+-- silently credited nothing. boat_cap is a separate, manually-set expected
+-- count for boat-note billing, distinct from cusdec.cap (CDN-completeness gate).
+alter table work_counts add column if not exists boat_note_inc int default 0;
+alter table work_rates add column if not exists boat_note_rate numeric default 0;
+alter table cusdec add column if not exists boat_cap text;
+
 -- Barcode never had its own boat_note_passed/export_release_passed columns —
 -- the manual color-set on a CUSDEC row (database.tsx) only ever cascaded to
 -- its CDN rows, never to barcode, even though barcode is linked the exact

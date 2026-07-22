@@ -66,13 +66,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const id of ids) {
         const { data: row } = await supabaseAdmin.from('cusdec').select('*').eq('id', id).maybeSingle()
         if (!row) continue
+
+        // Gather every drive_url this CUSDEC's paperwork owns BEFORE
+        // cascadeDeleteCusdec removes the cdn/barcode rows those URLs live
+        // on — same reason the same broadening was needed in the zip-
+        // gathering branch above: document_uploads.cusdec_id is only ever
+        // set for the CUSDEC's own PDF / Final Documents, never for CDN or
+        // Barcode uploads, so cusdec_id alone missed (and left undeleted)
+        // every CDN/Barcode upload + its pick_history_log entries.
+        const docUrls: string[] = [row.pdf_url].filter(Boolean)
+        const { data: cdnRows } = await supabaseAdmin.from('cdn').select('pdf_url, container_no').eq('code', row.code).eq('cusdec_number', row.number)
+        for (const cdn of (cdnRows || [])) {
+          if (cdn.pdf_url) docUrls.push(cdn.pdf_url)
+          if (cdn.container_no) {
+            const { data: barcodeRows } = await supabaseAdmin.from('barcode').select('pdf_url').eq('container_no', cdn.container_no)
+            for (const b of (barcodeRows || [])) if (b.pdf_url) docUrls.push(b.pdf_url)
+          }
+        }
+        const { data: docLinks } = await supabaseAdmin.from('cusdec_document_links').select('drive_url').eq('cusdec_id', id)
+        for (const dl of (docLinks || [])) if (dl.drive_url) docUrls.push(dl.drive_url)
+
         await cascadeDeleteCusdec(row)
+
         // The upload/pick/mail/download audit trail is already saved into
-        // the zip's History sheet — safe to purge here the same way the
-        // documents themselves are.
-        const { data: uploads } = await supabaseAdmin.from('document_uploads').select('id').eq('cusdec_id', id)
-        if (uploads?.length) {
-          const uploadIds = uploads.map(u => u.id)
+        // the zip's Pick History sheet — safe to purge here the same way
+        // the documents themselves are.
+        const [byCusdecId, byDriveUrl] = await Promise.all([
+          supabaseAdmin.from('document_uploads').select('id').eq('cusdec_id', id),
+          docUrls.length ? supabaseAdmin.from('document_uploads').select('id').in('drive_url', docUrls) : Promise.resolve({ data: [] as any[] }),
+        ])
+        const uploadIds = Array.from(new Set([...(byCusdecId.data || []), ...(byDriveUrl.data || [])].map(u => u.id)))
+        if (uploadIds.length) {
           await supabaseAdmin.from('pick_history_log').delete().in('document_id', uploadIds)
           await supabaseAdmin.from('document_uploads').delete().in('id', uploadIds)
         }
@@ -167,10 +191,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         for (const dl of (docLinks || [])) if (dl.drive_url) docs.push({ label: dl.document_type || 'Document', url: dl.drive_url })
 
         // Full upload + pick/mail/download audit trail for every document
-        // ever linked to this CUSDEC — a separate "History" sheet, not just
-        // the documents themselves.
-        const { data: uploads } = await supabaseAdmin.from('document_uploads').select('id, file_name, reason, uploaded_by_name, created_at').eq('cusdec_id', c.id)
-        if (uploads?.length) {
+        // ever linked to this CUSDEC — a separate "Pick History" sheet, not
+        // just the documents themselves. document_uploads.cusdec_id is only
+        // ever set for the CUSDEC's own PDF and Final Documents sent
+        // explicitly against a cusdec — CDN/Barcode uploads never carry it,
+        // so filtering on cusdec_id alone silently dropped every CDN/Barcode
+        // upload's history (and, in the delete branch above, left their
+        // document_uploads + pick_history_log rows never cleaned up at all).
+        // Every doc already gathered into `docs` above (CUSDEC/CDN/Barcode/
+        // linked) has its own drive_url — match document_uploads by THOSE
+        // URLs too, exactly the same link the cusdec DB already stores.
+        const docUrls = docs.map(d => d.url).filter(Boolean)
+        const [byCusdecId, byDriveUrl] = await Promise.all([
+          supabaseAdmin.from('document_uploads').select('id, file_name, reason, uploaded_by_name, created_at').eq('cusdec_id', c.id),
+          docUrls.length
+            ? supabaseAdmin.from('document_uploads').select('id, file_name, reason, uploaded_by_name, created_at').in('drive_url', docUrls)
+            : Promise.resolve({ data: [] as any[] }),
+        ])
+        const uploads = Array.from(new Map([...(byCusdecId.data || []), ...(byDriveUrl.data || [])].map(u => [u.id, u])).values())
+        if (uploads.length) {
           const { data: history } = await supabaseAdmin.from('pick_history_log').select('*').in('document_id', uploads.map(u => u.id))
           for (const h of (history || [])) allHistory.push({ cusdec_number: c.number, ...h })
         }

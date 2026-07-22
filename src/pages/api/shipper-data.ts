@@ -20,16 +20,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const shipperName = prof.shipper_name.trim().toLowerCase()
 
   if (req.method === 'GET') {
-    // Every CUSDEC whose exporter's first line matches this shipper —
-    // "completed" ones (shipment_complete + payment_complete, i.e. Also
-    // Done) always show; everything else only shows once it exists at all,
-    // same visibility rule Assigned Shippers uses elsewhere for the
-    // exporter-name match itself, matched the same normalized way.
-    const { data: rows, error } = await sb.from('cusdec').select('*').order('created_at', { ascending: false }).limit(500)
+    // Every CUSDEC whose exporter's first line matches this shipper, same
+    // visibility rule Assigned Shippers uses elsewhere for the exporter-name
+    // match itself, matched the same normalized way. Data only — pdf_url is
+    // explicitly excluded from the select below, shippers get status, not
+    // document access.
+    const { data: rows, error } = await sb.from('cusdec')
+      .select('id, code, number, exporter, reference, invoice_number, cap, shipment_complete, payment_complete, created_at')
+      .order('created_at', { ascending: false }).limit(500)
     if (error) return res.status(500).json({ error: error.message })
     const mine = (rows || []).filter(c => (c.exporter || '').split('\n')[0].trim().toLowerCase() === shipperName)
-    const completed = mine.filter(c => c.shipment_complete && c.payment_complete)
-    const inProgress = mine.filter(c => !(c.shipment_complete && c.payment_complete))
+    // shipment_complete and payment_complete are independently-settable
+    // flags (payment can lag shipment completion) — shown as two separate
+    // panels rather than one combined AND'd "completed" list, so a shipper
+    // can see shipment status and payment status distinctly.
+    const shipmentComplete = mine.filter(c => c.shipment_complete)
+    const paymentComplete = mine.filter(c => c.payment_complete)
+    const inProgress = mine.filter(c => !c.shipment_complete)
 
     // Shipment Entries this account itself submitted — deliberately
     // filtered by created_by (this login), not by shipper name, so one
@@ -38,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { data: myEntries } = await sb.from('temporary_shipments')
       .select('*').eq('created_by', authed.userId).order('created_at', { ascending: false })
 
-    return res.json({ completed, inProgress, myEntries: myEntries || [] })
+    return res.json({ shipmentComplete, paymentComplete, inProgress, myEntries: myEntries || [] })
   }
 
   if (req.method === 'POST') {

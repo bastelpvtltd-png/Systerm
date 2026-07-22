@@ -47,6 +47,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             document_id, cusdec_id: doc.cusdec_id || null, doc_type: doc.doc_type, reason: doc.reason,
             uploaded_by: authed.userId, uploaded_by_name: userName, stage: 'billing',
           })
+        } else if (doc?.reason === 'Boat Note Passed') {
+          // Boat Note Pending's merge-and-pick flow (see dashboard.tsx's
+          // confirmPick) had no count of its own at all — folds into
+          // neither cdn_inc nor cap_inc. Gated the same way: only counts
+          // once mailed/downloaded, and only after admin approval, crediting
+          // a dedicated boat_note_inc.
+          await supabaseAdmin.from('doc_approvals').insert({
+            document_id, cusdec_id: doc.cusdec_id || null, doc_type: doc.doc_type || 'boat_note', reason: doc.reason,
+            uploaded_by: authed.userId, uploaded_by_name: userName, stage: 'boat_note',
+          })
         }
       } catch { /* non-fatal — doc_approvals is supplemental */ }
     }

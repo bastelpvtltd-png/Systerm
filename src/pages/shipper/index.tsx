@@ -3,7 +3,7 @@ import ShipperLayout from '@/components/shipper/ShipperLayout'
 import { authHeader } from '@/lib/supabase'
 import { Loader, Plus, CheckCircle, Clock, ExternalLink, FileText } from 'lucide-react'
 
-interface CusdecRow { id: string; code: string; number: string; exporter: string; reference?: string; invoice_number?: string; pdf_url?: string; cap?: string; created_at: string }
+interface CusdecRow { id: string; code: string; number: string; exporter: string; reference?: string; invoice_number?: string; cap?: string; created_at: string }
 interface ShipmentEntryRow {
   id: string; reference: string; invoice_number: string; packing_number?: string; consignee?: string
   real_cap?: string; cap?: string; invoice_drive_url?: string; packing_drive_url?: string; license_drive_url?: string
@@ -45,7 +45,8 @@ function FileUploadField({ label, onUpload, currentUrl, uploading }: {
 }
 
 function ShipperContent() {
-  const [completed, setCompleted] = useState<CusdecRow[]>([])
+  const [shipmentComplete, setShipmentComplete] = useState<CusdecRow[]>([])
+  const [paymentComplete, setPaymentComplete] = useState<CusdecRow[]>([])
   const [inProgress, setInProgress] = useState<CusdecRow[]>([])
   const [myEntries, setMyEntries] = useState<ShipmentEntryRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -83,7 +84,10 @@ function ShipperContent() {
     try {
       const res = await fetch('/api/shipper-data', { headers: await authHeader() })
       const d = await res.json()
-      if (res.ok) { setCompleted(d.completed || []); setInProgress(d.inProgress || []); setMyEntries(d.myEntries || []) }
+      if (res.ok) {
+        setShipmentComplete(d.shipmentComplete || []); setPaymentComplete(d.paymentComplete || [])
+        setInProgress(d.inProgress || []); setMyEntries(d.myEntries || [])
+      }
     } finally {
       if (!silent) setLoading(false)
     }
@@ -172,18 +176,31 @@ function ShipperContent() {
       ) : (
         <>
           <div className="card">
-            <h2 className="font-semibold text-gray-900 flex items-center gap-2 mb-3"><CheckCircle size={17} className="text-green-600"/>Completed & Paid Shipments</h2>
-            {completed.length === 0 ? (
+            <h2 className="font-semibold text-gray-900 flex items-center gap-2 mb-3"><CheckCircle size={17} className="text-green-600"/>Complete Shipment</h2>
+            {shipmentComplete.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-6">None yet</p>
             ) : (
               <div className="space-y-2">
-                {completed.map(c => (
-                  <div key={c.id} className="flex items-center justify-between border border-gray-100 rounded-lg p-3 text-sm">
-                    <div>
-                      <p className="font-medium text-gray-800">CUSDEC {c.code} {c.number}</p>
-                      <p className="text-gray-400 text-xs">{c.reference ? `Ref: ${c.reference} · ` : ''}{c.invoice_number ? `Inv: ${c.invoice_number}` : ''}</p>
-                    </div>
-                    {c.pdf_url && <a href={c.pdf_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs flex items-center gap-1"><ExternalLink size={12}/>View</a>}
+                {shipmentComplete.map(c => (
+                  <div key={c.id} className="border border-gray-100 rounded-lg p-3 text-sm">
+                    <p className="font-medium text-gray-800">CUSDEC {c.code} {c.number}</p>
+                    <p className="text-gray-400 text-xs">{c.reference ? `Ref: ${c.reference} · ` : ''}{c.invoice_number ? `Inv: ${c.invoice_number}` : ''}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <h2 className="font-semibold text-gray-900 flex items-center gap-2 mb-3"><CheckCircle size={17} className="text-blue-600"/>Paid Shipment</h2>
+            {paymentComplete.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">None yet</p>
+            ) : (
+              <div className="space-y-2">
+                {paymentComplete.map(c => (
+                  <div key={c.id} className="border border-gray-100 rounded-lg p-3 text-sm">
+                    <p className="font-medium text-gray-800">CUSDEC {c.code} {c.number}</p>
+                    <p className="text-gray-400 text-xs">{c.reference ? `Ref: ${c.reference} · ` : ''}{c.invoice_number ? `Inv: ${c.invoice_number}` : ''}</p>
                   </div>
                 ))}
               </div>

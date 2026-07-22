@@ -755,7 +755,7 @@ export const SECTION_ITEMS = [
   { key: 'section:my-tasks.daily-cost',        tabHref: '/admin/my-tasks', label: 'Daily Cost entry' },
   { key: 'section:my-tasks.balance-update',    tabHref: '/admin/my-tasks', label: 'Balance deposit/top-up' },
   { key: 'section:my-tasks.upload-count',      tabHref: '/admin/my-tasks', label: 'Upload Count panel' },
-  { key: 'section:my-tasks.cusdec-approval',   tabHref: '/admin/my-tasks', label: 'CUSDEC Approvals panel' },
+  { key: 'section:my-tasks.cusdec-approval',   tabHref: '/admin/my-tasks', label: 'Upload/Billing Approvals — approve/reject everyone (elevated)' },
   { key: 'section:documents-upload.upload',    tabHref: '/admin/upload-docs', label: 'Upload PDFs card' },
   { key: 'section:documents-upload.uploaded',  tabHref: '/admin/upload-docs', label: 'Uploaded list card' },
   { key: 'section:documents-upload.preview',   tabHref: '/admin/upload-docs', label: 'All Documents preview panel' },
