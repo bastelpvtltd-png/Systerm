@@ -5,7 +5,7 @@ import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdf
 import {
   Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
   Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square, Trash2, FileCheck,
-  DollarSign, Check,
+  DollarSign, Check, Lock,
 } from 'lucide-react'
 
 // A stored Drive URL is the "view" link (drive.google.com/file/d/<id>/view)
@@ -26,7 +26,7 @@ interface Summary {
   pendingCusdecPassed: PendingGroup<{ id: string; file_name: string; reason: string; reason_note: string | null; created_at: string }>
   shipmentsPending: PendingGroup<{ id: string; reference: string | null; shipper: string; invoice_number: string; packing_number: string | null; new_invoice: string | null; new_packing: string | null; cap: string | null; invoice_drive_url: string | null; packing_drive_url: string | null; license_drive_url: string | null; created_at: string; locked_by?: string | null; locked_by_name?: string | null }>
   cdnPending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number; cdnCount: number; containers: VesselContainer[] }>
-  boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number; containers: VesselContainer[]; hasBoatNote: boolean; hasPartyCopy: boolean }>
+  boatNotePending: PendingGroup<{ cusdecId: string; number: string; exporter: string; cap: number | null; cdnCount: number; passedCount: number; containers: VesselContainer[]; hasBoatNote: boolean; hasPartyCopy: boolean; locked?: boolean; lockedByName?: string | null }>
   releasePending: PendingGroup<{ cusdecId: string; number: string; exporter: string }>
   closingPassed: PendingGroup<{ cdnId: string; containerNo: string; cusdecNumber: string; vessel: string; voyage: string; closingTime: string }>
 }
@@ -139,6 +139,7 @@ function DashboardContent() {
           body: JSON.stringify({
             file_name: f.fileName, drive_url: dd.driveLink, doc_type: f.docType,
             is_saved_to_db: false, notify: true, reason: 'Boat Note Passed',
+            lock_cusdec_ids: selectedPendingIds,
           }),
         })
       }
@@ -373,16 +374,23 @@ function DashboardContent() {
             ) : (
               <div className="space-y-1.5 max-h-96 overflow-y-auto">
                 {summary.boatNotePending.items.map(c => (
-                  <div key={c.cusdecId} className="text-xs border border-gray-100 rounded-lg p-2.5">
+                  <div key={c.cusdecId} className={`text-xs border rounded-lg p-2.5 ${c.locked ? 'border-amber-200 bg-amber-50/40' : 'border-gray-100'}`}>
                     <div className="flex items-center justify-between gap-2">
-                      <button onClick={() => togglePendingSelected(c.cusdecId)} className="flex-shrink-0">
-                        {selectedPendingIds.includes(c.cusdecId) ? <CheckSquare size={15} className="text-blue-600"/> : <Square size={15} className="text-gray-300"/>}
-                      </button>
+                      {c.locked ? (
+                        <span title={`Picked by ${c.lockedByName || '—'} — awaiting Mail/Download`} className="flex-shrink-0">
+                          <Lock size={14} className="text-amber-500"/>
+                        </span>
+                      ) : (
+                        <button onClick={() => togglePendingSelected(c.cusdecId)} className="flex-shrink-0">
+                          {selectedPendingIds.includes(c.cusdecId) ? <CheckSquare size={15} className="text-blue-600"/> : <Square size={15} className="text-gray-300"/>}
+                        </button>
+                      )}
                       <div className="flex-1">
                         <div className="flex items-center gap-1.5">
                           <p className="font-medium text-gray-800">E {c.number}</p>
                           {c.hasBoatNote && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">B</span>}
                           {c.hasPartyCopy && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">P</span>}
+                          {c.locked && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Picked by {c.lockedByName || '—'}</span>}
                         </div>
                         <p className="text-gray-400 truncate max-w-[240px]">{c.exporter}</p>
                       </div>

@@ -37,6 +37,22 @@ create table if not exists app_settings (
 
 alter table salary_payments add column if not exists note text;
 
+-- Boat Note Pending's merge-and-pick could be triggered twice for the same
+-- CUSDEC before the first pick's Mail/Download resolved it (the automation
+-- scraper flipping cdn.boat_note_passed in the meantime could also make a
+-- row vanish from the pending list mid-pick) — this lock keeps a row
+-- pinned/unpickable-by-others from the moment it's merged until Mail/
+-- Download actually resolves it (released in log-document-action.ts).
+create table if not exists boat_note_locks (
+  id uuid primary key default gen_random_uuid(),
+  cusdec_id uuid not null,
+  document_id uuid,
+  locked_by_name text,
+  created_at timestamptz default now()
+);
+create index if not exists boat_note_locks_cusdec_idx on boat_note_locks(cusdec_id);
+create index if not exists boat_note_locks_document_idx on boat_note_locks(document_id);
+
 -- Monthly Report generation used to never reset anything — every report
 -- re-summed the user's ENTIRE work_counts/other_work history, papering over
 -- it with a synthetic self-payment row. `reported` archives exactly the
@@ -48,8 +64,11 @@ alter table balance_reports add column if not exists status text default 'receiv
 
 -- Boat Note completions (merge-and-pick, reason 'Boat Note Passed') had no
 -- work_counts column of their own and were never gated by doc_approvals —
--- silently credited nothing. boat_cap is a separate, manually-set expected
--- count for boat-note billing, distinct from cusdec.cap (CDN-completeness gate).
+-- silently credited nothing. Credited value is the CUSDEC's own existing
+-- `cap` column (same field the CAP/billing stage reads) — no separate
+-- column needed for this. (cusdec.boat_cap from an earlier draft of this
+-- migration is unused — left in place, harmless, but doc-approvals.ts reads
+-- cap directly.)
 alter table work_counts add column if not exists boat_note_inc int default 0;
 alter table work_rates add column if not exists boat_note_rate numeric default 0;
 alter table cusdec add column if not exists boat_cap text;

@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'POST') {
       const authed = await requireAuth(req)
       if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
-      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note, cusdec_id, cusdec_number } = req.body
+      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note, cusdec_id, cusdec_number, lock_cusdec_ids } = req.body
       if (!file_name) return res.status(400).json({ error: 'file_name required' })
 
       let uploadedByName = uploaded_by_name || ''
@@ -42,6 +42,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         cusdec_id: cusdec_id || null,
       }).select().single()
       if (error) throw error
+
+      // Boat Note Pending's merge-and-pick (dashboard.tsx's confirmPick)
+      // pins every CUSDEC it just merged so it can't be picked/merged again
+      // by someone else — and stays visible in the pending list — until
+      // this exact document is Mailed/Downloaded (released in
+      // log-document-action.ts). See boat_note_locks migration.
+      if (Array.isArray(lock_cusdec_ids) && lock_cusdec_ids.length) {
+        try {
+          await supabaseAdmin.from('boat_note_locks').insert(
+            lock_cusdec_ids.map((cid: string) => ({ cusdec_id: cid, document_id: data.id, locked_by_name: uploadedByName }))
+          )
+        } catch { /* non-fatal — locks are supplemental, not a hard guarantee */ }
+      }
 
       // "Final Document" is its own approval queue (final_document_tasks),
       // separate from the generic Notify/dashboard_notifications pending-item

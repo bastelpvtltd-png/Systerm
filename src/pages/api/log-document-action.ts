@@ -52,11 +52,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // confirmPick) had no count of its own at all — folds into
           // neither cdn_inc nor cap_inc. Gated the same way: only counts
           // once mailed/downloaded, and only after admin approval, crediting
-          // a dedicated boat_note_inc.
-          await supabaseAdmin.from('doc_approvals').insert({
-            document_id, cusdec_id: doc.cusdec_id || null, doc_type: doc.doc_type || 'boat_note', reason: doc.reason,
-            uploaded_by: authed.userId, uploaded_by_name: userName, stage: 'boat_note',
-          })
+          // a dedicated boat_note_inc — one per CUSDEC this merge covered
+          // (see boat_note_locks; a merge can span several CUSDECs at once,
+          // each with its own cap). A single pick batch produces up to 3
+          // separate documents (Boat Note/Party's Copy/CDN merged PDFs),
+          // each locking the same CUSDECs under their own document_id — so
+          // whichever of the 3 gets Mailed/Downloaded FIRST is the one that
+          // credits and releases the lock for that CUSDEC (deleted by
+          // cusdec_id, not just this document_id) — the other 2 will find
+          // no lock left for it and correctly skip crediting a second/third
+          // time for the same CUSDEC.
+          const { data: locks } = await supabaseAdmin.from('boat_note_locks').select('cusdec_id').eq('document_id', document_id)
+          if (locks?.length) {
+            const cusdecIds = locks.map(l => l.cusdec_id)
+            await supabaseAdmin.from('doc_approvals').insert(
+              cusdecIds.map(cid => ({
+                document_id, cusdec_id: cid, doc_type: doc.doc_type || 'boat_note', reason: doc.reason,
+                uploaded_by: authed.userId, uploaded_by_name: userName, stage: 'boat_note',
+              }))
+            )
+            await supabaseAdmin.from('boat_note_locks').delete().in('cusdec_id', cusdecIds)
+          }
         }
       } catch { /* non-fatal — doc_approvals is supplemental */ }
     }

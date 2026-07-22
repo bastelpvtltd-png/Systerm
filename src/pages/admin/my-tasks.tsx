@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase, authHeader } from '@/lib/supabase'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight, Save, Undo2, Briefcase, FileCheck } from 'lucide-react'
+import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight, Save, Undo2, Briefcase, FileCheck, Clock } from 'lucide-react'
 
 interface Task {
   id: string
@@ -105,7 +105,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
 
   useEffect(() => {
     load()
-    supabase.from('profiles').select('id, username, full_name').then(({ data }) => setUsers((data as any) || []))
+    supabase.from('profiles').select('id, username, full_name').eq('is_shipper', false).then(({ data }) => setUsers((data as any) || []))
     const t = setInterval(load, 15000)
     return () => clearInterval(t)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -749,7 +749,7 @@ function OtherWorkPanel({ userId, isAdmin }: { userId: string | null; isAdmin: b
     setMyItems(mine.items || [])
     if (isAdmin) {
       setAllItems(all.items || [])
-      const { data } = await supabase.from('profiles').select('id, username, full_name')
+      const { data } = await supabase.from('profiles').select('id, username, full_name').eq('is_shipper', false)
       setUsers((data as any) || [])
     }
   }
@@ -1303,7 +1303,7 @@ function MyTasksContent() {
         <UploadCountPanel userId={userId} isAdmin={isAdmin}/>
       )}
 
-      <CusdecApprovalsPanel/>
+      {(isAdmin || has('section:my-tasks.cusdec-approval')) ? <ApprovalsAccessPanel/> : <MyPendingApprovalsPanel/>}
 
     </div>
   )
@@ -1325,13 +1325,17 @@ interface DocApproval {
 // ever credits automatically. Approve turns a pending stage into a real
 // count, exactly once; Reject leaves that stage permanently uncounted.
 //
-// Every signed-in user sees this panel now — but a plain user only ever
-// sees their OWN pending items and history (read-only, no Approve/Reject —
-// the server enforces this too, this is just matching UI). Only someone
-// holding section:my-tasks.cusdec-approval (or an admin) sees everyone's
-// queue and gets the Approve/Reject buttons — `canApproveAll` comes back
-// from the API itself, computed server-side, not guessed client-side.
-function CusdecApprovalsPanel() {
+// Two entirely separate panels now, not one panel with conditional buttons:
+//   ApprovalsAccessPanel  — Approve/Reject + full history, only rendered for
+//                           whoever holds section:my-tasks.cusdec-approval
+//                           (or admin) — everyone else's items, real actions.
+//   MyPendingApprovalsPanel — every signed-in user, their OWN pending items
+//                           + own history only, view-only (no buttons at
+//                           all — approving is exclusively the other panel's
+//                           job, enforced server-side too).
+const stageLabel = (s: string) => s === 'billing' ? 'Billing (CAP)' : s === 'boat_note' ? 'Boat Note' : s === 'final_document' ? 'Final Document' : 'Upload Count'
+
+function ApprovalsAccessPanel() {
   const { isAdmin } = usePermission()
   const [items, setItems] = useState<DocApproval[]>([])
   const [history, setHistory] = useState<DocApproval[]>([])
@@ -1339,14 +1343,13 @@ function CusdecApprovalsPanel() {
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState('')
-  const [canApproveAll, setCanApproveAll] = useState(false)
 
   async function load(silent = false) {
     if (!silent) setLoading(true)
     try {
       const res = await fetch('/api/doc-approvals', { headers: await authHeader() })
       const d = await res.json()
-      if (res.ok) { setItems(d.approvals || []); setCanApproveAll(!!d.canApproveAll) }
+      if (res.ok) setItems(d.approvals || [])
     } finally {
       if (!silent) setLoading(false)
     }
@@ -1383,12 +1386,10 @@ function CusdecApprovalsPanel() {
     if (res.ok) setHistory(prev => prev.filter(x => x.id !== id))
   }
 
-  const stageLabel = (s: string) => s === 'billing' ? 'Billing (CAP)' : 'Upload Count'
-
   return (
     <div className="card mb-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><CheckCircle size={15} className="text-indigo-500"/>Upload/Billing Approvals</h2>
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><CheckCircle size={15} className="text-indigo-500"/>Approvals — Approve/Reject</h2>
         <button onClick={() => { setShowHistory(x => !x); if (!showHistory) loadHistory() }} className="text-[11px] text-gray-500 hover:text-gray-700">
           {showHistory ? 'Hide history' : 'Show history'}
         </button>
@@ -1426,20 +1427,87 @@ function CusdecApprovalsPanel() {
                 <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}</p>
                 <p className="text-gray-400">{it.reason} · {new Date(it.created_at).toLocaleString('en-GB')}</p>
               </div>
-              {canApproveAll ? (
-                <div className="flex items-center gap-1.5">
-                  <button onClick={() => decide(it.id, 'approve')} disabled={busyId === it.id}
-                    className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
-                    {busyId === it.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
-                  </button>
-                  <button onClick={() => decide(it.id, 'reject')} disabled={busyId === it.id}
-                    className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
-                    <X size={10}/>Reject
-                  </button>
-                </div>
-              ) : (
-                <span className="text-[11px] text-amber-600 font-medium flex-shrink-0">Awaiting approval</span>
-              )}
+              <div className="flex items-center gap-1.5">
+                <button onClick={() => decide(it.id, 'approve')} disabled={busyId === it.id}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                  {busyId === it.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
+                </button>
+                <button onClick={() => decide(it.id, 'reject')} disabled={busyId === it.id}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
+                  <X size={10}/>Reject
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MyPendingApprovalsPanel() {
+  const [items, setItems] = useState<DocApproval[]>([])
+  const [history, setHistory] = useState<DocApproval[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
+    try {
+      const res = await fetch('/api/doc-approvals', { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setItems(d.approvals || [])
+    } finally {
+      if (!silent) setLoading(false)
+    }
+  }
+  async function loadHistory() {
+    const res = await fetch('/api/doc-approvals?history=1', { headers: await authHeader() })
+    const d = await res.json()
+    if (res.ok) setHistory(d.history || [])
+  }
+  useEffect(() => {
+    load()
+    const t = setInterval(() => load(true), 20000)
+    return () => clearInterval(t)
+  }, [])
+
+  return (
+    <div className="card mb-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Clock size={15} className="text-amber-500"/>My Pending Approvals</h2>
+        <button onClick={() => { setShowHistory(x => !x); if (!showHistory) loadHistory() }} className="text-[11px] text-gray-500 hover:text-gray-700">
+          {showHistory ? 'Hide history' : 'Show history'}
+        </button>
+      </div>
+      {showHistory ? (
+        history.length === 0 ? (
+          <p className="text-xs text-gray-400 py-4 text-center">No decided items yet</p>
+        ) : (
+          <div className="space-y-1.5">
+            {history.map(it => (
+              <div key={it.id} className="text-xs border border-gray-100 rounded-lg p-2.5">
+                <p className="font-medium text-gray-800">{it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}
+                  <span className={`ml-1.5 font-semibold ${it.status === 'approved' ? 'text-green-600' : 'text-red-500'}`}>{it.status}</span>
+                </p>
+                <p className="text-gray-400">by {it.decided_by_name} · {it.decided_at ? new Date(it.decided_at).toLocaleString('en-GB') : ''}</p>
+              </div>
+            ))}
+          </div>
+        )
+      ) : loading ? (
+        <div className="flex justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-gray-400 py-4 text-center">Nothing pending right now</p>
+      ) : (
+        <div className="space-y-1.5">
+          {items.map(it => (
+            <div key={it.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
+              <div>
+                <p className="font-medium text-gray-800">{it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}</p>
+                <p className="text-gray-400">{it.reason} · {new Date(it.created_at).toLocaleString('en-GB')}</p>
+              </div>
+              <span className="text-[11px] text-amber-600 font-medium flex-shrink-0">Awaiting approval</span>
             </div>
           ))}
         </div>
@@ -1471,7 +1539,7 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
       const r = await fetch('/api/work-counts?all=1', { headers: h })
       const d = await r.json()
       if (d.rows) setAllRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload'))
-      const { data } = await supabase.from('profiles').select('id, username, full_name')
+      const { data } = await supabase.from('profiles').select('id, username, full_name').eq('is_shipper', false)
       setUsers((data as any) || [])
     } catch {}
   }

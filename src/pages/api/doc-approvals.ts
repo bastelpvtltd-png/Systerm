@@ -66,13 +66,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
       if (approval.stage === 'boat_note') {
-        // boat_cap is a separate, manually-settable expected count for boat
-        // note billing (distinct from cusdec.cap, which only gates CDN
-        // completeness) — falls back to a flat 1 per document when unset.
+        // "Boat cap" here is just the CUSDEC's own cap value (same field the
+        // CAP/billing stage already reads) — this stage's own name for it,
+        // not a separate column. Falls back to a flat 1 per document when unset.
         let boatCapValue = 1
         if (approval.cusdec_id) {
-          const { data: cusdecRow } = await sb.from('cusdec').select('boat_cap').eq('id', approval.cusdec_id).maybeSingle()
-          const parsed = parseInt(String(cusdecRow?.boat_cap ?? ''), 10)
+          const { data: cusdecRow } = await sb.from('cusdec').select('cap').eq('id', approval.cusdec_id).maybeSingle()
+          const parsed = parseInt(String(cusdecRow?.cap ?? ''), 10)
           if (parsed > 0) boatCapValue = parsed
         }
         await sb.from('work_counts').insert({

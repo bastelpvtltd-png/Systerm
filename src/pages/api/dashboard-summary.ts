@@ -50,6 +50,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       supabaseAdmin.from('document_uploads').select('id, file_name, reason, reason_note, created_at').eq('reason', 'CUSDEC Passed').order('created_at', { ascending: false }),
       supabaseAdmin.from('vessel_triggers').select('vessel, voyage, opening_time, closing_time, etb'),
     ])
+    // Boat Note Pending rows currently mid-pick (merged, not yet Mailed/
+    // Downloaded) stay pinned in the list — and un-pickable — even if the
+    // automation scraper flips cdn.boat_note_passed on all their CDNs in
+    // the meantime, so a pick in progress can never get silently duplicated
+    // or vanish out from under whoever's handling it. Released in
+    // log-document-action.ts once Mail/Download resolves it.
+    const { data: boatNoteLocks } = await supabaseAdmin.from('boat_note_locks').select('cusdec_id, locked_by_name')
+    const lockedCusdecIds = new Set((boatNoteLocks || []).map(l => l.cusdec_id))
+    const lockedByName = new Map((boatNoteLocks || []).map(l => [l.cusdec_id, l.locked_by_name]))
     let reasonDocs = reasonDocsRaw || []
     if (reasonDocs.length) {
       const { data: activeNotifs } = await supabaseAdmin.from('dashboard_notifications')
@@ -126,17 +135,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         })
 
-      if (capKnown && own.length < cap) {
+      const locked = lockedCusdecIds.has(c.id)
+      if (capKnown && own.length < cap && !locked) {
         cdnPending.push({ cusdecId: c.id, number: c.number, exporter: c.exporter, cap, cdnCount: own.length, containers })
-      } else if (capComplete && !allBoatNotePassed) {
+      } else if ((capComplete && !allBoatNotePassed) || locked) {
         boatNotePending.push({
           cusdecId: c.id, number: c.number, exporter: c.exporter, cap: cap || null, cdnCount: own.length,
           passedCount: own.filter(d => d.boat_note_passed).length, containers,
           hasBoatNote: !!c.boat_note_url, hasPartyCopy: !!c.party_copy_url,
+          locked, lockedByName: lockedByName.get(c.id) || null,
         })
       }
 
-      if (allBoatNotePassed && !c.export_release_passed) {
+      if (allBoatNotePassed && !c.export_release_passed && !locked) {
         releasePending.push({ cusdecId: c.id, number: c.number, exporter: c.exporter })
       }
     }
