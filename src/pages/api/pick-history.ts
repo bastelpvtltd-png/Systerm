@@ -9,7 +9,7 @@ const supabaseAdmin = createClient(
 
 const PAGE_SIZE = 50
 
-interface HistoryEvent { action: string; user_name: string; action_timestamp: string }
+interface HistoryEvent { action: string; user_name: string; user_id?: string; action_timestamp: string }
 
 // Processed History — one row per document (not one row per action), so a
 // document that got uploaded, notified, picked, returned, and re-picked
@@ -39,11 +39,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { data: userFilteredEvents } = await logQuery
       const userMatchedIds = user ? new Set((userFilteredEvents || []).map(e => e.document_id)) : null
 
-      const { data: allEvents } = await supabaseAdmin.from('pick_history_log').select('document_id, action, user_name, action_timestamp')
+      const { data: allEvents } = await supabaseAdmin.from('pick_history_log').select('document_id, action, user_name, user_id, action_timestamp')
       const eventsByDoc = new Map<string, HistoryEvent[]>()
       for (const e of allEvents || []) {
         if (!eventsByDoc.has(e.document_id)) eventsByDoc.set(e.document_id, [])
-        eventsByDoc.get(e.document_id)!.push({ action: e.action, user_name: e.user_name, action_timestamp: e.action_timestamp })
+        eventsByDoc.get(e.document_id)!.push({ action: e.action, user_name: e.user_name, user_id: e.user_id, action_timestamp: e.action_timestamp })
       }
 
       let candidateIds = Array.from(eventsByDoc.keys())
@@ -121,6 +121,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json({ ok: true })
     } catch (err: any) {
       console.error('[pick-history] delete error:', err)
+      return res.status(500).json({ error: err.message })
+    }
+  }
+
+  if (req.method === 'POST' && req.body?.action === 'restore') {
+    // Safety net for "Download removed the task but the file never actually
+    // saved" (there's no browser event to detect that) — admin puts the
+    // document back into whoever's My Picked Tasks it was in, same shape as
+    // a fresh Pick (pick-task.ts), instead of them having to re-find and
+    // re-pick it from Incoming (which may not even show it anymore).
+    const gated = await requireAdmin(req)
+    if (!gated.ok) return res.status(gated.status).json({ error: gated.error })
+    try {
+      const { document_id, user_id, user_name } = req.body as { document_id: string; user_id: string; user_name: string }
+      if (!document_id || !user_id) return res.status(400).json({ error: 'document_id and user_id required' })
+
+      const { data: existing } = await supabaseAdmin.from('user_tasks').select('id').eq('document_id', document_id).eq('status', 'active').maybeSingle()
+      if (existing) return res.status(409).json({ error: 'Already an active picked task for this document' })
+
+      const { error: taskErr } = await supabaseAdmin.from('user_tasks').insert({
+        document_id, user_id, user_name: user_name || '', status: 'active',
+      })
+      if (taskErr) throw taskErr
+      await supabaseAdmin.from('document_uploads').update({ status: 'picked' }).eq('id', document_id)
+      await supabaseAdmin.from('pick_history_log').insert({ document_id, user_id, user_name: user_name || '', action: 'pick' })
+
+      return res.json({ ok: true })
+    } catch (err: any) {
+      console.error('[pick-history] restore error:', err)
       return res.status(500).json({ error: err.message })
     }
   }

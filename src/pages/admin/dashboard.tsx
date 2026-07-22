@@ -798,18 +798,15 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   function downloadSelected() {
     if (!confirmReasonDeleteBatch(selectedTasks)) return
     const ids = new Set(selectedTasks.map(t => t.id))
+    // No browser event exists for "the save dialog was actually completed
+    // vs cancelled" on a triggered download — rather than a confirm() the
+    // user has to answer honestly every time, this removes the task on
+    // click (matching Mail's "sent = done" feel) and leaves Processed
+    // History's per-entry "Restore to Picked Tasks" (admin) as the correct
+    // way back in if a download never actually finished.
     for (const t of selectedTasks) {
       if (!t.document_uploads?.drive_url) continue
       window.open(toDriveDownloadUrl(t.document_uploads.drive_url), '_blank')
-    }
-    // There's no browser event for "the save dialog was cancelled" on a new-
-    // tab Drive link — clicking Download used to mark every file downloaded
-    // (and remove it from this list) the instant the tab opened, whether or
-    // not the file was actually saved. Asking here instead of assuming means
-    // a cancelled/interrupted download doesn't silently vanish from the list.
-    if (!window.confirm(`${selectedTasks.length} file${selectedTasks.length === 1 ? '' : 's'} download unada? "OK" kaloth okkoma My Picked Tasks eken ain wenawa.`)) return
-    for (const t of selectedTasks) {
-      if (!t.document_uploads?.drive_url) continue
       logAction(t.document_uploads.id, 'download')
       if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
     }
@@ -897,7 +894,6 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                     <button onClick={() => {
                       if (!confirmReasonDelete(t.document_uploads)) return
                       window.open(toDriveDownloadUrl(t.document_uploads.drive_url), '_blank')
-                      if (!window.confirm('PDF eka download unada? "OK" kaloth me task eka My Picked Tasks eken ain wenawa.')) return
                       logAction(t.document_uploads.id, 'download')
                       if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
                       setTasks(prev => prev.filter(x => x.id !== t.id))
@@ -958,7 +954,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
 // The full raw event list still exists per document — "View" opens it in a
 // popup for the rare case someone needs the entire timeline, not just the
 // latest state of each action.
-interface HistoryEvent { action: string; user_name: string; action_timestamp: string }
+interface HistoryEvent { action: string; user_name: string; user_id?: string; action_timestamp: string }
 interface DocHistoryRow {
   document_id: string; file_name: string; doc_type: string; uploaded_by_name: string; uploaded_at: string
   reason?: string | null; reason_note?: string | null
@@ -1230,6 +1226,21 @@ function PickHistoryPanel() {
     else { const d = await res.json().catch(() => ({})); alert(d.error || 'Delete failed') }
   }
 
+  // Safety net for Download removing a task before the file actually
+  // finished saving (no browser event exists to tell the two apart) —
+  // puts it back into whoever downloaded/mailed it's My Picked Tasks.
+  async function restoreToPicked(row: DocHistoryRow) {
+    const source = row.download || row.mail || row.pick
+    if (!source?.user_id) { alert('No user on record for this action — cannot restore.'); return }
+    if (!confirm(`Restore "${row.file_name}" to ${source.user_name}'s My Picked Tasks?`)) return
+    const res = await fetch('/api/pick-history', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+      body: JSON.stringify({ action: 'restore', document_id: row.document_id, user_id: source.user_id, user_name: source.user_name }),
+    })
+    const d = await res.json()
+    if (!res.ok) alert(d.error || 'Restore failed')
+  }
+
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
   const selectedIds = Object.keys(selected).filter(id => selected[id])
   const allSelected = items.length > 0 && selectedIds.length === items.length
@@ -1322,6 +1333,11 @@ function PickHistoryPanel() {
                   <td className="px-2 py-1.5 whitespace-nowrap">
                     <div className="flex items-center gap-1.5">
                       <button onClick={() => setViewing(row)} className="text-gray-400 hover:text-gray-600" title="View full history"><Eye size={13}/></button>
+                      {canDelete && (row.download || row.mail) && (
+                        <button onClick={() => restoreToPicked(row)} className="text-blue-400 hover:text-blue-600" title="Restore to Picked Tasks">
+                          <UserCheck size={13}/>
+                        </button>
+                      )}
                       {canDelete && (
                         <button onClick={() => remove(row.document_id)} className="text-red-400 hover:text-red-600" title="Delete">
                           <Trash2 size={12}/>
