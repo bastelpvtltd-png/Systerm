@@ -66,7 +66,7 @@ function GlobalErrorWidget({ isAdmin }: { isAdmin: boolean }) {
 
   // Admin-only display — every fetch/console still gets patched regardless
   // (harmless), but a non-admin account never sees the badge itself.
-  if (!isAdmin || !errors.length) return null
+  if (!isAdmin) return null
 
   function copyAll() {
     const text = errors.map(e => `[${e.time}] ${e.message}${e.detail ? ' — ' + e.detail : ''}`).join('\n')
@@ -75,11 +75,16 @@ function GlobalErrorWidget({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <>
-      <button onClick={() => setOpen(o => !o)} title="Errors"
-        className="fixed top-3 right-3 z-[100] w-7 h-7 rounded-full bg-red-600 text-white text-[11px] font-bold flex items-center justify-center shadow-lg hover:bg-red-700">
+      {/* Always visible (even at zero) so it's obvious this is watching at
+          all — a badge that only ever appears once something's already
+          wrong is easy to miss the first time it matters. */}
+      <button onClick={() => errors.length && setOpen(o => !o)} title={errors.length ? 'Errors' : 'No errors'}
+        className={`fixed top-3 right-3 z-[100] w-7 h-7 rounded-full text-white text-[11px] font-bold flex items-center justify-center shadow-lg ${
+          errors.length ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-300'
+        }`}>
         {errors.length > 99 ? '99+' : errors.length}
       </button>
-      {open && (
+      {open && !!errors.length && (
         <div className="fixed top-12 right-3 z-[100] w-96 max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-2xl p-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-gray-700 flex items-center gap-1"><AlertTriangle size={13} className="text-red-500"/>Errors ({errors.length})</p>

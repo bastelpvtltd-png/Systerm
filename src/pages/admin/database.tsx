@@ -112,6 +112,7 @@ function StorageStatsPanel() {
 function CusdecExportPanel() {
   const [expanded, setExpanded] = useState(false)
   const [dateField, setDateField] = useState<'created_at' | 'payment_complete_at'>('created_at')
+  const [status, setStatus] = useState('all')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [shipper, setShipper] = useState('')
@@ -130,7 +131,7 @@ function CusdecExportPanel() {
     try {
       const res = await fetch('/api/database-export', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ startDate, endDate, dateField, shipper: shipper || undefined, reference: reference || undefined, code: code || undefined }),
+        body: JSON.stringify({ startDate, endDate, dateField, status, shipper: shipper || undefined, reference: reference || undefined, code: code || undefined }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Export failed')
@@ -171,6 +172,18 @@ function CusdecExportPanel() {
               <select value={dateField} onChange={e => setDateField(e.target.value as any)} className="input text-sm w-full">
                 <option value="created_at">Created At</option>
                 <option value="payment_complete_at">Payment Done Date</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+              <select value={status} onChange={e => setStatus(e.target.value)} className="input text-sm w-full">
+                <option value="all">All</option>
+                <option value="cdn_pending">CDN Pending</option>
+                <option value="boat_note_pending">Boat Note Pending</option>
+                <option value="release_pending">Export Release Pending</option>
+                <option value="not_complete_shipment">Not Complete Shipment</option>
+                <option value="not_payment_complete">Not Payment Complete</option>
+                <option value="also_done">Also Done (payment complete)</option>
               </select>
             </div>
             <div>
@@ -283,10 +296,6 @@ function DatabaseContent() {
   const [columns, setColumns] = useState<string[]>([])
   const [sortCol, setSortCol] = useState('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-  // CUSDEC's own color picks, keyed by "code|number" — looked up when viewing
-  // the CDN table so a CDN row can inherit its parent CUSDEC's color without
-  // storing the color a second time on the cdn row itself.
-  const [cusdecColors, setCusdecColors] = useState<Record<string, string>>({})
 
   // Tracks whether there are any unsaved cell edits right now, without
   // making the polling effect below depend on (and re-create its interval
@@ -326,36 +335,35 @@ function DatabaseContent() {
     if (visibleTables.length && !visibleTables.some(t => t.key === table)) setTable(visibleTables[0].key)
   }, [visibleTables, table])
 
-  // On the CUSDEC tab the color lives right on `rows`; on the CDN tab (or any
-  // other) fetch just the CUSDEC color map so CDN rows can show their parent's
-  // color automatically.
-  useEffect(() => {
-    if (table === 'cusdec' || !has('section:database.cusdec')) return
-    let cancelled = false
-    async function loadColors() {
-      try {
-        const res = await fetch('/api/admin-data?table=cusdec', { headers: await authHeader() })
-        const d = await res.json()
-        if (cancelled || !res.ok) return
-        const map: Record<string, string> = {}
-        for (const r of (d.rows || [])) if (r.row_color) map[`${r.code}|${r.number}`] = r.row_color
-        setCusdecColors(map)
-      } catch {}
-    }
-    loadColors()
-    const t = setInterval(loadColors, 15000)
-    return () => { cancelled = true; clearInterval(t) }
-  }, [table]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function setRowColor(rowId: string, color: string) {
+  // Green/Blue here IS export_release_passed/boat_note_passed — the same
+  // flags Automation's Boat Note Check / Export Release Check set, and the
+  // same ones Dashboard's Boat Note Pending / Export Release Pending counts
+  // read. Setting a CUSDEC's color writes those two real columns (not a
+  // separate decorative one) and cascades the same values to every one of
+  // its CDN rows (which carry their own copies of both flags) — that's what
+  // takes it out of the pending counts, and it's what CDN rows already
+  // display via the existing green/blue left-border indicator, no separate
+  // color storage or lookup needed for them.
+  async function setRowColor(rowId: string, code: string, number: string, color: string) {
+    const exportReleasePassed = color === 'green'
+    const boatNotePassed = color === 'green' || color === 'blue'
     try {
       const res = await fetch('/api/admin-data', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ table: 'cusdec', id: rowId, updates: { row_color: color || null } }),
+        body: JSON.stringify({ table: 'cusdec', id: rowId, updates: { export_release_passed: exportReleasePassed, boat_note_passed: boatNotePassed } }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Save failed')
-      setRows(prev => prev.map(r => r.id === rowId ? { ...r, row_color: color || null } : r))
+      setRows(prev => prev.map(r => r.id === rowId ? { ...r, export_release_passed: exportReleasePassed, boat_note_passed: boatNotePassed } : r))
+
+      const h = await authHeader()
+      const cdnRes = await fetch(`/api/list-records?table=cdn&filter=cusdec_number&value=${encodeURIComponent(number)}`, { headers: h })
+      const cdnData = await cdnRes.json()
+      const cdnRows = ((cdnData.records || []) as any[]).filter(c => c.code === code)
+      await Promise.all(cdnRows.map(c => fetch('/api/admin-data', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...h },
+        body: JSON.stringify({ table: 'cdn', id: c.id, updates: { export_release_passed: exportReleasePassed, boat_note_passed: boatNotePassed } }),
+      })))
     } catch (e: any) {
       alert('Color update failed: ' + e.message)
     }
@@ -365,7 +373,7 @@ function DatabaseContent() {
     return drafts[row.id] || row
   }
 
-  const visibleColumns = columns.filter(col => col !== 'row_color')
+  const visibleColumns = columns
 
   const sortedRows = [...rows].sort((a, b) => {
     const av = a[sortCol], bv = b[sortCol]
@@ -508,8 +516,7 @@ function DatabaseContent() {
                   const draft = draftFor(row)
                   const dirty = !!drafts[row.id]
                   const statusColor = row.export_release_passed ? 'border-l-4 border-l-green-500' : row.boat_note_passed ? 'border-l-4 border-l-blue-500' : ''
-                  const manualColor = table === 'cusdec' ? (row.row_color || '') : (cusdecColors[`${row.code}|${row.cusdec_number}`] || '')
-                  const colorBg = ROW_COLOR_BG[manualColor] || ''
+                  const colorBg = row.export_release_passed ? ROW_COLOR_BG.green : row.boat_note_passed ? ROW_COLOR_BG.blue : ''
                   return (
                     <tr key={row.id} className={`border-b border-gray-50 ${dirty ? 'bg-amber-50' : colorBg || 'hover:bg-gray-50'} ${statusColor}`}>
                       {visibleColumns.map(col => {
@@ -551,8 +558,9 @@ function DatabaseContent() {
                       <td className="px-2 py-1.5 whitespace-nowrap">
                         <div className="flex items-center gap-1">
                           {table === 'cusdec' && (
-                            <select value={row.row_color || ''} onChange={e => setRowColor(row.id, e.target.value)}
-                              title="Row color (also applied to this CUSDEC's CDN rows)"
+                            <select value={row.export_release_passed ? 'green' : row.boat_note_passed ? 'blue' : ''}
+                              onChange={e => setRowColor(row.id, row.code, row.number, e.target.value)}
+                              title="Green = Export Release passed, Blue = Boat Note passed — also applied to this CUSDEC's CDN rows"
                               className="text-[10px] border border-gray-200 rounded px-1 py-1 bg-white text-gray-600">
                               {ROW_COLORS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                             </select>
