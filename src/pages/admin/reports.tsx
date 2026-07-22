@@ -1,7 +1,7 @@
 ﻿import { useEffect, useState } from "react"
 import AdminLayout, { usePermission } from "@/components/admin/AdminLayout"
 import { authHeader, supabase } from "@/lib/supabase"
-import { BarChart2, Users, FileText, RefreshCw, Loader, ChevronDown, Save, AlertTriangle } from "lucide-react"
+import { BarChart2, Users, FileText, RefreshCw, Loader, ChevronDown, Save, AlertTriangle, Trash2 } from "lucide-react"
 
 interface UserProfile {
   id: string; user_id: string; display_name: string | null; role: string
@@ -197,14 +197,30 @@ interface BalanceReport { id: string; user_id: string; user_name: string; drive_
 // Monthly Balance Reports (generate-balance-report.ts) — separate from the
 // hours/tasks MonthlyReport system above. all=false: own reports only.
 function BalanceReportsSection({ all }: { all: boolean }) {
+  const { isAdmin } = usePermission()
   const [reports, setReports] = useState<BalanceReport[]>([])
   const [loading, setLoading] = useState(true)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  useEffect(() => {
-    authHeader().then(h => fetch(`/api/balance-reports${all ? '?all=1' : ''}`, { headers: h }))
-      .then(r => r.json()).then(d => setReports(d.reports || [])).catch(() => {})
-      .finally(() => setLoading(false))
-  }, [all])
+  async function load() {
+    const h = await authHeader()
+    const r = await fetch(`/api/balance-reports${all ? '?all=1' : ''}`, { headers: h })
+    const d = await r.json()
+    if (r.ok) setReports(d.reports || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [all])
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this report? The underlying work history it summarized stays reset either way — this only removes the record and PDF link.')) return
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/balance-reports?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+      if (res.ok) setReports(prev => prev.filter(r => r.id !== id))
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   if (loading) return null
   if (reports.length === 0) return null
@@ -221,7 +237,14 @@ function BalanceReportsSection({ all }: { all: boolean }) {
                 <span className={`ml-1 font-semibold ${r.status === 'received' ? 'text-green-600' : 'text-amber-600'}`}> {r.status}</span>
               </p>
             </div>
-            <a href={r.drive_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs">View</a>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <a href={r.drive_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs">View</a>
+              {isAdmin && (
+                <button onClick={() => handleDelete(r.id)} disabled={deletingId === r.id} className="text-gray-300 hover:text-red-500 disabled:opacity-50">
+                  {deletingId === r.id ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>}
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>

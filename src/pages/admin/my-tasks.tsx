@@ -351,7 +351,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                 <p className="text-xs text-gray-400">No count work yet.</p>
               ) : (
                 <>
-                  <div className="grid grid-cols-2 gap-2 mb-2">
+                  <div className="grid grid-cols-3 gap-2 mb-2">
                     <button
                       onClick={() => setCostFilter(f => f === 'cdn' ? null : 'cdn')}
                       className={`rounded-lg p-2.5 text-center transition-all border-2 ${costFilter === 'cdn' ? 'bg-green-100 border-green-400' : 'bg-white border-transparent hover:border-green-200'}`}>
@@ -366,6 +366,22 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                       <p className="text-[10px] text-gray-500 mt-0.5">CAP</p>
                       <p className="text-[9px] text-purple-600">{costFilter === 'cap' ? '▲ hide' : '▼ details'}</p>
                     </button>
+                    <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
+                      <p className="text-xl font-bold text-blue-700">{myBoatNote}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">Boat Cap</p>
+                    </div>
+                    <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
+                      <p className="text-xl font-bold text-blue-700">{myCo}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">CO</p>
+                    </div>
+                    <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
+                      <p className="text-xl font-bold text-blue-700">{myPytho}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">Pytho</p>
+                    </div>
+                    <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
+                      <p className="text-xl font-bold text-blue-700">{mySafta}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">SAFTA</p>
+                    </div>
                   </div>
                   {costFilter && (() => {
                     const isCdn = costFilter === 'cdn'
@@ -508,7 +524,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                         className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:border-blue-400"/>
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span className="text-[11px] text-gray-500">Boat Note Rate (Rs.)</span>
+                      <span className="text-[11px] text-gray-500">Boat Cap Rate (Rs.)</span>
                       <input type="number" min={0} step="0.01"
                         value={rateDraft ? (rateDraft.boat_note_rate || 0) : (rates.boat_note_rate || 0)}
                         onChange={e => setRateDraft(prev => ({ ...(prev || rates), boat_note_rate: Number(e.target.value) || 0 }))}
@@ -596,7 +612,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                                 {(r.pytho_inc || 0) > 0 && <span className="text-blue-700 font-medium">Pytho +{r.pytho_inc}</span>}
                                 {(r.co_inc || 0) > 0 && <span className="text-blue-700 font-medium">CO +{r.co_inc}</span>}
                                 {(r.safta_inc || 0) > 0 && <span className="text-blue-700 font-medium">SAFTA +{r.safta_inc}</span>}
-                                {(r.boat_note_inc || 0) > 0 && <span className="text-blue-700 font-medium">Boat Note +{r.boat_note_inc}</span>}
+                                {(r.boat_note_inc || 0) > 0 && <span className="text-blue-700 font-medium">Boat Cap +{r.boat_note_inc}</span>}
                               </div>
                             </div>
                           ))}
@@ -1309,7 +1325,9 @@ function MyTasksContent() {
         <UploadCountPanel userId={userId} isAdmin={isAdmin}/>
       )}
 
-      {(isAdmin || has('section:my-tasks.cusdec-approval')) ? <ApprovalsAccessPanel/> : <MyPendingApprovalsPanel/>}
+      {(isAdmin || has('section:my-tasks.cusdec-approval'))
+        ? <ApprovalsAccessPanel/>
+        : has('section:my-tasks.approvals-view') ? <MyPendingApprovalsPanel/> : null}
 
     </div>
   )
@@ -1339,7 +1357,7 @@ interface DocApproval {
 //                           + own history only, view-only (no buttons at
 //                           all — approving is exclusively the other panel's
 //                           job, enforced server-side too).
-const stageLabel = (s: string) => s === 'billing' ? 'Billing (CAP)' : s === 'boat_note' ? 'Boat Note' : s === 'final_document' ? 'Final Document' : 'Upload Count'
+const stageLabel = (s: string) => s === 'billing' ? 'Billing (CAP)' : s === 'boat_note' ? 'Boat Cap' : s === 'final_document' ? 'Final Document' : 'Upload Count'
 
 function ApprovalsAccessPanel() {
   const { isAdmin } = usePermission()
@@ -1481,7 +1499,7 @@ function MyPendingApprovalsPanel() {
   return (
     <div className="card mb-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Clock size={15} className="text-amber-500"/>My Pending Approvals</h2>
+        <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Clock size={15} className="text-amber-500"/>Pending Approvals</h2>
         <button onClick={() => { setShowHistory(x => !x); if (!showHistory) loadHistory() }} className="text-[11px] text-gray-500 hover:text-gray-700">
           {showHistory ? 'Hide history' : 'Show history'}
         </button>
@@ -1493,7 +1511,7 @@ function MyPendingApprovalsPanel() {
           <div className="space-y-1.5">
             {history.map(it => (
               <div key={it.id} className="text-xs border border-gray-100 rounded-lg p-2.5">
-                <p className="font-medium text-gray-800">{it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}
+                <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}
                   <span className={`ml-1.5 font-semibold ${it.status === 'approved' ? 'text-green-600' : 'text-red-500'}`}>{it.status}</span>
                 </p>
                 <p className="text-gray-400">by {it.decided_by_name} · {it.decided_at ? new Date(it.decided_at).toLocaleString('en-GB') : ''}</p>
@@ -1510,7 +1528,7 @@ function MyPendingApprovalsPanel() {
           {items.map(it => (
             <div key={it.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
               <div>
-                <p className="font-medium text-gray-800">{it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}</p>
+                <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}</p>
                 <p className="text-gray-400">{it.reason} · {new Date(it.created_at).toLocaleString('en-GB')}</p>
               </div>
               <span className="text-[11px] text-amber-600 font-medium flex-shrink-0">Awaiting approval</span>

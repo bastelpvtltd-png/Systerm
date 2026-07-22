@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import AdminLayout, { TAB_ITEMS, SECTION_ITEMS } from '@/components/admin/AdminLayout'
 import { supabase, authHeader } from '@/lib/supabase'
-import { Users, Plus, Edit2, X, Save } from 'lucide-react'
+import { Users, Plus, Edit2, X, Save, Trash2, Loader } from 'lucide-react'
 
 interface Profile {
   id: string
@@ -14,6 +14,7 @@ interface Profile {
   whatsapp_number: string
   contact_number: string
   is_admin: boolean
+  is_owner?: boolean
   allowed_tabs: string[]
   assigned_shippers: string[]
   is_shipper?: boolean
@@ -29,7 +30,7 @@ const ALL_SHIPPERS = '__ALL__'
 const emptyForm = {
   username: '', full_name: '', position: '', designation: '',
   personal_email: '', official_email: '', whatsapp_number: '', contact_number: '',
-  password: '', is_admin: false, allowed_tabs: [] as string[], assigned_shippers: [] as string[],
+  password: '', is_admin: false, is_owner: false, allowed_tabs: [] as string[], assigned_shippers: [] as string[],
   is_shipper: false, shipper_name: '',
 }
 
@@ -102,7 +103,7 @@ export default function UsersPage() {
       username: form.username, full_name: form.full_name, position: form.position, designation: form.designation,
       personal_email: form.personal_email, official_email: form.official_email,
       whatsapp_number: form.whatsapp_number, contact_number: form.contact_number,
-      is_admin: form.is_admin, allowed_tabs: form.allowed_tabs,
+      is_admin: form.is_admin, is_owner: form.is_owner, allowed_tabs: form.allowed_tabs,
       assigned_shippers: form.assigned_shippers,
       is_shipper: form.is_shipper, shipper_name: form.is_shipper ? form.shipper_name.trim() : null,
     }
@@ -125,6 +126,25 @@ export default function UsersPage() {
       setSaveError(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  async function handleDelete(u: Profile) {
+    if (!confirm(`Permanently delete "${u.full_name || u.username}"? This removes their login and all their work counts, payments, and approval history. Their uploaded documents stay in the system.`)) return
+    setDeletingId(u.id)
+    try {
+      const res = await fetch('/api/delete-user', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ user_id: u.id }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Delete failed')
+      setUsers(prev => prev.filter(x => x.id !== u.id))
+    } catch (e: any) {
+      alert(e.message)
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -159,21 +179,27 @@ export default function UsersPage() {
                   <td className="px-4 py-3">
                     {u.is_admin
                       ? <span className="badge-released">Full access (all tabs)</span>
+                      : u.is_owner
+                      ? <span className="badge-released" style={{ background: '#ede9fe', color: '#6d28d9' }}>Owner/Director (view all, no delete)</span>
                       : <span className="text-xs text-gray-500">{u.allowed_tabs?.length || 0} tab{u.allowed_tabs?.length === 1 ? '' : 's'}</span>}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 flex items-center gap-1">
                     <button onClick={() => {
                       setForm({
                         username: u.username, full_name: u.full_name, position: u.position || '', designation: u.designation || '',
                         personal_email: u.personal_email || '', official_email: u.official_email || '',
                         whatsapp_number: u.whatsapp_number || '', contact_number: u.contact_number || '',
-                        password: '', is_admin: !!u.is_admin, allowed_tabs: u.allowed_tabs || [],
+                        password: '', is_admin: !!u.is_admin, is_owner: !!u.is_owner, allowed_tabs: u.allowed_tabs || [],
                         assigned_shippers: u.assigned_shippers || [],
                         is_shipper: !!u.is_shipper, shipper_name: u.shipper_name || '',
                       })
                       setEditId(u.id); setSaveError(''); setModal(true)
                     }}
                       className="p-1.5 rounded hover:bg-blue-50 text-blue-600"><Edit2 size={14}/></button>
+                    <button onClick={() => handleDelete(u)} disabled={deletingId === u.id}
+                      className="p-1.5 rounded hover:bg-red-50 text-red-500 disabled:opacity-50">
+                      {deletingId === u.id ? <Loader size={14} className="animate-spin"/> : <Trash2 size={14}/>}
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -205,9 +231,16 @@ export default function UsersPage() {
               ))}
 
               <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                <input type="checkbox" checked={form.is_admin} onChange={e => setForm({...form, is_admin: e.target.checked})}/>
+                <input type="checkbox" checked={form.is_admin} onChange={e => setForm({...form, is_admin: e.target.checked, is_owner: e.target.checked ? false : form.is_owner})}/>
                 Full access (sees every tab)
               </label>
+
+              {!form.is_admin && (
+                <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <input type="checkbox" checked={form.is_owner} onChange={e => setForm({...form, is_owner: e.target.checked})}/>
+                  Owner/Director — sees every tab like Full Access, but can never delete anything
+                </label>
+              )}
 
               <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
                 <input type="checkbox" checked={form.is_shipper} onChange={e => setForm({...form, is_shipper: e.target.checked})}/>
@@ -227,7 +260,7 @@ export default function UsersPage() {
                 </div>
               )}
 
-              {!form.is_admin && !form.is_shipper && (
+              {!form.is_admin && !form.is_owner && !form.is_shipper && (
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
                     Assigned Shippers — {form.assigned_shippers.includes(ALL_SHIPPERS) ? 'All shippers' : form.assigned_shippers.length === 0 ? 'none selected (sees none)' : `${form.assigned_shippers.length} selected`}
@@ -251,7 +284,7 @@ export default function UsersPage() {
                 </div>
               )}
 
-              {!form.is_admin && !form.is_shipper && (
+              {!form.is_admin && !form.is_owner && !form.is_shipper && (
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">Tabs this user can access</label>
                   <div className="space-y-1 max-h-52 overflow-y-auto border border-gray-100 rounded-lg p-2">
@@ -269,7 +302,7 @@ export default function UsersPage() {
                   entirely — the staff tab/section permission grants below are
                   meaningless for them (they never touch AdminLayout/TAB_ITEMS
                   routes), so skip rendering this whole block for is_shipper. */}
-              {!form.is_admin && !form.is_shipper && TAB_ITEMS
+              {!form.is_admin && !form.is_owner && !form.is_shipper && TAB_ITEMS
                 .filter(t => form.allowed_tabs.includes(t.href) && SECTION_ITEMS.some(s => s.tabHref === t.href))
                 .map(t => (
                   <div key={t.href}>

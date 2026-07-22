@@ -19,30 +19,31 @@ const sb = createClient(
 // Reject leaves that stage permanently uncounted; the other stage is
 // unaffected either way.
 //
-// Every signed-in user can reach this endpoint now (not just admin-
-// authorized approvers) — but a plain user only ever sees/decides their OWN
-// (uploaded_by = them) pending items and history, read-only otherwise.
-// Approving/rejecting anyone else's item — the actual power this panel
-// gates — still requires section:my-tasks.cusdec-approval (or admin),
-// exactly as before, just no longer gating visibility of one's own queue.
+// Two separate grantable panels, both gated (neither shows by default):
+//   'Approvals' (section:my-tasks.cusdec-approval, or admin) — full power:
+//               sees EVERY pending item + full history, Approve/Reject.
+//   'Pending Approvals' (section:my-tasks.approvals-view) — read only, also
+//               sees EVERY pending item + full history, no action buttons.
+// Approving/rejecting still requires the 'Approvals' grant specifically —
+// holding only the view grant never allows POST. Deleting a history entry
+// stays admin-only either way (see DELETE below).
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const authed = await requireAuth(req)
   if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   const { data: selfProf } = await sb.from('profiles').select('is_admin, allowed_tabs').eq('id', authed.userId).maybeSingle()
   const isAdmin = !!selfProf?.is_admin
-  const canApproveAll = isAdmin || !!(selfProf?.allowed_tabs || []).includes('section:my-tasks.cusdec-approval')
+  const allowed = selfProf?.allowed_tabs || []
+  const canApproveAll = isAdmin || allowed.includes('section:my-tasks.cusdec-approval')
+  const canView = canApproveAll || allowed.includes('section:my-tasks.approvals-view')
 
   if (req.method === 'GET') {
+    if (!canView) return res.status(403).json({ error: 'Access required: section:my-tasks.approvals-view or section:my-tasks.cusdec-approval' })
     if (req.query.history === '1') {
-      let q = sb.from('doc_approvals').select('*').neq('status', 'pending').order('decided_at', { ascending: false }).limit(10)
-      if (!canApproveAll) q = q.eq('uploaded_by', authed.userId)
-      const { data, error } = await q
+      const { data, error } = await sb.from('doc_approvals').select('*').neq('status', 'pending').order('decided_at', { ascending: false }).limit(10)
       if (error) return res.status(500).json({ error: error.message })
       return res.json({ history: data || [] })
     }
-    let q = sb.from('doc_approvals').select('*').eq('status', 'pending').order('created_at', { ascending: true })
-    if (!canApproveAll) q = q.eq('uploaded_by', authed.userId)
-    const { data, error } = await q
+    const { data, error } = await sb.from('doc_approvals').select('*').eq('status', 'pending').order('created_at', { ascending: true })
     if (error) return res.status(500).json({ error: error.message })
     return res.json({ approvals: data || [], canApproveAll })
   }

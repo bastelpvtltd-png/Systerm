@@ -66,6 +66,13 @@ alter table balance_reports add column if not exists status text default 'receiv
 -- resets to 0 each period but received kept summing every payment ever).
 alter table salary_payments add column if not exists reported boolean default false;
 
+-- Owner/Director — a new account tier alongside admin/staff/shipper: full
+-- navigation/view access like admin (see AdminLayout's has()), but every
+-- individual admin-only WRITE/DELETE server check (requireAdmin) is
+-- unchanged and stays is_admin-only, so an owner account cannot delete
+-- anything anywhere by design, even though they can see everything.
+alter table profiles add column if not exists is_owner boolean default false;
+
 -- Boat Note completions (merge-and-pick, reason 'Boat Note Passed') had no
 -- work_counts column of their own and were never gated by doc_approvals —
 -- silently credited nothing. Credited value is the CUSDEC's own existing

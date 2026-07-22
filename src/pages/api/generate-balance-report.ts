@@ -139,6 +139,24 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   if (otherIds.length) await sb.from('other_work').update({ reported: true }).in('id', otherIds)
   if (paymentIds.length) await sb.from('salary_payments').update({ reported: true }).in('id', paymentIds)
 
+  // If more was received than earned this period, the excess isn't "used
+  // up" by this report — it's still real money sitting with this person,
+  // so it carries forward as a fresh (unreported) payment for the next
+  // period, exactly as if it had just been received today. e.g. earned
+  // 1000, received 2000 this period -> report shows balance 1000; next
+  // period starts earned 0, received 1000 (not 0), balance still 1000,
+  // until new work is done. If earned exceeded received (still owed),
+  // nothing carries forward automatically on the received side — the
+  // owed amount is this report's own `amount` figure for manual follow-up.
+  const leftover = totalReceived - totalEarned
+  if (leftover > 0) {
+    await sb.from('salary_payments').insert({
+      from_user_id: userId, from_user_name: 'System', to_user_id: userId, to_display_name: userName,
+      amount: leftover, status: 'confirmed', responded_at: new Date().toISOString(),
+      note: `Carried forward from report ${rangeLabel}`,
+    })
+  }
+
   return { ok: true, driveUrl, rangeLabel, amount: owedBalance }
 }
 

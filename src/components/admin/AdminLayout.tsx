@@ -755,7 +755,8 @@ export const SECTION_ITEMS = [
   { key: 'section:my-tasks.daily-cost',        tabHref: '/admin/my-tasks', label: 'Daily Cost entry' },
   { key: 'section:my-tasks.balance-update',    tabHref: '/admin/my-tasks', label: 'Balance deposit/top-up' },
   { key: 'section:my-tasks.upload-count',      tabHref: '/admin/my-tasks', label: 'Upload Count panel' },
-  { key: 'section:my-tasks.cusdec-approval',   tabHref: '/admin/my-tasks', label: 'Upload/Billing Approvals — approve/reject everyone (elevated)' },
+  { key: 'section:my-tasks.cusdec-approval',   tabHref: '/admin/my-tasks', label: 'Approvals — approve/reject (elevated)' },
+  { key: 'section:my-tasks.approvals-view',    tabHref: '/admin/my-tasks', label: 'Pending Approvals — view only, everyone\'s items + history' },
   { key: 'section:documents-upload.upload',    tabHref: '/admin/upload-docs', label: 'Upload PDFs card' },
   { key: 'section:documents-upload.uploaded',  tabHref: '/admin/upload-docs', label: 'Uploaded list card' },
   { key: 'section:documents-upload.preview',   tabHref: '/admin/upload-docs', label: 'All Documents preview panel' },
@@ -802,8 +803,15 @@ export const SECTION_ITEMS = [
   { key: 'section:automation.monthly-reports',      tabHref: '/admin/automation', label: 'Monthly Reports toggle' },
 ]
 
-interface PermissionValue { isAdmin: boolean; has: (key: string) => boolean }
-const PermissionContext = createContext<PermissionValue>({ isAdmin: false, has: () => false })
+// isAdmin here is deliberately the real is_admin flag only — every existing
+// admin-only delete/destructive button in the app checks isAdmin, and an
+// Owner/Director account must never satisfy that check (full navigation/
+// view access like admin, but literally cannot delete anything anywhere).
+// isOwner is exposed separately for anything that specifically wants to
+// distinguish the two; has() (tab/section access) treats isAdmin and
+// isOwner the same — both see everything.
+interface PermissionValue { isAdmin: boolean; isOwner: boolean; has: (key: string) => boolean }
+const PermissionContext = createContext<PermissionValue>({ isAdmin: false, isOwner: false, has: () => false })
 export function usePermission() { return useContext(PermissionContext) }
 
 // Every /admin/* page also has a bare alias via the rewrites in next.config.js
@@ -820,6 +828,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [collapsed, setCollapsed] = useState(false)
   const [authorizedPath, setAuthorizedPath] = useState<string | null>(null)
   const [isAdmin, setIsAdmin]     = useState(false)
+  const [isOwner, setIsOwner]     = useState(false)
   const [allowedTabs, setAllowedTabs] = useState<string[]>([])
   const [dark, setDark] = useState(false)
   // AdminLayout stays mounted across tab navigations (see _app.tsx) rather
@@ -851,13 +860,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     async function check() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.replace('/'); return }
-      const { data: prof } = await supabase.from('profiles').select('is_admin, allowed_tabs').eq('id', user.id).single()
+      const { data: prof } = await supabase.from('profiles').select('is_admin, is_owner, allowed_tabs').eq('id', user.id).single()
       if (cancelled) return
       const admin = !!prof?.is_admin
+      const owner = !!prof?.is_owner
       const allowed: string[] = prof?.allowed_tabs || []
       setIsAdmin(admin)
+      setIsOwner(owner)
       setAllowedTabs(allowed)
-      if (!admin) {
+      // Route-gating (which pages are reachable) treats admin and owner the
+      // same — full navigation access. Only the exposed isAdmin flag itself
+      // (used everywhere to gate actual delete buttons) stays admin-only.
+      const hasFullAccess = admin || owner
+      if (!hasFullAccess) {
         // Land on the (bare-URL) tab they're actually allowed on — whether
         // they hit an unauthorized tab, or reached any /admin/* URL directly
         // by typing it (that alias must never surface for a non-admin).
@@ -919,7 +934,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     )
   }
 
-  if (!isAdmin && !allowedTabs.length) {
+  if (!isAdmin && !isOwner && !allowedTabs.length) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 gap-3 text-center px-6">
         <Shield size={28} className="text-gray-300"/>
@@ -932,8 +947,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     )
   }
 
-  const visibleItems = isAdmin ? TAB_ITEMS : TAB_ITEMS.filter(t => allowedTabs.includes(t.href))
-  const permValue: PermissionValue = { isAdmin, has: (key: string) => isAdmin || allowedTabs.includes(key) }
+  const visibleItems = (isAdmin || isOwner) ? TAB_ITEMS : TAB_ITEMS.filter(t => allowedTabs.includes(t.href))
+  const permValue: PermissionValue = { isAdmin, isOwner, has: (key: string) => isAdmin || isOwner || allowedTabs.includes(key) }
 
   return (
     <PermissionContext.Provider value={permValue}>
