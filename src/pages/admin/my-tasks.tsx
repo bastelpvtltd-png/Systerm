@@ -33,6 +33,7 @@ interface SalaryPayment {
   status: 'pending' | 'confirmed' | 'declined'
   created_at: string
   responded_at: string | null
+  reported?: boolean
 }
 interface Profile { id: string; username: string; full_name: string }
 interface OtherWorkItem {
@@ -250,7 +251,12 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   const myOtherWorkEarned = myApprovedOtherWork.reduce((s, x) => s + Number(x.amount), 0)
   const myEarned = myCountWorkEarned + myOtherWorkEarned
   const myReceivedPayments = payments.filter(p => p.to_user_id === userId && p.status === 'confirmed')
-  const myReceived = myReceivedPayments.reduce((s, p) => s + Number(p.amount), 0)
+  // Same reset rule as work_counts/other_work — a payment already archived
+  // into an earlier report doesn't count toward THIS period's running
+  // balance (it's already reflected in that report), only still-unreported
+  // ones do. myReceivedPayments (all confirmed, ever) stays the full history
+  // list below; only this filtered sum feeds myBalance.
+  const myReceived = myReceivedPayments.filter(p => !p.reported).reduce((s, p) => s + Number(p.amount), 0)
   const myBalance = myReceived - myEarned
   const myPendingOtherWork = myOtherWork.filter(x => x.status === 'pending')
 
@@ -533,7 +539,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                   const owData = otherWorkByUserId[u.id] || { approved: 0, pending: [] }
                   const totalCost = countCost + owData.approved
                   const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
-                  const received = userConfirmedPayments.reduce((s, p) => s + Number(p.amount), 0)
+                  const received = userConfirmedPayments.filter(p => !p.reported).reduce((s, p) => s + Number(p.amount), 0)
                   const bal = received - totalCost
                   const isExpanded = expandedUser === u.id
                   return (

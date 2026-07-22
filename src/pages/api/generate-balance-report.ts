@@ -14,12 +14,13 @@ const sb = createClient(
 // shows — CDN/CAP/Pytho/CO/SAFTA/Boat Note counts, approved Other Work,
 // confirmed payments received) as a PDF, saves it to Drive, and records it
 // in balance_reports with status 'received'. Only ever sums work_counts/
-// other_work rows not already claimed by an earlier report (reported=false)
-// — once summarized here, those exact rows get marked reported=true so the
-// next report starts this user's count from zero without losing history
-// (unreported rows since keep accumulating normally). Confirmed
-// salary_payments stay a permanent running ledger of real money handed
-// over — not reset per report, unlike the piece-work counts.
+// other_work/salary_payments rows not already claimed by an earlier report
+// (reported=false) — once summarized here, those exact rows get marked
+// reported=true so the next report starts this user's count AND received
+// total from zero without losing history (unreported rows since keep
+// accumulating normally). Received has to reset the same way earned does —
+// otherwise a lifetime-total "received" against a reset-every-period
+// "earned" makes the running balance meaningless after the first report.
 async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string; rangeLabel: string; amount: number } | { ok: false; error: string }> {
   const { data: prof } = await sb.from('profiles').select('username, full_name').eq('id', userId).maybeSingle()
   if (!prof) return { ok: false, error: 'User not found' }
@@ -28,7 +29,7 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   const { data: rates } = await sb.from('work_rates').select('*').eq('id', 'global').single()
   const { data: workRows } = await sb.from('work_counts').select('*').eq('user_id', userId).eq('reported', false)
   const { data: otherWork } = await sb.from('other_work').select('*').eq('user_id', userId).eq('reported', false)
-  const { data: payments } = await sb.from('salary_payments').select('*').or(`to_user_id.eq.${userId}`)
+  const { data: payments } = await sb.from('salary_payments').select('*').eq('to_user_id', userId).eq('reported', false)
   const { data: approvals } = await sb.from('doc_approvals').select('*').eq('uploaded_by', userId)
 
   const cdn = (workRows || []).reduce((s, r) => s + (r.cdn_inc || 0), 0)
@@ -72,6 +73,25 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   if (safta) line(`SAFTA: ${safta} x Rs.${saftaRate.toFixed(2)} = Rs.${(safta * saftaRate).toFixed(2)}`)
   if (boatNote) line(`Boat Note: ${boatNote} x Rs.${boatNoteRate.toFixed(2)} = Rs.${(boatNote * boatNoteRate).toFixed(2)}`)
   y += 2
+
+  // Breakdown — exactly which entries made up each total above (e.g. which
+  // CUSDECs/documents summed to a CAP total of 5000), one line per non-zero
+  // field per row, so the total isn't just a bare number with nothing behind it.
+  line('Count Breakdown', 12, true)
+  const breakdownFields: [string, string][] = [['cdn_inc', 'CDN'], ['cap_inc', 'CAP'], ['pytho_inc', 'Pytho'], ['co_inc', 'CO'], ['safta_inc', 'SAFTA'], ['boat_note_inc', 'Boat Note']]
+  let anyBreakdown = false
+  for (const r of (workRows || [])) {
+    for (const [field, label] of breakdownFields) {
+      const v = (r as any)[field] || 0
+      if (v > 0) {
+        anyBreakdown = true
+        if (y > 270) { doc.addPage(); y = 18 }
+        line(`${new Date(r.created_at).toLocaleDateString('en-GB')} — ${label} +${v} — ${r.reason || r.action || ''}`, 9)
+      }
+    }
+  }
+  if (!anyBreakdown) line('None', 9)
+  y += 2
   line('Bill / Other Work History', 12, true)
   if (!approvedOther.length) line('None')
   for (const ow of approvedOther) line(`${ow.description} — Rs.${Number(ow.amount).toFixed(2)}`)
@@ -114,8 +134,10 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   // normally, and nothing already-reported is ever double-counted or lost.
   const workIds = (workRows || []).map(r => r.id)
   const otherIds = (otherWork || []).map(r => r.id)
+  const paymentIds = confirmedPayments.map(p => p.id)
   if (workIds.length) await sb.from('work_counts').update({ reported: true }).in('id', workIds)
   if (otherIds.length) await sb.from('other_work').update({ reported: true }).in('id', otherIds)
+  if (paymentIds.length) await sb.from('salary_payments').update({ reported: true }).in('id', paymentIds)
 
   return { ok: true, driveUrl, rangeLabel, amount: owedBalance }
 }

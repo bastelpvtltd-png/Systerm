@@ -61,6 +61,10 @@ create index if not exists boat_note_locks_document_idx on boat_note_locks(docum
 alter table work_counts add column if not exists reported boolean default false;
 alter table other_work add column if not exists reported boolean default false;
 alter table balance_reports add column if not exists status text default 'received';
+-- Received payments must reset the same way earned counts do, or the
+-- running balance stops meaning anything after the first report (earned
+-- resets to 0 each period but received kept summing every payment ever).
+alter table salary_payments add column if not exists reported boolean default false;
 
 -- Boat Note completions (merge-and-pick, reason 'Boat Note Passed') had no
 -- work_counts column of their own and were never gated by doc_approvals —
