@@ -617,11 +617,14 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                           </button>
                         </div>
                       </div>
+                      {/* Unreported only — once a statement covers these rows
+                          they live in that report's PDF, so leaving them here
+                          double-showed work that had already been closed out. */}
                       {historyUser === name && (
                         <div className="divide-y divide-gray-50 max-h-48 overflow-y-auto bg-purple-50/30">
-                          {allWorkRows.filter(r => r.user_name === name).length === 0 ? (
-                            <p className="text-xs text-gray-400 p-3">No CDN/CUSDEC upload history yet</p>
-                          ) : allWorkRows.filter(r => r.user_name === name)
+                          {allWorkRows.filter(r => r.user_name === name && !r.reported).length === 0 ? (
+                            <p className="text-xs text-gray-400 p-3">No count history since the last report</p>
+                          ) : allWorkRows.filter(r => r.user_name === name && !r.reported)
                               .sort((a, b) => b.created_at.localeCompare(a.created_at))
                               .map(r => (
                             <div key={r.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
@@ -1581,12 +1584,15 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState('')
 
+  // Upload counts follow the same statement cycle as the Balance panel —
+  // once a report archives a row (reported=true) it belongs to that report's
+  // PDF, not to the live panel, so this only ever shows the current period.
   async function load() {
     try {
       const h = await authHeader()
       const r = await fetch('/api/work-counts', { headers: h })
       const d = await r.json()
-      if (d.rows) setMyRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload'))
+      if (d.rows) setMyRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload' && !r.reported))
     } catch {}
   }
 
@@ -1595,7 +1601,7 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
       const h = await authHeader()
       const r = await fetch('/api/work-counts?all=1', { headers: h })
       const d = await r.json()
-      if (d.rows) setAllRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload'))
+      if (d.rows) setAllRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload' && !r.reported))
       const { data } = await supabase.from('profiles').select('id, username, full_name').eq('is_shipper', false)
       setUsers((data as any) || [])
     } catch {}

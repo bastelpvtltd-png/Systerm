@@ -46,6 +46,7 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   const openingBalance = Number(lastReport?.amount) || 0
 
   const cdn = (workRows || []).reduce((s, r) => s + (r.cdn_inc || 0), 0)
+  const cusdec = (workRows || []).reduce((s, r) => s + (r.cusdec_inc || 0), 0)
   const cap = (workRows || []).reduce((s, r) => s + (r.cap_inc || 0), 0)
   const pytho = (workRows || []).reduce((s, r) => s + (r.pytho_inc || 0), 0)
   const co = (workRows || []).reduce((s, r) => s + (r.co_inc || 0), 0)
@@ -87,6 +88,9 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
 
   line('Upload Count History', 12, true)
   line(`CDN: ${cdn} x Rs.${cdnRate.toFixed(2)} = Rs.${(cdn * cdnRate).toFixed(2)}`)
+  // CUSDEC uploads are counted for the record; the CAP line below is what
+  // actually carries the money for a CUSDEC (its own container count).
+  if (cusdec) line(`CUSDEC uploads: ${cusdec}`)
   line(`CAP: ${cap} x Rs.${capRate.toFixed(2)} = Rs.${(cap * capRate).toFixed(2)}`)
   if (pytho) line(`Pytho: ${pytho} x Rs.${pythoRate.toFixed(2)} = Rs.${(pytho * pythoRate).toFixed(2)}`)
   if (co) line(`CO: ${co} x Rs.${coRate.toFixed(2)} = Rs.${(co * coRate).toFixed(2)}`)
@@ -99,7 +103,7 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   // generated these exact rows are archived (reported=true) and drop out of
   // the NEXT report entirely — this listing is their only permanent record.
   line('Transactions This Period', 12, true)
-  const breakdownFields: [string, string][] = [['cdn_inc', 'CDN'], ['cap_inc', 'CAP'], ['pytho_inc', 'Pytho'], ['co_inc', 'CO'], ['safta_inc', 'SAFTA'], ['boat_note_inc', 'Boat Cap']]
+  const breakdownFields: [string, string][] = [['cdn_inc', 'CDN'], ['cusdec_inc', 'CUSDEC'], ['cap_inc', 'CAP'], ['pytho_inc', 'Pytho'], ['co_inc', 'CO'], ['safta_inc', 'SAFTA'], ['boat_note_inc', 'Boat Cap']]
   const txns = (workRows || [])
     .flatMap(r => breakdownFields.filter(([f]) => ((r as any)[f] || 0) > 0).map(([f, label]) => ({ date: r.created_at, label, v: (r as any)[f], detail: r.reason || r.action || '' })))
     .sort((a, b) => a.date.localeCompare(b.date))
