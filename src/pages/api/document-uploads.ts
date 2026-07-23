@@ -7,6 +7,13 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// Send modal එකෙන් document එකක් යැව්වම හැම වෙලාවෙම හැදෙන ප්‍රධාන
+// record එක. Save/Mail/Notify මොනවා tick කළත් මේක හැදෙනවා. මෙතනින්:
+//   • Notify tick නම් → Activity Log එකට යනවා (ඕන කෙනෙකුට pick කරන්න)
+//   • Final Document නම් → ඒකට වෙනම queue එකට (දෙපාරක් නොයන්න check එකක්)
+//   • CDN/CUSDEC නම් → upload ගණන අනුමතයට යනවා (doc_approvals)
+// ──────────────────────────────────────────────────────────────────────────
 // The "Send" modal's umbrella record — created once per sent document
 // regardless of which of Save/Mail/Notify were ticked, so Notify/Pick can
 // reference a stable document_id even when Save wasn't ticked (the file

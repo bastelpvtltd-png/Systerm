@@ -267,15 +267,14 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   const myOtherWorkEarned = myApprovedOtherWork.reduce((s, x) => s + Number(x.amount), 0)
   const myEarned = myCountWorkEarned + myOtherWorkEarned
   const myReceivedPayments = payments.filter(p => p.to_user_id === userId && p.status === 'confirmed')
-  // Same reset rule as work_counts/other_work — a payment already archived
-  // into an earlier report doesn't count toward THIS period's running
-  // balance (it's already reflected in that report), only still-unreported
-  // ones do. myReceivedPayments (all confirmed, ever) stays the full history
-  // list below; only this filtered sum feeds myBalance.
-  const myReceived = myReceivedPayments.filter(p => !p.reported).reduce((s, p) => s + Number(p.amount), 0)
-  // Continuous across reports: whatever the last report closed at, plus
-  // this period's received minus this period's earned so far.
-  const myBalance = myOpeningBalance + myReceived - myEarned
+  // Generating a report closes that period out: its counts and payments are
+  // archived (reported=true) and stop feeding the live figures, and the
+  // report's own closing balance lands right here in Received as this
+  // period's starting point. So Received = last report's closing balance +
+  // any payments confirmed since, and Balance is simply Received - Cost —
+  // one plain subtraction, no separate "brought forward" line to reconcile.
+  const myReceived = myOpeningBalance + myReceivedPayments.filter(p => !p.reported).reduce((s, p) => s + Number(p.amount), 0)
+  const myBalance = myReceived - myEarned
   const myPendingOtherWork = myOtherWork.filter(x => x.status === 'pending')
 
   // Admin: per-user work earned from allWorkRows — same unreported-only rule.
@@ -403,7 +402,10 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                   </div>
                   {costFilter && (() => {
                     const isCdn = costFilter === 'cdn'
-                    const filtered = myWorkRows.filter(r => isCdn ? r.cdn_inc > 0 : r.cap_inc > 0)
+                    // Unreported only, matching the count shown above it —
+                    // listing every row ever made the detail disagree with
+                    // its own headline number after the first report.
+                    const filtered = myUnreportedWork.filter(r => isCdn ? r.cdn_inc > 0 : r.cap_inc > 0)
                     return (
                       <div className="mb-2 rounded-xl border overflow-hidden" style={{ borderColor: isCdn ? '#bbf7d0' : '#e9d5ff' }}>
                         <div className="px-3 py-1.5" style={{ background: isCdn ? '#f0fdf4' : '#faf5ff' }}>
@@ -573,8 +575,11 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                   const owData = otherWorkByUserId[u.id] || { approved: 0, pending: [] }
                   const totalCost = countCost + owData.approved
                   const userConfirmedPayments = payments.filter(p => (p.to_user_id === u.id || p.to_display_name === name) && p.status === 'confirmed')
-                  const received = userConfirmedPayments.filter(p => !p.reported).reduce((s, p) => s + Number(p.amount), 0)
-                  const bal = (openingBalanceByUser[u.id] || 0) + received - totalCost
+                  // Same rule as the personal Balance panel above — the last
+                  // report's closing balance IS this period's starting
+                  // Received, so Balance is just Received - Cost.
+                  const received = (openingBalanceByUser[u.id] || 0) + userConfirmedPayments.filter(p => !p.reported).reduce((s, p) => s + Number(p.amount), 0)
+                  const bal = received - totalCost
                   const isExpanded = expandedUser === u.id
                   return (
                     <div key={u.id} className="border border-gray-200 rounded-xl overflow-hidden">

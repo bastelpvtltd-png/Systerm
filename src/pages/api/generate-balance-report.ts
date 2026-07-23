@@ -10,6 +10,15 @@ const sb = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// කෙනෙකුගේ මාසික ගිණුම් statement එක හදන තැන. බැංකු statement එකක්
+// වගේ: කලින් report එකේ ඉතුරු වුණ balance එක උඩින්ම, ඊට පස්සේ මේ
+// කාලෙ ඔක්කොම upload/billing transaction ලැයිස්තුව, ඊට පස්සේ එකතුව.
+//   Received = කලින් report එකේ අන්තිම balance + ඊට පස්සේ ආපු ගෙවීම්
+//   Balance  = Received − Cost
+// Report එකක් හැදුනාට පස්සේ ඒකට අයිති ගණන් 'reported' කියලා archive
+// වෙනවා — ඊළඟ report එක බිංදුවෙන් පටන් ගන්නවා, ඒත් history නැති වෙන්නේ නෑ.
+// ──────────────────────────────────────────────────────────────────────────
 // Builds one user's balance report as a bank-statement-style PDF: an
 // opening balance brought forward from their last report, every upload/
 // billing transaction since then (full detail, nothing summarized away),

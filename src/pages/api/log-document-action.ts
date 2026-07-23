@@ -7,6 +7,12 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// Pick කරගත්ත document එකකට Mail / Download / Look Only කළාම ඒක
+// සටහන් කරන තැන. Mail හෝ Download කළාම ඒ වැඩේ ඉවරයි කියලා ගණන් —
+// My Picked Tasks එකෙන් අයින් වෙනවා, සහ ඒකට අදාළ ගණන අනුමතයට යනවා
+// (doc_approvals). Look Only කිසිම දෙයක් ඉවර කරන්නේ නෑ, බලනවා විතරයි.
+// ──────────────────────────────────────────────────────────────────────────
 // Logs a 'mail', 'download', or 'look' action against a document — fills out
 // the rest of pick_history_log's action set beyond pick/return.
 //

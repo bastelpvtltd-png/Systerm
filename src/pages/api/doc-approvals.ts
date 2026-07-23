@@ -19,6 +19,13 @@ const sb = createClient(
 // Reject leaves that stage permanently uncounted; the other stage is
 // unaffected either way.
 //
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// ගණන් අනුමත කිරීමේ පිටුව. CDN/CUSDEC/Boat Note/Final Document ඕනෑම
+// වැඩක් ගණනට වැටෙන්නේ මෙතනින් Approve කළාම විතරයි — automatic ගණන්
+// වෙන එකක් නෑ. Approve කළාම work_counts එකට row එකක් යනවා (ඒකයි
+// පඩියට බලපාන්නේ), Reject කළොත් කවදාවත් ගණන් වෙන්නේ නෑ.
+// Approve/Reject කරන්න පුළුවන් elevated grant එක තියෙන කෙනෙකුට විතරයි.
+// ──────────────────────────────────────────────────────────────────────────
 // Two separate grantable panels, both gated (neither shows by default):
 //   'Approvals' (section:my-tasks.cusdec-approval, or admin) — full power:
 //               sees EVERY pending item + full history, Approve/Reject.

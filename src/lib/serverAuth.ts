@@ -1,3 +1,12 @@
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// හැම API route එකකම ආරක්ෂාව මෙතනින්. තුනක් තියෙනවා:
+//   requireAuth(req)          — login වෙලාද කියලා විතරක් බලනවා
+//   requireSection(req, key)  — ඒ පුද්ගලයාට ඒ panel එකට access තියෙනවද
+//                               (admin නම් හැම වෙලාවෙම pass)
+//   requireAdmin(req)         — admin විතරයි (delete වගේ දේවලට)
+// Client පැත්තෙන් හදන check එකට වඩා මේක වැදගත් — browser එකේ තියෙන
+// check එක මඟ හැරියත් server එකෙන් නවත්වනවා.
+// ──────────────────────────────────────────────────────────────────────────
 import type { NextApiRequest } from 'next'
 import { createClient } from '@supabase/supabase-js'
 

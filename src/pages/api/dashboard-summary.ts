@@ -7,6 +7,15 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// Dashboard එකේ pending card ඔක්කොම මෙතනින් හැදෙනවා:
+//   Shipments Pending — CUSDEC එකක් තාම match වෙලා නැති shipment entry
+//   CDN Pending       — CAP එක තාම පිරිලා නැති CUSDEC (cdn ගණන < cap)
+//   Boat Note Pending — CAP පිරිලා, ඒත් හැම CDN එකක්ම boat note pass නෑ
+//   Export Release    — boat note pass වෙලා, ඒත් release තාම නෑ
+// Pick කරගෙන ඉන්න Boat Note batch එකක් lock වෙලා තියෙනවා නම් ඒක
+// automation එකෙන් pass වුණත් ලැයිස්තුවෙන් අයින් වෙන්නේ නෑ.
+// ──────────────────────────────────────────────────────────────────────────
 // Powers the Dashboard's four pending-work cards, each meaning something
 // specific in the real cusdec -> cdn -> boat note -> export release
 // pipeline (none of this maps to the generic `status` columns the old

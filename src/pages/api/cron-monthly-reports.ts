@@ -7,6 +7,12 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// මාසික statement automatic හදන cron එක. දවසට වතාවක් run වුණත්
+// වැඩක් කරන්නේ මාසෙ අන්තිම දවසේ විතරයි, ඒත් Automation tab එකේ
+// Monthly Reports toggle එක ON නම් විතරයි. Manual "Generate" button
+// එකේම buildReport() function එකමයි කැඳවන්නේ — දෙකම එකම දේ.
+// ──────────────────────────────────────────────────────────────────────────
 // Runs daily (see vercel.json — Vercel Hobby only allows once/day cron,
 // same constraint cron-check-pending.ts is already built around) but only
 // actually does anything on the LAST day of the month, and only when the

@@ -6,6 +6,12 @@ import { downloadDriveFile } from './driveDownload'
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// Boat Note සහ Party's Copy automatic හදන තැන (Automation tab එකෙන්
+// හෝ දිනපතා cron එකෙන්). Manual විදියට හදනවා වගේම, හදලා ඉවර වුණාම
+// Activity Log එකට යනවා — ඕන කෙනෙකුට pick කරලා mail කරන්න පුළුවන්,
+// ගණනත් හරියටම manual එකක් වගේම වැටෙනවා.
+// ──────────────────────────────────────────────────────────────────────────
 export interface AutoCreateSummary {
   created: number
   skipped: { cusdecNumber: string; reason: string }[]

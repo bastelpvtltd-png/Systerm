@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import AdminLayout, { TAB_ITEMS, SECTION_ITEMS, usePermission } from '@/components/admin/AdminLayout'
 import { supabase, authHeader } from '@/lib/supabase'
-import { Users, Plus, Edit2, X, Save, Trash2, Loader, BarChart2 } from 'lucide-react'
+import { Users, Plus, Edit2, X, Save, Trash2, Loader, BarChart2, ChevronDown, ChevronRight } from 'lucide-react'
 
 interface Profile {
   id: string
@@ -128,6 +128,41 @@ export default function UsersPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  // ── Advanced access tree state ────────────────────────────────────────────
+  const [permSearch, setPermSearch] = useState('')
+  const [expandedTabs, setExpandedTabs] = useState<string[]>([])
+  function toggleExpanded(href: string) {
+    setExpandedTabs(prev => prev.includes(href) ? prev.filter(h => h !== href) : [...prev, href])
+  }
+  // Tabs paired with their own panels, filtered by the search box — a tab
+  // matches if its own label matches, OR any of its panels do (in which case
+  // only the matching panels are listed under it).
+  const visibleTabs = TAB_ITEMS.map(tab => {
+    const all = SECTION_ITEMS.filter(s => s.tabHref === tab.href)
+    const q = permSearch.trim().toLowerCase()
+    if (!q) return { tab, sections: all }
+    const tabMatches = tab.label.toLowerCase().includes(q)
+    const matching = all.filter(s => s.label.toLowerCase().includes(q))
+    if (!tabMatches && matching.length === 0) return null
+    return { tab, sections: tabMatches ? all : matching }
+  }).filter(Boolean) as { tab: typeof TAB_ITEMS[number]; sections: typeof SECTION_ITEMS }[]
+
+  const grantedTabCount = TAB_ITEMS.filter(t => form.allowed_tabs.includes(t.href)).length
+  const grantedPanelCount = SECTION_ITEMS.filter(s => form.allowed_tabs.includes(s.key)).length
+
+  function grantEverything() {
+    setForm(f => ({ ...f, allowed_tabs: [...TAB_ITEMS.map(t => t.href), ...SECTION_ITEMS.map(s => s.key)] }))
+  }
+  function setSectionsForTab(href: string, on: boolean) {
+    const keys = SECTION_ITEMS.filter(s => s.tabHref === href).map(s => s.key)
+    setForm(f => ({
+      ...f,
+      allowed_tabs: on
+        ? Array.from(new Set([...f.allowed_tabs, ...keys]))
+        : f.allowed_tabs.filter(k => !keys.includes(k)),
+    }))
   }
 
   const [workUser, setWorkUser] = useState<Profile | null>(null)
@@ -305,39 +340,71 @@ export default function UsersPage() {
                 </div>
               )}
 
+              {/* Advanced access tree. Shipper accounts run under their own
+                  /shipper portal and rules entirely — these staff tab/panel
+                  grants are meaningless for them (they never touch
+                  AdminLayout/TAB_ITEMS routes), so the whole block is skipped
+                  for is_shipper, as it is for admin/owner (who see all). */}
               {!form.is_admin && !form.is_owner && !form.is_shipper && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Tabs this user can access</label>
-                  <div className="space-y-1 max-h-52 overflow-y-auto border border-gray-100 rounded-lg p-2">
-                    {TAB_ITEMS.map(t => (
-                      <label key={t.href} className="flex items-center gap-2 text-sm py-1 px-1 rounded hover:bg-gray-50">
-                        <input type="checkbox" checked={form.allowed_tabs.includes(t.href)} onChange={() => toggleTab(t.href)}/>
-                        {t.label}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Shipper accounts run under their own /shipper portal and rules
-                  entirely — the staff tab/section permission grants below are
-                  meaningless for them (they never touch AdminLayout/TAB_ITEMS
-                  routes), so skip rendering this whole block for is_shipper. */}
-              {!form.is_admin && !form.is_owner && !form.is_shipper && TAB_ITEMS
-                .filter(t => form.allowed_tabs.includes(t.href) && SECTION_ITEMS.some(s => s.tabHref === t.href))
-                .map(t => (
-                  <div key={t.href}>
-                    <label className="block text-xs font-medium text-gray-600 mb-1.5">{t.label} — pieces this user can see</label>
-                    <div className="space-y-1 max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-2">
-                      {SECTION_ITEMS.filter(s => s.tabHref === t.href).map(s => (
-                        <label key={s.key} className="flex items-center gap-2 text-sm py-1 px-1 rounded hover:bg-gray-50">
-                          <input type="checkbox" checked={form.allowed_tabs.includes(s.key)} onChange={() => toggleTab(s.key)}/>
-                          {s.label}
-                        </label>
-                      ))}
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-medium text-gray-600">
+                      Access — {grantedTabCount} tab{grantedTabCount === 1 ? '' : 's'}, {grantedPanelCount} panel{grantedPanelCount === 1 ? '' : 's'}
+                    </label>
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <button type="button" onClick={grantEverything} className="text-blue-600 hover:underline">Select all</button>
+                      <span className="text-gray-300">|</span>
+                      <button type="button" onClick={() => setForm(f => ({ ...f, allowed_tabs: [] }))} className="text-gray-500 hover:underline">Clear all</button>
                     </div>
                   </div>
-                ))}
+
+                  <input value={permSearch} onChange={e => setPermSearch(e.target.value)}
+                    placeholder="Search a tab or panel…"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs mb-2 focus:outline-none focus:ring-2 focus:ring-green-400"/>
+
+                  <div className="border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-80 overflow-y-auto">
+                    {visibleTabs.length === 0 && (
+                      <p className="text-xs text-gray-400 p-3 text-center">Nothing matches "{permSearch}"</p>
+                    )}
+                    {visibleTabs.map(({ tab, sections }) => {
+                      const tabOn = form.allowed_tabs.includes(tab.href)
+                      const onCount = sections.filter(s => form.allowed_tabs.includes(s.key)).length
+                      const open = expandedTabs.includes(tab.href) || !!permSearch
+                      return (
+                        <div key={tab.href}>
+                          <div className={`flex items-center gap-2 px-2 py-2 ${tabOn ? 'bg-green-50/40' : ''}`}>
+                            <input type="checkbox" checked={tabOn} onChange={() => toggleTab(tab.href)}/>
+                            <button type="button" onClick={() => sections.length && toggleExpanded(tab.href)}
+                              className="flex-1 flex items-center justify-between text-left text-sm">
+                              <span className={tabOn ? 'text-gray-900 font-medium' : 'text-gray-500'}>{tab.label}</span>
+                              <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                                {sections.length > 0 && <span>{onCount}/{sections.length}</span>}
+                                {sections.length > 0 && (open ? <ChevronDown size={13}/> : <ChevronRight size={13}/>)}
+                              </span>
+                            </button>
+                          </div>
+                          {open && sections.length > 0 && (
+                            <div className={`bg-gray-50/60 px-2 py-1.5 ${tabOn ? '' : 'opacity-40 pointer-events-none'}`}>
+                              <div className="flex items-center gap-2 mb-1 pl-6 text-[11px]">
+                                <button type="button" onClick={() => setSectionsForTab(tab.href, true)} className="text-blue-600 hover:underline">All</button>
+                                <span className="text-gray-300">|</span>
+                                <button type="button" onClick={() => setSectionsForTab(tab.href, false)} className="text-gray-500 hover:underline">None</button>
+                              </div>
+                              {sections.map(s => (
+                                <label key={s.key} className="flex items-start gap-2 text-xs py-1 pl-6 pr-1 rounded hover:bg-white cursor-pointer">
+                                  <input type="checkbox" className="mt-0.5" checked={form.allowed_tabs.includes(s.key)} onChange={() => toggleTab(s.key)}/>
+                                  <span className={form.allowed_tabs.includes(s.key) ? 'text-gray-800' : 'text-gray-500'}>{s.label}</span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-1">A panel only takes effect while its parent tab is also ticked.</p>
+                </div>
+              )}
 
               {saveError && <p className="text-xs text-red-600">{saveError}</p>}
             </div>

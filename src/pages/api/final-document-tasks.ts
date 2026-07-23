@@ -5,6 +5,14 @@ import { deleteDriveFileByUrl } from '@/lib/driveFolders'
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
+// ── සිංහලෙන් ──────────────────────────────────────────────────────────────
+// CO / Pytho / SAFTA වගේ Final Document වලට වෙනම queue එකක්.
+//   pick   — ඕනෑම කෙනෙකුට බාරගන්න පුළුවන් (එක පාරයි, තරඟෙට ගියොත් 409)
+//   update — බාරගත්ත කෙනාට file එක වෙනස් කරන්න (pool එකට යවන්නේ නෑ)
+//   reject — ආයෙත් pending කරනවා, ඕන කෙනෙකුට ආයෙත් ගන්න පුළුවන්
+//   done   — scan කරපු copy එක upload කරලා ඉවර කරනවා; ගණන කෙළින්ම
+//            වැටෙන්නේ නෑ, admin අනුමත කරන්න doc_approvals එකට යනවා
+// ──────────────────────────────────────────────────────────────────────────
 // "Final Document" pending-approval queue — see supabase/migrations/
 // 20260719_final_document_tasks.sql. Picking is open to any signed-in user
 // (same as pick-task.ts's model); once picked, only that picker (or an
