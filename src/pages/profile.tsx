@@ -63,62 +63,28 @@ export default function ProfilePage() {
 
   async function handleSave() {
     setLoading(true)
-    setMsg('')
-
     if (form.password && form.password !== form.confirm_password) {
       setMsg('Passwords do not match'); setLoading(false); return
     }
-
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setLoading(false); return }
-
+    if (!user) return
     const patch: Record<string, string> = {
-      full_name: form.full_name, 
-      username: form.username,
-      personal_email: form.personal_email, 
-      official_email: form.official_email,
-      whatsapp_number: form.whatsapp_number, 
-      contact_number: form.contact_number,
+      full_name: form.full_name, username: form.username,
+      personal_email: form.personal_email, official_email: form.official_email,
+      whatsapp_number: form.whatsapp_number, contact_number: form.contact_number,
     }
-
+    // Position/designation are set by admins only — the input is disabled for
+    // everyone else, but guard here too in case the request is replayed.
     if (isAdmin) {
       patch.position = form.position
       patch.designation = form.designation
     }
-
-    // 1. Profiles Table එක Update කිරීම
-    const { error: profileErr } = await supabase.from('profiles').update(patch).eq('id', user.id)
-    if (profileErr) {
-      setMsg(`✗ ${profileErr.message}`)
-      setLoading(false)
-      return
+    await supabase.from('profiles').update(patch).eq('id', user.id)
+    if (form.password) {
+      await supabase.auth.updateUser({ password: form.password })
     }
-
-    // 2. Supabase Auth Email (Username) සහ Password එක Update කිරීම
-    try {
-      const authUpdates: { password?: string; email?: string } = {}
-
-      // Password එක දාලා තිබ්බොත් විතරක් Password Update කිරීම
-      if (form.password) {
-        authUpdates.password = form.password
-      }
-
-      // Username එක දාලා තිබ්බොත් Auth Email එක `${username}@exportsys.local` වලට Update කිරීම
-      if (form.username) {
-        authUpdates.email = `${form.username.trim()}@exportsys.local`
-      }
-
-      if (Object.keys(authUpdates).length > 0) {
-        const { error: authErr } = await supabase.auth.updateUser(authUpdates)
-        if (authErr) throw authErr
-      }
-
-      setMsg('Profile updated successfully')
-    } catch (e: any) {
-      setMsg(`✗ Auth update failed: ${e.message}`)
-    } finally {
-      setLoading(false)
-    }
+    setMsg('Profile updated successfully')
+    setLoading(false)
   }
 
   const basicFields: [string, string, string][] = [
