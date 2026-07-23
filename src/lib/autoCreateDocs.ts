@@ -19,6 +19,29 @@ interface CusdecRow {
 }
 interface CdnRow { id: string; code: string; cusdec_number: string; boat_note_passed: boolean | null }
 
+// A successful auto-create used to only set cusdec.boat_note_url/
+// party_copy_url and a legacy uploaded_documents/generated_boat_notes row —
+// invisible to the Activity Log, Boat Note Pending's pick flow, and the
+// doc_approvals payroll gate entirely, unlike a manually-uploaded Boat Note
+// Passed document. Inserting into document_uploads + dashboard_notifications
+// + pick_history_log here makes an auto-created one behave exactly like a
+// manual one from this point on — pickable, mailable, and (once mailed and
+// approved) counted the same way.
+async function notifyAsManualUpload(cusdecId: string, docType: 'boat_note' | 'party_copy', fileName: string, driveLink: string) {
+  const { data: doc } = await sb.from('document_uploads').insert({
+    file_name: fileName, drive_url: driveLink, doc_type: docType,
+    is_saved_to_db: false, status: 'notified',
+    uploaded_by: null, uploaded_by_name: 'Automation',
+    reason: 'Boat Note Passed', cusdec_id: cusdecId,
+  }).select().single()
+  if (!doc) return
+  await sb.from('dashboard_notifications').insert({ document_id: doc.id, uploaded_by: null, uploaded_by_name: 'Automation' })
+  await sb.from('pick_history_log').insert({
+    document_id: doc.id, user_id: null, user_name: 'Automation', action: 'notify',
+    pdf_notify_user: 'Automation', notify_update_time: new Date().toISOString(),
+  })
+}
+
 // "Boat Note Pending, not yet Blue/Green" — the same set docs-create.tsx's
 // own CUSDEC list shows (curIsBlue/curIsGreen), computed here server-side
 // for the automation triggers: CAP already complete (nothing left to wait
@@ -80,6 +103,7 @@ export async function autoCreateBoatNotes(): Promise<AutoCreateSummary> {
           cusdec_id: c.id, cusdec_number: c.number, file_name: fileName, drive_url: driveLink,
           created_by_name: 'Automation (Boat Note Create)',
         })
+        await notifyAsManualUpload(c.id, 'boat_note', fileName, driveLink)
       } catch { /* supplemental history — non-fatal */ }
       summary.created++
     } catch (e: any) {
@@ -135,6 +159,7 @@ export async function autoCreatePartyCopies(): Promise<AutoCreateSummary> {
         await sb.from('uploaded_documents').insert({
           doc_type: 'party_copy', file_name: fileName, file_url: '', drive_url: driveLink, updated_at: new Date().toISOString(),
         })
+        await notifyAsManualUpload(c.id, 'party_copy', fileName, driveLink)
       } catch { /* supplemental history — non-fatal */ }
       summary.created++
     } catch (e: any) {

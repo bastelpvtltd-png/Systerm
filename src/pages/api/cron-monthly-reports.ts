@@ -9,9 +9,13 @@ const supabaseAdmin = createClient(
 
 // Runs daily (see vercel.json — Vercel Hobby only allows once/day cron,
 // same constraint cron-check-pending.ts is already built around) but only
-// actually does anything on the 10th, and only when the Monthly Reports
-// toggle in Automation is ON (app_settings.monthly_reports_enabled) —
-// off by default so nothing generates unattended until someone turns it on.
+// actually does anything on the LAST day of the month, and only when the
+// Monthly Reports toggle in Automation is ON
+// (app_settings.monthly_reports_enabled) — off by default so nothing
+// generates unattended until someone turns it on. Calls the exact same
+// buildReport() the manual "Generate" button in My Tasks calls — an
+// automated statement is identical to a manually-generated one, same
+// opening-balance carry-forward, same archiving.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const expected = process.env.CRON_SECRET
   const authHeader = req.headers.authorization || ''
@@ -20,7 +24,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const today = new Date()
-  if (today.getUTCDate() !== 10) return res.json({ ok: true, skipped: 'not the 10th' })
+  // Last UTC day of the month = one day before the 1st of next month, both
+  // computed with Date.UTC so this never drifts with the server's local
+  // timezone (the mismatch that bit the old "day === 10" check's cousin
+  // logic elsewhere in this codebase).
+  const lastDayOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).getUTCDate()
+  if (today.getUTCDate() !== lastDayOfMonth) return res.json({ ok: true, skipped: 'not the last day of the month' })
 
   const { data: setting } = await supabaseAdmin.from('app_settings').select('value').eq('key', 'monthly_reports_enabled').maybeSingle()
   if (setting?.value !== 'true') return res.json({ ok: true, skipped: 'monthly reports disabled' })
