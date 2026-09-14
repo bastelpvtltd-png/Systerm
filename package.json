@@ -12,6 +12,7 @@
     "@supabase/supabase-js": "^2.39.0",
     "@types/nodemailer": "^8.0.1",
     "@types/pdf-parse": "^1.1.5",
+    "cheerio": "^1.2.0",
     "date-fns": "^3.3.1",
     "docxtemplater": "^3.69.0",
     "exceljs": "^4.4.0",
