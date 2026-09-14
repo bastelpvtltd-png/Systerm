@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 
 type AutomationTab =
-  | 'barcode' | 'trico' | 'data-updates'
+  | 'barcode' | 'trico' | 'trico-yard' | 'data-updates'
   | 'boat-note-create' | 'party-copy-create' | 'merge-pdf'
   | 'boat-note-check' | 'export-release' | 'vessel-trigger'
   | 'conflict-review' | 'cdn-approval' | 'notes' | 'pdf-editor' | 'monthly-reports'
@@ -40,6 +40,7 @@ const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: stri
   { key: 'notes', label: 'System Logic & Integration Notes', icon: StickyNote, permission: 'section:automation.notes' },
   { key: 'pdf-editor', label: 'PDF Editor', icon: FilePen, permission: 'section:automation.pdf-editor' },
   { key: 'monthly-reports', label: 'Monthly Reports', icon: Clock, permission: 'section:automation.monthly-reports' },
+  { key: 'trico-yard', label: 'Trico Yard View', icon: Truck, permission: 'section:automation.trico-yard' },
 ]
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -98,6 +99,7 @@ function AutomationContent() {
 
       {tab === 'barcode' && <RpaStub title="Barcode Enter" action="barcode-enter" description="Auto-fills the Barcode entry on the port system from a CDN's data, or lets you enter it manually."/>}
       {tab === 'trico' && <TricoGatePasses/>}
+      {tab === 'trico-yard' && <TricoYardPanel/>}
       {tab === 'data-updates' && <DataUpdates/>}
       {tab === 'boat-note-create' && <AutoCreatePanel panel="boat_note_create" apiPath="/api/auto-create-boat-notes" title="Boat Note Create" docLabel="Boat Note"/>}
       {tab === 'party-copy-create' && <AutoCreatePanel panel="party_copy_create" apiPath="/api/auto-create-parties-copies" title="Party's Copy Create" docLabel="Party's Copy"/>}
@@ -2006,6 +2008,110 @@ function PdfEditorPanel() {
           Highlight/Whiteout: click-drag to select area. Press Enter to confirm, Escape to cancel.
         </span>
       </div>
+    </div>
+  )
+}
+
+interface YardContainer { id: string; veh_no: string; container_no: string; cusdec_no: string; cdn: string; shipper: string; time_in: string; duration: string; status: string; updated_at: string }
+
+function TricoYardPanel() {
+  const [items, setItems] = useState<YardContainer[]>([])
+  const [loading, setLoading] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [statusMsg, setStatusMsg] = useState('')
+  const [search, setSearch] = useState('')
+  const searchRef = useRef(search)
+  
+  useEffect(() => { searchRef.current = search }, [search])
+
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
+    try {
+      const res = await fetch(`/api/trico-yard-data?search=${searchRef.current}`, { headers: await authHeader() })
+      if (res.ok) {
+        const d = await res.json()
+        setItems(d.items || [])
+      }
+    } finally { if (!silent) setLoading(false) }
+  }
+
+  useEffect(() => {
+    load()
+    const t = setInterval(() => load(true), 15000) // Auto refresh every 15s
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function triggerNow() {
+    setSyncing(true); setStatusMsg('')
+    try {
+      const res = await fetch('/api/trico-yard-sync', { method: 'POST', headers: await authHeader() })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Failed to sync')
+      setStatusMsg(`✓ Synced — ${d.message || 'Updated successfully'}`)
+      load()
+    } catch (e: any) {
+      setStatusMsg(`✗ ${e.message}`)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  return (
+    <div className="card max-w-5xl">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h2 className="font-semibold text-gray-900 text-sm">Trico Containers in Yard</h2>
+        <button onClick={triggerNow} disabled={syncing} className="btn-secondary flex items-center gap-2 text-xs">
+          {syncing ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Sync Now
+        </button>
+      </div>
+      
+      {/* මෙය ඔබගේ පවතින SchedulerControl එක භාවිතා කරයි */}
+      <div className="mb-3"><SchedulerControl panel="trico_yard" label="Sync Yard"/></div>
+      
+      {statusMsg && <p className={`text-xs mb-3 font-medium ${statusMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{statusMsg}</p>}
+      
+      <div className="flex items-center gap-2 mb-3">
+        <input value={search} onChange={e => { setSearch(e.target.value); load(); }} placeholder="Search container or shipper..." className="input max-w-sm"/>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-6">No data yet — click Sync Now</p>
+      ) : (
+        <div className="overflow-x-auto max-h-[32rem] overflow-y-auto rounded-lg border border-gray-100">
+          <table className="w-full text-xs text-left">
+            <thead className="bg-gray-50 sticky top-0 shadow-sm">
+              <tr>
+                <th className="px-3 py-2 font-medium text-gray-500">Veh. No</th>
+                <th className="px-3 py-2 font-medium text-gray-500">Container</th>
+                <th className="px-3 py-2 font-medium text-gray-500">CUSDEC</th>
+                <th className="px-3 py-2 font-medium text-gray-500">CDN</th>
+                <th className="px-3 py-2 font-medium text-gray-500">Shipper</th>
+                <th className="px-3 py-2 font-medium text-gray-500">Time In</th>
+                <th className="px-3 py-2 font-medium text-gray-500">Duration</th>
+                <th className="px-3 py-2 font-medium text-gray-500">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {items.map(r => (
+                <tr key={r.id} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 text-gray-600">{r.veh_no}</td>
+                  <td className="px-3 py-2 font-bold text-gray-800">{r.container_no}</td>
+                  <td className="px-3 py-2 text-blue-600 font-medium">{r.cusdec_no}</td>
+                  <td className="px-3 py-2 text-gray-600">{r.cdn}</td>
+                  <td className="px-3 py-2 text-gray-600 truncate max-w-[150px]">{r.shipper}</td>
+                  <td className="px-3 py-2 text-gray-600">{r.time_in}</td>
+                  <td className="px-3 py-2 text-gray-600">{r.duration}</td>
+                  <td className="px-3 py-2">
+                    {r.status && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold text-white ${r.status === 'E' ? 'bg-blue-500' : 'bg-green-500'}`}>{r.status}</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
