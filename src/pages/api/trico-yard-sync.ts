@@ -1,17 +1,16 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 import { supabase } from '@/lib/supabase'
-import * as cheerio from 'cheerio'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
   
   try {
-    // 1. Username සහ Password මෙතනට දාලා තියෙනවා (ඔබට අවශ්‍ය නම් වෙනස් කරගත හැක)
-    const username = 'TV' // මෙතනට ඔබේ Trico username එක දාන්න
-    const password = '1tv@' // මෙතනට ඔබේ Trico password එක දාන්න
+    // 1. Trico Login විස්තර
+    const username = 'TV' 
+    const password = '1tv@' 
 
     // 2. Trico System එකට Login වීම සහ Session Cookies ලබා ගැනීම
-    const loginUrl = 'https://s2.tricologi.net/webuser/login.php' 
+    const loginUrl = 'https://s2.tricologi.net/webuser/login.php'  
     const loginData = new URLSearchParams()
     loginData.append('username', username)
     loginData.append('password', password)
@@ -25,59 +24,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const cookies = loginResponse.headers.get('set-cookie') || ''
 
-    // 3. Raw Data පිටුවට ගොස් දත්ත ලබා ගැනීම
-    const dataUrl = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_tv&req_type=raw'
+    // 3. Trico හි සැබෑ JSON දත්ත ලබාගන්නා URL එක වෙත Request කිරීම
+    const dataUrl = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_load_json_ajax&req_type=raw'
     const dataResponse = await fetch(dataUrl, {
       headers: { 'Cookie': cookies }
     })
     
-    const html = await dataResponse.text()
+    const jsonText = await dataResponse.text()
+    let rawData: any[] = []
 
-    if (!html.includes('container-table') && !html.includes('tr')) {
-       throw new Error('Failed to retrieve yard data. Login might have failed or session expired.')
+    try {
+      rawData = JSON.parse(jsonText)
+    } catch (e) {
+      throw new Error('Failed to parse JSON from Trico. Login might have failed or session expired.')
     }
 
-    // 4. Cheerio හරහා HTML Table එකේ ඇති සියලුම Rows (පේළි) එකවර කියවීම
-    const $ = cheerio.load(html)
-    const containers: any[] = []
+    if (!Array.isArray(rawData) || rawData.length === 0) {
+      return res.status(200).json({ message: 'No containers found in yard from Trico.', fetched: 0 })
+    }
 
-    // Table එකේ ඇති සියලුම tr (rows) එකින් එක loop කරමින් එකතු කරයි
-    $('#container-table tbody tr').each((_, row) => {
-      const tds = $(row).find('td')
-      if (tds.length >= 8) {
-        const containerNo = $(tds[1]).text().trim()
-        
-        // හිස් පේළි මගහැර, දත්ත ඇති සියල්ල array එකට දාගනී
-        if (containerNo) {
-          containers.push({
-            veh_no: $(tds[0]).text().trim(),
-            container_no: containerNo,
-            cusdec_no: $(tds[2]).text().trim(),
-            cdn: $(tds[3]).text().trim(),
-            shipper: $(tds[4]).text().trim(),
-            time_in: $(tds[5]).text().trim(),
-            duration: $(tds[6]).text().trim(),
-            status: $(tds[7]).text().trim(),
-            updated_at: new Date().toISOString()
-          })
-        }
-      }
-    })
+    // 4. ලැබෙන JSON දත්ත අපේ Database Table එකට ගැළපෙන පරිදි සකස් කර ගැනීම
+    const containers = rawData.map(item => ({
+      veh_no: item.cont_vehno || '',
+      container_no: item.cont_number || '',
+      cusdec_no: item.cusdec_no || '',
+      cdn: item.cdn_number || '',
+      shipper: item.shipper_name || '',
+      time_in: item.time_in || '',
+      duration: item.duration || '',
+      // Examination ('E') සහ Released ('R') තත්ත්වයන් එකට සකස් කිරීම
+      status: item.released === 'R' ? 'R' : (item.examination === 'E' ? 'E' : ''),
+      updated_at: new Date().toISOString()
+    })).filter(c => c.container_no !== '') // Container number එක නැති හිස් පේළි ඉවත් කරයි
 
     if (containers.length === 0) {
-       return res.status(200).json({ message: 'No containers found in yard.', fetched: 0 })
+       return res.status(200).json({ message: 'No valid containers found.', fetched: 0 })
     }
 
-    // 5. Supabase එකට දත්ත එකවර (Bulk Upsert) යැවීම
+    // 5. Supabase වෙත දත්ත එකවර (Bulk Upsert) යැවීම
     const { error: upsertError } = await supabase
       .from('trico_yard')
       .upsert(containers, { onConflict: 'container_no' })
 
     if (upsertError) throw upsertError
 
-    return res.status(200).json({ 
-      message: `Successfully synced. Total containers updated: ${containers.length}`, 
-      fetched: containers.length 
+    return res.status(200).json({  
+      message: `Successfully synced. Total containers updated: ${containers.length}`,  
+      fetched: containers.length  
     })
 
   } catch (error: any) {
