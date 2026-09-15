@@ -1,7 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 import { supabase } from '@/lib/supabase'
 
-const LOGIN_URL = 'https://s2.tricologi.net/webuser/?option=user'
+const LOGIN_PAGE_URL = 'https://s2.tricologi.net/webuser/?option=user'
+const LOGIN_ACTION_URL = 'https://s2.tricologi.net/webuser/user/login_validate.php'
 const DATA_URL = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_tv&req_type=raw'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
@@ -39,42 +40,47 @@ function cookieHeader(jar: Map<string, string>): string {
 async function tricoLogin(): Promise<{ cookie: string; debug: any }> {
   const jar = new Map<string, string>()
 
-  // Step 1: GET the login page first — Trico issues a session cookie here,
-  // and the login POST below must carry it so the login attaches to THIS
-  // session rather than creating an orphaned one.
-  const loginPageRes = await fetch(LOGIN_URL, {
+  // Step 1: GET the login page — this issues the session cookie AND embeds
+  // a one-time "token" hidden field that login_validate.php requires.
+  const loginPageRes = await fetch(LOGIN_PAGE_URL, {
     method: 'GET',
     headers: { 'User-Agent': UA },
     cache: 'no-store',
   })
   const getCookies = getSetCookies(loginPageRes)
   mergeCookies(jar, getCookies)
+  const loginPageHtml = await loginPageRes.text()
 
-  // Step 2: POST credentials, carrying the session cookie from step 1.
+  const tokenMatch = loginPageHtml.match(/<input[^>]*name="token"[^>]*value="([^"]+)"/i)
+  const token = tokenMatch ? tokenMatch[1] : null
+  if (!token) {
+    throw Object.assign(new Error('Could not find the login "token" field on the Trico login page — it may require a different flow now.'), {
+      debug: { getStatus: loginPageRes.status, getCookieCount: getCookies.length, loginPageSnippet: loginPageHtml.slice(0, 300) },
+    })
+  }
+
+  // Step 2: POST credentials + token to the real form action
+  // (login_validate.php), carrying the session cookie from step 1.
   const body = new URLSearchParams({
     login_user_id: TRICO_USERNAME,
     login_password: TRICO_PASSWORD,
-    btn_login: 'Login',
+    token,
   })
 
-  const loginRes = await fetch(LOGIN_URL, {
+  const loginRes = await fetch(LOGIN_ACTION_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': UA,
-      'Referer': LOGIN_URL,
+      'Referer': LOGIN_PAGE_URL,
       'Cookie': cookieHeader(jar),
     },
     body: body.toString(),
-    redirect: 'manual', // logins often 302-redirect; we only need the Set-Cookie from this response
+    redirect: 'manual',
   })
   const postCookies = getSetCookies(loginRes)
   mergeCookies(jar, postCookies)
 
-  // Only read the body when it's not a redirect — a 302 body is usually
-  // empty/irrelevant, but a 200 here often means the login form re-rendered
-  // (e.g. with a "wrong password" message), which is exactly what we need
-  // to see when something's off.
   let postBodySnippet = ''
   let postBodyFull = ''
   if (loginRes.status < 300 || loginRes.status >= 400) {
@@ -84,13 +90,11 @@ async function tricoLogin(): Promise<{ cookie: string; debug: any }> {
     } catch { /* ignore */ }
   }
 
-  // If the POST response still contains the login form's own field ids,
-  // the login almost certainly failed (wrong credentials, or these aren't
-  // actually the POST field "name" attributes) and the page just re-rendered.
-  const stillShowsLoginForm = /login_user_id|login_password/.test(postBodyFull)
-  const bodyMentionsInvalid = /invalid|incorrect|failed/i.test(postBodyFull)
+  const stillShowsLoginForm = /name="login_user_id"/.test(postBodyFull)
+  const bodyMentionsInvalid = /invalid|incorrect|failed|wrong/i.test(postBodyFull)
 
   const debug = {
+    tokenFound: true,
     getStatus: loginPageRes.status,
     getCookieCount: getCookies.length,
     postStatus: loginRes.status,
@@ -103,7 +107,7 @@ async function tricoLogin(): Promise<{ cookie: string; debug: any }> {
   }
 
   if (jar.size === 0) {
-    throw Object.assign(new Error('Trico login did not return any session cookie — check username/password or login field names.'), { debug })
+    throw Object.assign(new Error('Trico login did not return any session cookie.'), { debug })
   }
   return { cookie: cookieHeader(jar), debug }
 }
