@@ -8,47 +8,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const username = 'TV' 
     const password = '1tv@' 
+    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    
+    let sessionCookies = ''
 
-    // 1. Trico Login Request
-    const loginUrl = 'https://s2.tricologi.net/webuser/login.php'  
+    // පියවර 1: මුලින්ම Login පිටුවට ගොස් Session Cookie එක ලබාගැනීම
+    const initResponse = await fetch('https://s2.tricologi.net/webuser/?option=user', {
+      method: 'GET',
+      headers: { 'User-Agent': userAgent }
+    })
+    
+    if (initResponse.headers.getSetCookie) {
+        sessionCookies = initResponse.headers.getSetCookie().map((c: any) => c.split(';')[0]).join('; ')
+    } else {
+        const rawCookie = initResponse.headers.get('set-cookie')
+        if (rawCookie) sessionCookies = rawCookie.split(';')[0]
+    }
+
+    // පියවර 2: ලබාගත් Session Cookie එක සමඟින් Username හා Password යැවීම (Login)
     const loginData = new URLSearchParams()
     loginData.append('username', username)
     loginData.append('password', password)
-    loginData.append('login', '1')
+    loginData.append('login', '1') // ෆෝම් එක submit වන බව පෙන්වීමට
 
-    const loginResponse = await fetch(loginUrl, {
+    const loginResponse = await fetch('https://s2.tricologi.net/webuser/login.php', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': userAgent,
+        'Cookie': sessionCookies, // මුලින් ගත්තු Cookie එක යවමු
+        'Referer': 'https://s2.tricologi.net/webuser/?option=user'
       },
       body: loginData.toString(),
       redirect: 'manual' 
     })
 
-    // Cookie එක ලබා ගැනීම
-    let cookies = ''
-    const setCookieHeader = loginResponse.headers.getSetCookie ? loginResponse.headers.getSetCookie() : [loginResponse.headers.get('set-cookie')]
-    if (setCookieHeader && setCookieHeader.length > 0) {
-        cookies = setCookieHeader.filter(Boolean).map((c: any) => c.split(';')[0]).join('; ')
+    // ලොග් වීමේදී අලුත් Cookie එකක් දුන්නොත් එයත් එකතු කරගැනීම
+    if (loginResponse.headers.getSetCookie) {
+        const newCookies = loginResponse.headers.getSetCookie().map((c: any) => c.split(';')[0]).join('; ')
+        if (newCookies) sessionCookies = newCookies
+    } else {
+        const rawNewCookie = loginResponse.headers.get('set-cookie')
+        if (rawNewCookie) sessionCookies = rawNewCookie.split(';')[0]
     }
 
-    // 2. Data Page එකට Request කිරීම
+    // පියවර 3: සාර්ථකව ලොග් වීමෙන් පසු Data පිටුවට Request කිරීම
     const dataUrl = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_tv&req_type=raw'
     const dataResponse = await fetch(dataUrl, {
       method: 'GET',
       headers: { 
-        'Cookie': cookies,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'Cookie': sessionCookies,
+        'User-Agent': userAgent,
+        'Referer': 'https://s2.tricologi.net/webuser/?option=tv'
       }
     })
     
     const html = await dataResponse.text()
 
-    // 3. Cheerio හරහා HTML Parse කිරීම
+    // 4. Cheerio හරහා HTML Parse කිරීම
     const $ = cheerio.load(html)
     const containers: any[] = []
 
+    // සියලුම rows ලබා ගැනීම (50ක් හෝ 60ක් තිබුණත් සියල්ල ගනී)
     $('tbody tr').each((_, row) => {
       const tds = $(row).find('td')
       
@@ -71,17 +92,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     })
 
+    // HTML එක ඇතුලේ මුකුත්ම නැත්නම් (Login Failed නම්)
     if (containers.length === 0) {
        return res.status(400).json({ 
-         error: 'No valid containers found in HTML. Login might have failed or yard is empty.', 
-         debugHtml: html.slice(0, 300) 
+         error: 'Login failed or Yard is empty! Check Trico username/password.',
+         debugHtml: html.slice(0, 150) // Error එකේදී ලැබුණු HTML එකේ මුල් ටික බලමු
        })
     }
 
-    // 4. Data Deduplication (ඔබ ඉල්ලූ පරිදි CUSDEC + CDN + Container No හරහා Duplicate අයින් කිරීම)
+    // 5. Data Deduplication (CUSDEC + CDN + Container No හරහා Duplicate අයින් කිරීම)
     const uniqueMap = new Map();
     containers.forEach(c => {
-       // මේ තුනේම එකතුව එකම නම්, එය නැවත map එකට එකතු නොවේ
        const uniqueKey = `${c.container_no}-${c.cusdec_no}-${c.cdn}`;
        if (!uniqueMap.has(uniqueKey)) {
            uniqueMap.set(uniqueKey, c);
@@ -89,7 +110,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     const uniqueContainers = Array.from(uniqueMap.values());
 
-    // 5. Supabase වෙත Save කිරීම
+    // 6. Supabase වෙත Save කිරීම
     const { error: upsertError } = await supabase
       .from('trico_yard')
       .upsert(uniqueContainers, { onConflict: 'container_no' })
