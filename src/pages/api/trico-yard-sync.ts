@@ -135,8 +135,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: 'No containers found in Trico yard.', fetched: 0 })
     }
 
-    // Duplicate අයින් කිරීම (Container + Cusdec + CDN) — also collapses the
-    // repeated carousel slides, which share identical rows.
+    // Duplicate අයින් කිරීම (Container + Cusdec + CDN) — collapses the
+    // repeated carousel slides, which share identical rows within THIS fetch.
     const uniqueMap = new Map<string, YardRow>()
     containers.forEach(c => {
       const uniqueKey = `${c.container_no}-${c.cusdec_no}-${c.cdn}`
@@ -144,15 +144,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     })
     const uniqueContainers = Array.from(uniqueMap.values())
 
+    // Skip rows that are ALREADY saved from a previous sync (same
+    // container_no + cusdec_no + cdn combo) so a re-run every 20 min doesn't
+    // keep re-touching records that haven't actually changed. Only genuinely
+    // new (or changed) combos get written.
+    const containerNos = uniqueContainers.map(c => c.container_no)
+    const { data: existingRows, error: fetchError } = await supabase
+      .from('trico_yard')
+      .select('container_no, cusdec_no, cdn')
+      .in('container_no', containerNos)
+
+    if (fetchError) throw fetchError
+
+    const existingKeys = new Set(
+      (existingRows || []).map((r: any) => `${r.container_no}-${r.cusdec_no}-${r.cdn}`)
+    )
+
+    const newOrChanged = uniqueContainers.filter(
+      c => !existingKeys.has(`${c.container_no}-${c.cusdec_no}-${c.cdn}`)
+    )
+
+    if (newOrChanged.length === 0) {
+      return res.status(200).json({
+        message: `No new containers — all ${uniqueContainers.length} already saved.`,
+        fetched: 0,
+        skipped: uniqueContainers.length,
+      })
+    }
+
     const { error: upsertError } = await supabase
       .from('trico_yard')
-      .upsert(uniqueContainers, { onConflict: 'container_no' })
+      .upsert(newOrChanged, { onConflict: 'container_no' })
 
     if (upsertError) throw upsertError
 
     return res.status(200).json({
-      message: `Successfully synced. Total unique containers: ${uniqueContainers.length}`,
-      fetched: uniqueContainers.length,
+      message: `Synced ${newOrChanged.length} new/changed container(s), skipped ${uniqueContainers.length - newOrChanged.length} already-saved.`,
+      fetched: newOrChanged.length,
+      skipped: uniqueContainers.length - newOrChanged.length,
     })
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'Sync failed' })
