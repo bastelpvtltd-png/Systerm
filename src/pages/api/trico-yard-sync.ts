@@ -76,9 +76,19 @@ async function tricoLogin(): Promise<{ cookie: string; debug: any }> {
   // (e.g. with a "wrong password" message), which is exactly what we need
   // to see when something's off.
   let postBodySnippet = ''
+  let postBodyFull = ''
   if (loginRes.status < 300 || loginRes.status >= 400) {
-    try { postBodySnippet = (await loginRes.text()).slice(0, 300) } catch { /* ignore */ }
+    try {
+      postBodyFull = await loginRes.text()
+      postBodySnippet = postBodyFull.slice(0, 300)
+    } catch { /* ignore */ }
   }
+
+  // If the POST response still contains the login form's own field ids,
+  // the login almost certainly failed (wrong credentials, or these aren't
+  // actually the POST field "name" attributes) and the page just re-rendered.
+  const stillShowsLoginForm = /login_user_id|login_password/.test(postBodyFull)
+  const bodyMentionsInvalid = /invalid|incorrect|failed/i.test(postBodyFull)
 
   const debug = {
     getStatus: loginPageRes.status,
@@ -88,6 +98,8 @@ async function tricoLogin(): Promise<{ cookie: string; debug: any }> {
     postCookieCount: postCookies.length,
     finalJarKeys: Array.from(jar.keys()),
     postBodySnippet,
+    stillShowsLoginForm,
+    bodyMentionsInvalid,
   }
 
   if (jar.size === 0) {
