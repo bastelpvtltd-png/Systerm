@@ -36,7 +36,7 @@ function cookieHeader(jar: Map<string, string>): string {
   return Array.from(jar.entries()).map(([k, v]) => `${k}=${v}`).join('; ')
 }
 
-async function tricoLogin(): Promise<string> {
+async function tricoLogin(): Promise<{ cookie: string; debug: any }> {
   const jar = new Map<string, string>()
 
   // Step 1: GET the login page first — Trico issues a session cookie here,
@@ -47,7 +47,8 @@ async function tricoLogin(): Promise<string> {
     headers: { 'User-Agent': UA },
     cache: 'no-store',
   })
-  mergeCookies(jar, getSetCookies(loginPageRes))
+  const getCookies = getSetCookies(loginPageRes)
+  mergeCookies(jar, getCookies)
 
   // Step 2: POST credentials, carrying the session cookie from step 1.
   const body = new URLSearchParams({
@@ -67,12 +68,32 @@ async function tricoLogin(): Promise<string> {
     body: body.toString(),
     redirect: 'manual', // logins often 302-redirect; we only need the Set-Cookie from this response
   })
-  mergeCookies(jar, getSetCookies(loginRes))
+  const postCookies = getSetCookies(loginRes)
+  mergeCookies(jar, postCookies)
+
+  // Only read the body when it's not a redirect — a 302 body is usually
+  // empty/irrelevant, but a 200 here often means the login form re-rendered
+  // (e.g. with a "wrong password" message), which is exactly what we need
+  // to see when something's off.
+  let postBodySnippet = ''
+  if (loginRes.status < 300 || loginRes.status >= 400) {
+    try { postBodySnippet = (await loginRes.text()).slice(0, 300) } catch { /* ignore */ }
+  }
+
+  const debug = {
+    getStatus: loginPageRes.status,
+    getCookieCount: getCookies.length,
+    postStatus: loginRes.status,
+    postLocation: loginRes.headers.get('location') || null,
+    postCookieCount: postCookies.length,
+    finalJarKeys: Array.from(jar.keys()),
+    postBodySnippet,
+  }
 
   if (jar.size === 0) {
-    throw new Error('Trico login did not return any session cookie — check username/password or login field names.')
+    throw Object.assign(new Error('Trico login did not return any session cookie — check username/password or login field names.'), { debug })
   }
-  return cookieHeader(jar)
+  return { cookie: cookieHeader(jar), debug }
 }
 
 interface YardRow {
@@ -131,7 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   try {
-    const cookie = await tricoLogin()
+    const { cookie, debug: loginDebug } = await tricoLogin()
 
     const response = await fetch(DATA_URL, {
       method: 'GET',
@@ -150,6 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({
         error: 'Logged in but the yard table was not found in the response — Trico page structure may have changed.',
         snippet: html.slice(0, 200),
+        loginDebug,
       })
     }
 
@@ -208,6 +230,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       skipped: uniqueContainers.length - newOrChanged.length,
     })
   } catch (error: any) {
-    return res.status(500).json({ error: error.message || 'Sync failed' })
+    return res.status(500).json({ error: error.message || 'Sync failed', loginDebug: error.debug })
   }
 }
