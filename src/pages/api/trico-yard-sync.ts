@@ -3,7 +3,10 @@ import { supabase } from '@/lib/supabase'
 
 const LOGIN_PAGE_URL = 'https://s2.tricologi.net/webuser/?option=user'
 const LOGIN_ACTION_URL = 'https://s2.tricologi.net/webuser/user/login_validate.php'
-const DATA_URL = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_tv&req_type=raw'
+// The visible yard page renders empty and fills rows in via this JS-driven
+// AJAX endpoint — that's the one that actually carries the data.
+const DATA_JSON_URL = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_load_json_ajax&req_type=raw'
+const DATA_PAGE_URL = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_tv&req_type=raw'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
 // Trico credentials — move these to env vars (TRICO_USERNAME / TRICO_PASSWORD)
@@ -124,44 +127,37 @@ interface YardRow {
   updated_at: string
 }
 
-function stripTags(html: string): string {
-  return html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
+// We don't know Trico's exact JSON key names yet (never seen a real payload —
+// every earlier attempt hit the login page instead). This tries a handful of
+// likely candidates per field so a first real run has the best chance of
+// mapping correctly; the handler also logs a raw sample for calibration.
+function pick(item: any, candidates: string[]): string {
+  for (const key of candidates) {
+    if (item[key] !== undefined && item[key] !== null && item[key] !== '') return String(item[key])
+  }
+  return ''
 }
 
-// Parses the yard carousel HTML into row objects. The page repeats the same
-// table across several "carousel-slide" divs, so we just parse every <tr>
-// we find — exact duplicates collapse naturally at the upsert dedupe step.
-function parseYardHtml(html: string): YardRow[] {
-  const rows: YardRow[] = []
-  const rowRe = /<tr class="border-b border-gray-200[^"]*">([\s\S]*?)<\/tr>/g
-  let rowMatch: RegExpExecArray | null
-
-  while ((rowMatch = rowRe.exec(html)) !== null) {
-    const rowHtml = rowMatch[1]
-    const cellRe = /<td[^>]*>([\s\S]*?)<\/td>/g
-    const cells: string[] = []
-    let cellMatch: RegExpExecArray | null
-    while ((cellMatch = cellRe.exec(rowHtml)) !== null) cells.push(cellMatch[1])
-
-    if (cells.length < 8) continue // malformed/partial row, skip
-
-    const statusSpanMatch = cells[7].match(/<span[^>]*>([^<]*)<\/span>/)
-    const status = statusSpanMatch ? statusSpanMatch[1].trim() : ''
-
-    rows.push({
-      veh_no: stripTags(cells[0]),
-      container_no: stripTags(cells[1]),
-      cusdec_no: stripTags(cells[2]),
-      cdn: stripTags(cells[3]),
-      shipper: stripTags(cells[4]),
-      time_in: stripTags(cells[5]),
-      duration: stripTags(cells[6]),
-      status,
-      updated_at: new Date().toISOString(),
-    })
+function mapJsonItem(item: any): YardRow {
+  const released = pick(item, ['released', 'is_released'])
+  const examination = pick(item, ['examination', 'is_examination'])
+  let status = pick(item, ['status'])
+  if (!status) {
+    if (released === 'R' || released === '1' || released === 'true') status = 'R'
+    else if (examination === 'E' || examination === '1' || examination === 'true') status = 'E'
   }
 
-  return rows
+  return {
+    veh_no: pick(item, ['cont_vehno', 'veh_no', 'vehicle_no', 'vehno', 'VehNo']),
+    container_no: pick(item, ['cont_number', 'container_no', 'container_number', 'ContainerNo']),
+    cusdec_no: pick(item, ['cusdec_no', 'cusdec_number', 'cusdec', 'CusdecNo']),
+    cdn: pick(item, ['cdn_number', 'cdn_no', 'cdn', 'Cdn']),
+    shipper: pick(item, ['shipper_name', 'shipper', 'Shipper']),
+    time_in: pick(item, ['time_in', 'timein', 'TimeIn']),
+    duration: pick(item, ['duration', 'Duration']),
+    status,
+    updated_at: new Date().toISOString(),
+  }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -170,35 +166,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { cookie, debug: loginDebug } = await tricoLogin()
 
-    const response = await fetch(DATA_URL, {
+    const response = await fetch(DATA_JSON_URL, {
       method: 'GET',
       headers: {
         'User-Agent': UA,
-        'Accept': 'text/html,application/xhtml+xml',
-        'Referer': DATA_URL,
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Referer': DATA_PAGE_URL,
         'Cookie': cookie,
       },
       cache: 'no-store',
     })
 
-    const html = await response.text()
+    const text = await response.text()
 
-    if (!html.includes('container-table')) {
+    if (!text.trim().startsWith('[') && !text.trim().startsWith('{')) {
       return res.status(400).json({
-        error: 'Logged in but the yard table was not found in the response — Trico page structure may have changed.',
-        snippet: html.slice(0, 200),
+        error: 'Logged in, but the JSON endpoint did not return JSON — session may not be recognized there, or the endpoint changed.',
+        snippet: text.slice(0, 200),
         loginDebug,
       })
     }
 
-    const containers = parseYardHtml(html).filter(c => c.container_no !== '')
+    const rawData = JSON.parse(text)
+    const rawItems: any[] = Array.isArray(rawData) ? rawData
+      : Array.isArray(rawData.data) ? rawData.data
+      : Array.isArray(rawData.items) ? rawData.items
+      : Array.isArray(rawData.rows) ? rawData.rows
+      : []
 
-    if (containers.length === 0) {
-      return res.status(200).json({ message: 'No containers found in Trico yard.', fetched: 0 })
+    if (rawItems.length === 0) {
+      return res.status(200).json({ message: 'No containers found in Trico yard.', fetched: 0, rawSample: rawData })
     }
 
-    // Duplicate අයින් කිරීම (Container + Cusdec + CDN) — collapses the
-    // repeated carousel slides, which share identical rows within THIS fetch.
+    const containers = rawItems.map(mapJsonItem).filter(c => c.container_no !== '')
+
+    if (containers.length === 0) {
+      // Rows came back but our field-name guesses matched nothing — surface
+      // a raw sample so the mapping can be corrected in one shot.
+      return res.status(200).json({
+        message: `Got ${rawItems.length} raw item(s) but could not map any container_no — field names likely differ.`,
+        fetched: 0,
+        rawSample: rawItems.slice(0, 2),
+      })
+    }
+
+    // Duplicate අයින් කිරීම (Container + Cusdec + CDN)
     const uniqueMap = new Map<string, YardRow>()
     containers.forEach(c => {
       const uniqueKey = `${c.container_no}-${c.cusdec_no}-${c.cdn}`
