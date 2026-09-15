@@ -1,73 +1,159 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 import { supabase } from '@/lib/supabase'
 
+const LOGIN_URL = 'https://s2.tricologi.net/webuser/?option=user'
+const DATA_URL = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_tv&req_type=raw'
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+// Trico credentials — move these to env vars (TRICO_USERNAME / TRICO_PASSWORD)
+// as soon as you can; hardcoded here only so the flow can be verified first.
+const TRICO_USERNAME = process.env.TRICO_USERNAME || 'TV'
+const TRICO_PASSWORD = process.env.TRICO_PASSWORD || '1tv@'
+
+// Combines any number of Set-Cookie headers into one Cookie header value.
+function collectCookies(setCookieHeaders: string[]): string {
+  return setCookieHeaders
+    .map(c => c.split(';')[0]) // keep just "name=value", drop attrs like Path/Expires
+    .join('; ')
+}
+
+// Node's fetch (undici) exposes multiple Set-Cookie headers via getSetCookie().
+// Fall back to a single header read for older runtimes.
+function getSetCookies(res: Response): string[] {
+  const anyHeaders = res.headers as any
+  if (typeof anyHeaders.getSetCookie === 'function') return anyHeaders.getSetCookie()
+  const single = res.headers.get('set-cookie')
+  return single ? [single] : []
+}
+
+async function tricoLogin(): Promise<string> {
+  const body = new URLSearchParams({
+    login_user_id: TRICO_USERNAME,
+    login_password: TRICO_PASSWORD,
+    btn_login: 'Login',
+  })
+
+  const res = await fetch(LOGIN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': UA,
+      'Referer': LOGIN_URL,
+    },
+    body: body.toString(),
+    redirect: 'manual', // logins often 302-redirect; we just need the cookie from this response
+  })
+
+  const cookies = getSetCookies(res)
+  if (cookies.length === 0) {
+    throw new Error('Trico login did not return a session cookie — check username/password or login field names.')
+  }
+  return collectCookies(cookies)
+}
+
+interface YardRow {
+  veh_no: string
+  container_no: string
+  cusdec_no: string
+  cdn: string
+  shipper: string
+  time_in: string
+  duration: string
+  status: string
+  updated_at: string
+}
+
+function stripTags(html: string): string {
+  return html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
+}
+
+// Parses the yard carousel HTML into row objects. The page repeats the same
+// table across several "carousel-slide" divs, so we just parse every <tr>
+// we find — exact duplicates collapse naturally at the upsert dedupe step.
+function parseYardHtml(html: string): YardRow[] {
+  const rows: YardRow[] = []
+  const rowRe = /<tr class="border-b border-gray-200[^"]*">([\s\S]*?)<\/tr>/g
+  let rowMatch: RegExpExecArray | null
+
+  while ((rowMatch = rowRe.exec(html)) !== null) {
+    const rowHtml = rowMatch[1]
+    const cellRe = /<td[^>]*>([\s\S]*?)<\/td>/g
+    const cells: string[] = []
+    let cellMatch: RegExpExecArray | null
+    while ((cellMatch = cellRe.exec(rowHtml)) !== null) cells.push(cellMatch[1])
+
+    if (cells.length < 8) continue // malformed/partial row, skip
+
+    const statusSpanMatch = cells[7].match(/<span[^>]*>([^<]*)<\/span>/)
+    const status = statusSpanMatch ? statusSpanMatch[1].trim() : ''
+
+    rows.push({
+      veh_no: stripTags(cells[0]),
+      container_no: stripTags(cells[1]),
+      cusdec_no: stripTags(cells[2]),
+      cdn: stripTags(cells[3]),
+      shipper: stripTags(cells[4]),
+      time_in: stripTags(cells[5]),
+      duration: stripTags(cells[6]),
+      status,
+      updated_at: new Date().toISOString(),
+    })
+  }
+
+  return rows
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
-  
-  try {
-    // Trico හි සැබෑ JSON දත්ත ලබාගන්නා URL එක
-    const dataUrl = 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_load_json_ajax&req_type=raw'
-    
-    const response = await fetch(dataUrl, {
-      method: 'GET',
-      headers: { 
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Referer': 'https://s2.tricologi.net/webuser/?option=tv&action=cont_in_yard_tv'
-      },
-      cache: 'no-store'
-    })
-    
-    const text = await response.text()
 
-    // ලැබුණේ JSON ද නැත්නම් Login page එකේ HTML එකද බලමු
-    if (!text.trim().startsWith('[') && !text.trim().startsWith('{')) {
-      return res.status(400).json({ 
-        error: 'Trico requires an active session cookie. Server returned login HTML page instead of JSON data.',
-        snippet: text.slice(0, 150)
+  try {
+    const cookie = await tricoLogin()
+
+    const response = await fetch(DATA_URL, {
+      method: 'GET',
+      headers: {
+        'User-Agent': UA,
+        'Accept': 'text/html,application/xhtml+xml',
+        'Referer': DATA_URL,
+        'Cookie': cookie,
+      },
+      cache: 'no-store',
+    })
+
+    const html = await response.text()
+
+    if (!html.includes('container-table')) {
+      return res.status(400).json({
+        error: 'Logged in but the yard table was not found in the response — Trico page structure may have changed.',
+        snippet: html.slice(0, 200),
       })
     }
 
-    const rawData = JSON.parse(text)
+    const containers = parseYardHtml(html).filter(c => c.container_no !== '')
 
-    if (!Array.isArray(rawData) || rawData.length === 0) {
+    if (containers.length === 0) {
       return res.status(200).json({ message: 'No containers found in Trico yard.', fetched: 0 })
     }
 
-    // Data Map කිරීම
-    const containers = rawData.map((item: any) => ({
-      veh_no: item.cont_vehno || '',
-      container_no: item.cont_number || '',
-      cusdec_no: item.cusdec_no || '',
-      cdn: item.cdn_number || '',
-      shipper: item.shipper_name || '',
-      time_in: item.time_in || '',
-      duration: item.duration || '',
-      status: item.released === 'R' ? 'R' : (item.examination === 'E' ? 'E' : ''),
-      updated_at: new Date().toISOString()
-    })).filter((c: any) => c.container_no !== '')
-
-    // Duplicate අයින් කිරීම (Container + Cusdec + CDN)
-    const uniqueMap = new Map()
+    // Duplicate අයින් කිරීම (Container + Cusdec + CDN) — also collapses the
+    // repeated carousel slides, which share identical rows.
+    const uniqueMap = new Map<string, YardRow>()
     containers.forEach(c => {
-       const uniqueKey = `${c.container_no}-${c.cusdec_no}-${c.cdn}`
-       if (!uniqueMap.has(uniqueKey)) uniqueMap.set(uniqueKey, c)
+      const uniqueKey = `${c.container_no}-${c.cusdec_no}-${c.cdn}`
+      if (!uniqueMap.has(uniqueKey)) uniqueMap.set(uniqueKey, c)
     })
     const uniqueContainers = Array.from(uniqueMap.values())
 
-    // Supabase වෙත Save කිරීම
     const { error: upsertError } = await supabase
       .from('trico_yard')
       .upsert(uniqueContainers, { onConflict: 'container_no' })
 
     if (upsertError) throw upsertError
 
-    return res.status(200).json({ 
-      message: `Successfully synced. Total unique containers: ${uniqueContainers.length}`, 
-      fetched: uniqueContainers.length 
+    return res.status(200).json({
+      message: `Successfully synced. Total unique containers: ${uniqueContainers.length}`,
+      fetched: uniqueContainers.length,
     })
-
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'Sync failed' })
   }
