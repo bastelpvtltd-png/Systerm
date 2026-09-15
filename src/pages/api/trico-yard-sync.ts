@@ -10,13 +10,6 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const TRICO_USERNAME = process.env.TRICO_USERNAME || 'TV'
 const TRICO_PASSWORD = process.env.TRICO_PASSWORD || '1tv@'
 
-// Combines any number of Set-Cookie headers into one Cookie header value.
-function collectCookies(setCookieHeaders: string[]): string {
-  return setCookieHeaders
-    .map(c => c.split(';')[0]) // keep just "name=value", drop attrs like Path/Expires
-    .join('; ')
-}
-
 // Node's fetch (undici) exposes multiple Set-Cookie headers via getSetCookie().
 // Fall back to a single header read for older runtimes.
 function getSetCookies(res: Response): string[] {
@@ -26,29 +19,60 @@ function getSetCookies(res: Response): string[] {
   return single ? [single] : []
 }
 
+// Simple cookie jar: merges new Set-Cookie values into the existing jar
+// (same-named cookies get overwritten) and returns the jar's Cookie header.
+function mergeCookies(jar: Map<string, string>, setCookieHeaders: string[]): void {
+  for (const raw of setCookieHeaders) {
+    const pair = raw.split(';')[0] // "name=value"
+    const eq = pair.indexOf('=')
+    if (eq === -1) continue
+    const name = pair.slice(0, eq).trim()
+    const value = pair.slice(eq + 1).trim()
+    jar.set(name, value)
+  }
+}
+
+function cookieHeader(jar: Map<string, string>): string {
+  return Array.from(jar.entries()).map(([k, v]) => `${k}=${v}`).join('; ')
+}
+
 async function tricoLogin(): Promise<string> {
+  const jar = new Map<string, string>()
+
+  // Step 1: GET the login page first — Trico issues a session cookie here,
+  // and the login POST below must carry it so the login attaches to THIS
+  // session rather than creating an orphaned one.
+  const loginPageRes = await fetch(LOGIN_URL, {
+    method: 'GET',
+    headers: { 'User-Agent': UA },
+    cache: 'no-store',
+  })
+  mergeCookies(jar, getSetCookies(loginPageRes))
+
+  // Step 2: POST credentials, carrying the session cookie from step 1.
   const body = new URLSearchParams({
     login_user_id: TRICO_USERNAME,
     login_password: TRICO_PASSWORD,
     btn_login: 'Login',
   })
 
-  const res = await fetch(LOGIN_URL, {
+  const loginRes = await fetch(LOGIN_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': UA,
       'Referer': LOGIN_URL,
+      'Cookie': cookieHeader(jar),
     },
     body: body.toString(),
-    redirect: 'manual', // logins often 302-redirect; we just need the cookie from this response
+    redirect: 'manual', // logins often 302-redirect; we only need the Set-Cookie from this response
   })
+  mergeCookies(jar, getSetCookies(loginRes))
 
-  const cookies = getSetCookies(res)
-  if (cookies.length === 0) {
-    throw new Error('Trico login did not return a session cookie — check username/password or login field names.')
+  if (jar.size === 0) {
+    throw new Error('Trico login did not return any session cookie — check username/password or login field names.')
   }
-  return collectCookies(cookies)
+  return cookieHeader(jar)
 }
 
 interface YardRow {
