@@ -648,12 +648,72 @@ function DocumentsUploadContent() {
     return await persistItem(item, 'insert', undefined, referenceOverride)
   }
 
-  // A batch Send steps through one SendModal per file (see batchQueue below)
-  // — but match/cap conflicts are resolved through matchModal/capModal, a
-  // separate popup outside that SendModal entirely. Once one of those
-  // resolves the CURRENT batch item, the stuck SendModal (still showing
-  // "resolve it above" from the original check-document-match failure)
-  // needs to be swapped out for the next file instead of sitting there.
+  // Batch-safe version of saveOne, used by runBatchSend below. Same checks,
+  // same order (identify -> extracted data -> format warnings -> duplicate/
+  // CAP check -> persist) — the one difference is what happens on a
+  // duplicate or CAP conflict. saveOne pops matchModal/capModal and waits
+  // for the user to resolve it right there. That's fine for a single file,
+  // but a batch runs many files in one pass with ONE Save/Mail/Notify/Reason
+  // choice, so there's no good place to pause for an interactive popup mid-
+  // loop. Instead, a conflict here is just another per-file error: this
+  // item gets marked 'error' with a message pointing at it, and the loop
+  // moves on to the next file. The item stays visible with that error so it
+  // can be resolved individually afterward (open its own Send, where saveOne
+  // + matchModal/capModal work as normal) and picked up by the next Send All.
+  async function saveOneBatch(item: UploadItem, referenceOverride?: string) {
+    if (!item.detectedType) {
+      const msg = 'Type not identified'
+      updateItem(item.id, { status: 'error', error: msg })
+      return { ok: false, error: msg }
+    }
+    if (!item.fields.some(f => f.value && f.value.trim())) {
+      const msg = 'No data extracted'
+      updateItem(item.id, { status: 'error', error: msg })
+      return { ok: false, error: msg }
+    }
+    const docType = item.detectedType || 'cusdec'
+    const data = Object.fromEntries(item.fields.map(f => [f.key, f.value]))
+    try {
+      const res = await fetch('/api/check-document-match', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ doc_type: docType, data }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Duplicate check failed')
+      if (d.cusdecMissing) {
+        const num = data.cusdec_number || ''
+        const msg = `CDN eka save karana pita, paha CUSDEC eka (${num}) add karanna. CUSDEC eka system eke naha.`
+        updateItem(item.id, { status: 'error', error: msg })
+        return { ok: false, error: msg }
+      }
+      if (d.cdnMissing) {
+        const cno = data.container_no || ''
+        const msg = `Barcode eka save karana pita, paha CDN eka (${cno}) add karanna. Meka container eke CDN eka system eke naha.`
+        updateItem(item.id, { status: 'error', error: msg })
+        return { ok: false, error: msg }
+      }
+      if (d.matches?.length) {
+        const msg = `"${item.fileName}" — matching document tiyenawa. Meka thaniyama open karala (eyage Send eken) resolve karanna, passe Send All try karanna.`
+        updateItem(item.id, { status: 'error', error: msg })
+        return { ok: false, error: msg }
+      }
+      if (d.capInfo && d.capInfo.currentCount >= d.capInfo.cap) {
+        const msg = `"${item.fileName}" — meka CUSDEC eke CAP eka purila. Meka thaniyama open karala resolve karanna, passe Send All try karanna.`
+        updateItem(item.id, { status: 'error', error: msg })
+        return { ok: false, error: msg }
+      }
+    } catch (e: any) {
+      updateItem(item.id, { status: 'error', error: e.message })
+      return { ok: false, error: e.message }
+    }
+    return await persistItem(item, 'insert', undefined, referenceOverride)
+  }
+
+  // matchModal/capModal (see saveOne above) are only ever opened by the
+  // single-file Send flow now — a batch resolves conflicts itself via
+  // saveOneBatch instead of popping them. This just swaps out a stuck
+  // single-file SendModal for the next batch item in the rare case both
+  // happen to be active at once; harmless no-op otherwise.
   function settleBatchItem(itemId: string) {
     setBatchQueue(prev => (prev && prev[0]?.id === itemId) ? (prev.length > 1 ? prev.slice(1) : null) : prev)
   }
@@ -1020,18 +1080,12 @@ function DocumentsUploadContent() {
     setSavingAll(false)
   }
 
-  // "Send All" used to run every ready/error item through ONE shared
-  // Save/Mail/Notify/Reason choice in a tight non-interactive loop — a
-  // duplicate found mid-batch (check-document-match) popped matchModal but
-  // the loop kept going regardless, so that file silently never actually
-  // got resolved one way or the other. Batch send now steps through the
-  // exact same single-file SendModal (+ its matchModal/capModal/
-  // shipmentPickModal handling, unchanged) once per file — every file gets
-  // its own real Skip/Save/Notify/Mail decision, resolved before the next
-  // one opens. Order matters for CDN's CAP check (needs its CUSDEC to
-  // already exist) and Barcode matching CDN's container_no, so the queue is
-  // sorted cusdec -> cdn -> barcode -> everything else, not upload order.
-  const BATCH_SAVE_ORDER: Record<string, number> = { cusdec: 0, cdn: 1, barcode: 2 }
+  // "Send All" shows ONE SendModal for the whole batch — Save/Mail/Notify/
+  // Reason is ticked once and applies to every ready/error file. Order
+  // matters for CDN's CAP check (needs its CUSDEC to already exist) and
+  // Barcode matching CDN's container_no, so the queue is sorted
+  // cusdec -> cdn -> barcode -> boat_note -> everything else, not upload order.
+  const BATCH_SAVE_ORDER: Record<string, number> = { cusdec: 0, cdn: 1, barcode: 2, boat_note: 3 }
   const [batchQueue, setBatchQueue] = useState<UploadItem[] | null>(null)
   function startBatchSend() {
     const toSend = items.filter(it => it.status === 'ready' || it.status === 'error')
@@ -1039,11 +1093,49 @@ function DocumentsUploadContent() {
       (BATCH_SAVE_ORDER[a.detectedType || ''] ?? 99) - (BATCH_SAVE_ORDER[b.detectedType || ''] ?? 99))
     if (sorted.length) setBatchQueue(sorted)
   }
-  function advanceBatch() {
-    setBatchQueue(prev => {
-      if (!prev || prev.length <= 1) return null
-      return prev.slice(1)
-    })
+  // Runs every queued file through saveOneBatch, one after another. Each
+  // file's result is independent — a duplicate/CAP conflict or any other
+  // error on one file marks THAT file 'error' (via saveOneBatch) and the
+  // loop just continues to the next; it never stops the batch. Files that
+  // already saved successfully on a previous Send All never reach here
+  // again (startBatchSend only queues 'ready'/'error' items, and a saved
+  // file's status is 'saved'), so re-running Send All after fixing one
+  // file's error only touches that file (and anything new), never re-saves
+  // what already went through.
+  async function runBatchSend(referenceOverride?: string): Promise<{ ok: boolean; error?: string; results: SendResultFile[] }> {
+    const queue = batchQueue || []
+    const results: SendResultFile[] = []
+    let firstError = ''
+    for (const item of queue) {
+      const r: any = await saveOneBatch(item, referenceOverride)
+      if (r.ok) {
+        results.push({ fileName: item.fileName, driveLink: r.driveLink, docType: item.detectedType || undefined, cusdecId: r.cusdecId })
+      } else if (!firstError) {
+        firstError = `"${item.fileName}": ${r.error}`
+      }
+    }
+    // Only block "Done" (show the error, keep the modal open) if EVERY file
+    // in the batch failed — if even one went through, let Done finish
+    // normally; the failed ones stay on their cards as 'error' for next time.
+    if (!results.length && queue.length) return { ok: false, error: firstError, results: [] }
+    return { ok: true, results }
+  }
+  // Mail/Notify-without-Save path for the whole batch — no structured-table
+  // save happens here, so there's nothing that can leave one file half-saved;
+  // each file's Drive upload is still tried independently so one failure
+  // doesn't stop the rest from being attached to the mail.
+  async function batchGetDriveLinks(): Promise<SendResultFile[]> {
+    const queue = batchQueue || []
+    const results: SendResultFile[] = []
+    for (const item of queue) {
+      try {
+        const link = await uploadToDriveOnly(item)
+        results.push({ fileName: item.fileName, driveLink: link, docType: item.detectedType || undefined })
+      } catch (e: any) {
+        updateItem(item.id, { status: 'error', error: e.message })
+      }
+    }
+    return results
   }
   function handleDeleteAll() {
     if (!items.length) return
@@ -1932,17 +2024,14 @@ function DocumentsUploadContent() {
 
       {batchQueue && batchQueue.length > 0 && (
         <SendModal
-          key={batchQueue[0].id}
-          label={`${batchQueue[0].fileName} (${batchQueue.length} left in this batch)`}
+          key="batch-send"
+          label={`${batchQueue.length} file${batchQueue.length !== 1 ? 's' : ''} — cusdec → cdn → barcode → boat note order`}
           uploaderName={uploaderName}
           docType={batchQueue[0].detectedType}
-          onSave={async (referenceOverride?: string) => {
-            const r = await saveOne(batchQueue[0], referenceOverride)
-            return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: batchQueue[0].fileName, driveLink: r.driveLink, docType: batchQueue[0].detectedType, cusdecId: r.cusdecId }] : [] }
-          }}
-          onGetDriveLinks={async () => [{ fileName: batchQueue[0].fileName, driveLink: await uploadToDriveOnly(batchQueue[0]), docType: batchQueue[0].detectedType }]}
+          onSave={runBatchSend}
+          onGetDriveLinks={batchGetDriveLinks}
           onClose={() => setBatchQueue(null)}
-          onDone={advanceBatch}
+          onDone={() => setBatchQueue(null)}
         />
       )}
     </>
