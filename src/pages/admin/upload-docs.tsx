@@ -726,18 +726,6 @@ function DocumentsUploadContent() {
     settleBatchItem(item.id)
   }
 
-  async function resolveMatchAddNew() {
-    if (!matchModal) return
-    const { item, capInfo } = matchModal
-    setMatchModal(null)
-    if (capInfo && capInfo.currentCount >= capInfo.cap) {
-      setCapModal({ item, capInfo })
-      return
-    }
-    await persistItem(item, 'insert')
-    settleBatchItem(item.id)
-  }
-
   function updateMatchDraft(matchId: string, key: string, value: string) {
     setMatchModal(prev => prev && ({
       ...prev,
@@ -1093,31 +1081,81 @@ function DocumentsUploadContent() {
       (BATCH_SAVE_ORDER[a.detectedType || ''] ?? 99) - (BATCH_SAVE_ORDER[b.detectedType || ''] ?? 99))
     if (sorted.length) setBatchQueue(sorted)
   }
-  // Runs every queued file through saveOneBatch, one after another. Each
-  // file's result is independent — a duplicate/CAP conflict or any other
-  // error on one file marks THAT file 'error' (via saveOneBatch) and the
-  // loop just continues to the next; it never stops the batch. Files that
-  // already saved successfully on a previous Send All never reach here
-  // again (startBatchSend only queues 'ready'/'error' items, and a saved
-  // file's status is 'saved'), so re-running Send All after fixing one
-  // file's error only touches that file (and anything new), never re-saves
-  // what already went through.
-  async function runBatchSend(referenceOverride?: string): Promise<{ ok: boolean; error?: string; results: SendResultFile[] }> {
+  // Save always happens now, per file, independent of the others (see
+  // saveOneBatch). Notify/Mail are different: they're one combined action
+  // for the WHOLE batch (one Dashboard notification wave, one email with
+  // every file attached), so they can't fire the moment Done is clicked if
+  // even one file in the batch is still sitting on an error — that would
+  // notify/mail an incomplete batch and then have no good way to add the
+  // fixed file in later. So: if everything saved cleanly, Notify/Mail run
+  // immediately (SendModal's own flow, unchanged). If anything errored,
+  // Notify/Mail are deferred — saved here as pendingBatchAction — and only
+  // fire once every item in this batch has left 'ready'/'error'/'saving'
+  // (fixed-and-saved, or explicitly skipped/removed), via the effect below.
+  // A batch run with Save unticked (Mail/Notify only, via batchGetDriveLinks)
+  // never has a save-error to wait on, so it's never deferred.
+  interface PendingBatchAction { itemIds: string[]; notify: boolean; mail: boolean; reason: string; reasonNote: string }
+  const [pendingBatchAction, setPendingBatchAction] = useState<PendingBatchAction | null>(null)
+  const [deferredEmailAttachments, setDeferredEmailAttachments] = useState<EmailAttachment[] | null>(null)
+  const [deferredReason, setDeferredReason] = useState<{ reason: string; reasonNote: string } | null>(null)
+
+  async function runDeferredBatchAction(action: PendingBatchAction) {
+    const saved = items.filter(it => action.itemIds.includes(it.id) && it.status === 'saved' && it.driveLink)
+    if (!saved.length) return
+    const auth = await authHeader()
+    await Promise.all(saved.map(it => fetch('/api/document-uploads', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
+      body: JSON.stringify({
+        file_name: it.fileName, drive_url: it.driveLink, is_saved_to_db: true, notify: action.notify, uploaded_by_name: uploaderName,
+        reason: action.reason || undefined, reason_note: action.reason === 'Other' ? action.reasonNote.trim() : undefined,
+        doc_type: it.detectedType || undefined,
+      }),
+    })))
+    if (action.mail) {
+      setDeferredReason({ reason: action.reason, reasonNote: action.reasonNote })
+      setDeferredEmailAttachments(saved.map(it => ({ filename: it.fileName, url: it.driveLink })))
+    }
+  }
+
+  // Watches only while a batch action is actually pending — fires the moment
+  // none of this batch's files are still 'ready'/'error'/'saving'.
+  useEffect(() => {
+    if (!pendingBatchAction) return
+    const stillOpen = items.some(it => pendingBatchAction.itemIds.includes(it.id) && (it.status === 'ready' || it.status === 'error' || it.status === 'saving'))
+    if (stillOpen) return
+    const action = pendingBatchAction
+    setPendingBatchAction(null)
+    runDeferredBatchAction(action)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, pendingBatchAction])
+
+  async function runBatchSend(referenceOverride?: string, choices?: { save: boolean; mail: boolean; notify: boolean; reason: string; reasonNote: string }): Promise<{ ok: boolean; error?: string; results: SendResultFile[] }> {
     const queue = batchQueue || []
     const results: SendResultFile[] = []
     let firstError = ''
+    let anyLeftPending = false
     for (const item of queue) {
       const r: any = await saveOneBatch(item, referenceOverride)
       if (r.ok) {
         results.push({ fileName: item.fileName, driveLink: r.driveLink, docType: item.detectedType || undefined, cusdecId: r.cusdecId })
-      } else if (!firstError) {
-        firstError = `"${item.fileName}": ${r.error}`
+      } else {
+        anyLeftPending = true
+        if (!firstError) firstError = `"${item.fileName}": ${r.error}`
       }
     }
     // Only block "Done" (show the error, keep the modal open) if EVERY file
     // in the batch failed — if even one went through, let Done finish
     // normally; the failed ones stay on their cards as 'error' for next time.
     if (!results.length && queue.length) return { ok: false, error: firstError, results: [] }
+    if (anyLeftPending && choices && (choices.mail || choices.notify)) {
+      // Some files still need fixing — hand Notify/Mail off to the watcher
+      // above instead of running them now for only the files that happened
+      // to save on this pass. Returning empty results tells SendModal there
+      // is nothing left for IT to do (no document-uploads write, no Mail
+      // popup) — that happens later, all at once, in runDeferredBatchAction.
+      setPendingBatchAction({ itemIds: queue.map(it => it.id), notify: choices.notify, mail: choices.mail, reason: choices.reason, reasonNote: choices.reasonNote })
+      return { ok: true, results: [] }
+    }
     return { ok: true, results }
   }
   // Mail/Notify-without-Save path for the whole batch — no structured-table
@@ -1911,10 +1949,6 @@ function DocumentsUploadContent() {
               ))}
             </div>
             <div className="p-5 border-t border-gray-100 flex flex-col gap-2">
-              <button onClick={resolveMatchAddNew}
-                className="w-full py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: '#22A87A' }}>
-                Keep all existing, add this as a new row
-              </button>
               <button onClick={() => { skipItem(matchModal.item.id); settleBatchItem(matchModal.item.id); setMatchModal(null) }}
                 className="w-full py-2 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100">
                 Skip — don't save this PDF
@@ -2006,6 +2040,12 @@ function DocumentsUploadContent() {
       )}
 
       {emailAttachments && <EmailPdfModal attachments={emailAttachments} onClose={() => setEmailAttachments(null)}/>}
+      {deferredEmailAttachments && (
+        <EmailPdfModal attachments={deferredEmailAttachments}
+          documentReason={deferredReason?.reason || undefined}
+          documentReasonNote={deferredReason?.reason === 'Other' ? deferredReason.reasonNote : undefined}
+          onClose={() => { setDeferredEmailAttachments(null); setDeferredReason(null) }}/>
+      )}
 
       {sendModalItem && (
         <SendModal

@@ -29,7 +29,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
   // Entry) just skip that — there's nothing to attach the task to.
   cusdecId?: string
   cusdecNumber?: string
-  onSave: (referenceOverride?: string) => Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }>
+  onSave: (referenceOverride?: string, choices?: { save: boolean; mail: boolean; notify: boolean; reason: string; reasonNote: string }) => Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }>
   onGetDriveLinks: () => Promise<SendResultFile[]>
   onClose: () => void
   onDone: () => void
@@ -109,7 +109,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         } catch { /* lookup failure just falls through — saves without a shipment merge */ }
       }
       if (effectiveSave) {
-        const r = await onSave(matchedReference)
+        const r = await onSave(matchedReference, { save: effectiveSave, mail, notify: effectiveNotify, reason, reasonNote })
         if (!r.ok) throw new Error(r.error || 'Save failed')
         files = r.results || []
       } else if (mail || effectiveNotify) {
