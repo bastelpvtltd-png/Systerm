@@ -111,6 +111,7 @@ interface UploadItem {
   variant: 'native' | 'scanned'
   savedReference?: string
   nameManuallySet?: boolean
+  skipNotifyOnDone?: boolean
 }
 
 interface DbRecord {
@@ -217,8 +218,9 @@ function DocumentsUploadContent() {
   const [error, setError] = useState('')
   // Duplicate/CAP conflict resolution — shown instead of saving immediately
   // when the extracted data matches something already saved.
-  const [matchModal, setMatchModal] = useState<{ item: UploadItem; matches: any[]; capInfo: any; table: string } | null>(null)
-  const [capModal, setCapModal] = useState<{ item: UploadItem; capInfo: any } | null>(null)
+  interface PendingChoices { mail: boolean; notify: boolean; reason: string; reasonNote: string }
+  const [matchModal, setMatchModal] = useState<{ item: UploadItem; matches: any[]; capInfo: any; table: string; choices?: PendingChoices } | null>(null)
+  const [capModal, setCapModal] = useState<{ item: UploadItem; capInfo: any; choices?: PendingChoices } | null>(null)
   // Shown after a CUSDEC save when its Invoice Number didn't auto-match any
   // pending Shipment entry — lets the user pick the right one by hand.
   const [shipmentPickModal, setShipmentPickModal] = useState<{ cusdecId: string; shipments: any[] } | null>(null)
@@ -578,7 +580,7 @@ function DocumentsUploadContent() {
   // If so, show every match instead of silently creating a duplicate. For
   // CDN, also check the CUSDEC's CAP (how many CDN rows it should have)
   // before allowing a brand-new row.
-  async function saveOne(item: UploadItem, referenceOverride?: string) {
+  async function saveOne(item: UploadItem, referenceOverride?: string, choices?: PendingChoices) {
     // A PDF whose type couldn't be identified, or whose fields came back
     // empty (nothing extracted), must not be saved — it would create a
     // structured-table row with no real data. The user has to fix
@@ -634,11 +636,11 @@ function DocumentsUploadContent() {
         return { ok: false, error: msg }
       }
       if (d.matches?.length) {
-        setMatchModal({ item, matches: d.matches, capInfo: d.capInfo, table: DOC_TYPE_TABLE[docType] })
+        setMatchModal({ item, matches: d.matches, capInfo: d.capInfo, table: DOC_TYPE_TABLE[docType], choices })
         return { ok: false, error: 'A matching document already exists — resolve it above, then Send again.' }
       }
       if (d.capInfo && d.capInfo.currentCount >= d.capInfo.cap) {
-        setCapModal({ item, capInfo: d.capInfo })
+        setCapModal({ item, capInfo: d.capInfo, choices })
         return { ok: false, error: "This CUSDEC's CAP is already full — resolve it above, then Send again." }
       }
     } catch (e: any) {
@@ -718,12 +720,47 @@ function DocumentsUploadContent() {
     setBatchQueue(prev => (prev && prev[0]?.id === itemId) ? (prev.length > 1 ? prev.slice(1) : null) : prev)
   }
 
+  // Finishes the Notify/Mail side of a SINGLE item that just got resolved
+  // outside SendModal's own flow (a duplicate Replace, or a CAP retry) — that
+  // flow bypasses SendModal's handleDone entirely, so nothing else would
+  // ever fire the bookkeeping/Mail/Notify the person actually asked for.
+  // Uses persistItem's own return value rather than re-reading `items`,
+  // since React may not have re-rendered with the new status yet.
+  async function finishSingleItemAction(item: UploadItem, result: { ok: boolean; driveLink?: string }, opts: { notify: boolean; mail: boolean; reason: string; reasonNote: string }) {
+    // The single-file Send panel for this item may still be open behind the
+    // popup that just resolved it, stuck showing the old "Save failed" —
+    // it's done now, so close it instead of leaving a stale error on screen.
+    setSendModalItem(prev => (prev && prev.id === item.id) ? null : prev)
+    if (!result.ok || !result.driveLink) return
+    // Part of an active batch? Its Notify/Mail is handled once, for the
+    // whole batch, by the pendingBatchAction watcher — doing it again here
+    // would notify/mail this one file twice.
+    if (pendingBatchAction?.itemIds.includes(item.id)) return
+    try {
+      await fetch('/api/document-uploads', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({
+          file_name: item.fileName, drive_url: result.driveLink, is_saved_to_db: true, notify: opts.notify, uploaded_by_name: uploaderName,
+          reason: opts.reason || undefined, reason_note: opts.reason === 'Other' ? opts.reasonNote.trim() : undefined,
+          doc_type: item.detectedType || undefined,
+        }),
+      })
+    } catch {}
+    if (opts.mail) setEmailAttachments([{ filename: item.fileName, url: result.driveLink }])
+  }
+
   async function resolveMatchReplace(matchId: string) {
     if (!matchModal) return
-    const { item } = matchModal
+    const { item, choices } = matchModal
     setMatchModal(null)
-    await persistItem(item, 'replace', matchId)
+    const r = await persistItem(item, 'replace', matchId)
+    updateItem(item.id, { skipNotifyOnDone: true })
     settleBatchItem(item.id)
+    // Replacing the existing row is an update to something already known
+    // about, not a new document appearing — Notify never fires for it, even
+    // if Notify was ticked on the original Send. Mail still goes out if it
+    // was ticked, since the person still wants their copy of the file.
+    await finishSingleItemAction(item, r, { notify: false, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' })
   }
 
   function updateMatchDraft(matchId: string, key: string, value: string) {
@@ -788,10 +825,11 @@ function DocumentsUploadContent() {
 
   async function retryAfterFreeingSlot() {
     if (!capModal) return
-    const { item } = capModal
+    const { item, choices } = capModal
     setCapModal(null)
-    await persistItem(item, 'insert')
+    const r = await persistItem(item, 'insert')
     settleBatchItem(item.id)
+    await finishSingleItemAction(item, r, { notify: !!choices?.notify, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' })
   }
 
   const selectedItem = items.find(it => it.id === selectedId) || null
@@ -1106,7 +1144,7 @@ function DocumentsUploadContent() {
     await Promise.all(saved.map(it => fetch('/api/document-uploads', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
       body: JSON.stringify({
-        file_name: it.fileName, drive_url: it.driveLink, is_saved_to_db: true, notify: action.notify, uploaded_by_name: uploaderName,
+        file_name: it.fileName, drive_url: it.driveLink, is_saved_to_db: true, notify: action.notify && !it.skipNotifyOnDone, uploaded_by_name: uploaderName,
         reason: action.reason || undefined, reason_note: action.reason === 'Other' ? action.reasonNote.trim() : undefined,
         doc_type: it.detectedType || undefined,
       }),
@@ -1941,18 +1979,19 @@ function DocumentsUploadContent() {
                       </div>
                     ))}
                   </div>
-                  <button onClick={() => resolveMatchReplace(match.id)} disabled={resolvingConflict}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 disabled:opacity-50">
-                    <Trash2 size={11}/> Delete this + save new PDF here
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => resolveMatchReplace(match.id)} disabled={resolvingConflict}
+                      className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
+                      <Save size={12}/> Replace — save new PDF here
+                    </button>
+                    <button onClick={() => { const it = matchModal.item; skipItem(it.id); settleBatchItem(it.id); setMatchModal(null); setSendModalItem(prev => (prev && prev.id === it.id) ? null : prev) }}
+                      disabled={resolvingConflict}
+                      className="px-3 py-2 rounded-md text-xs font-medium text-gray-500 border border-gray-200 hover:bg-gray-100 disabled:opacity-50">
+                      Skip
+                    </button>
+                  </div>
                 </div>
               ))}
-            </div>
-            <div className="p-5 border-t border-gray-100 flex flex-col gap-2">
-              <button onClick={() => { skipItem(matchModal.item.id); settleBatchItem(matchModal.item.id); setMatchModal(null) }}
-                className="w-full py-2 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100">
-                Skip — don't save this PDF
-              </button>
             </div>
           </div>
         </div>
@@ -2052,8 +2091,9 @@ function DocumentsUploadContent() {
           label={sendModalItem.fileName}
           uploaderName={uploaderName}
           docType={sendModalItem.detectedType}
-          onSave={async (referenceOverride?: string) => {
-            const r = await saveOne(sendModalItem, referenceOverride)
+          restrictToSaveOnly={sendModalItem.status === 'error'}
+          onSave={async (referenceOverride?: string, choices?: PendingChoices) => {
+            const r = await saveOne(sendModalItem, referenceOverride, choices)
             return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink, docType: sendModalItem.detectedType, cusdecId: r.cusdecId }] : [] }
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}

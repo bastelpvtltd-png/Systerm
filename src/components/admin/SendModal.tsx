@@ -15,7 +15,7 @@ export interface SendResultFile { fileName: string; driveLink: string; docType?:
 // everything in one message.
 const REASON_OPTIONS = ['', 'CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Final Document', 'Other']
 
-export default function SendModal({ label, uploaderName, docType, cusdecId, cusdecNumber, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason, hideSaveAndNotify }: {
+export default function SendModal({ label, uploaderName, docType, cusdecId, cusdecNumber, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason, hideSaveAndNotify, restrictToSaveOnly }: {
   label: string
   uploaderName?: string
   docType?: string
@@ -38,6 +38,13 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
   // saved) lock Notify off without forking this modal.
   notifyDisabled?: boolean
   notifyDisabledReason?: string
+  // This Send panel is reopened purely to fix-and-resave a file that's
+  // already sitting on an error (a format warning, a duplicate, a CAP
+  // conflict) — Mail/Notify/Reason are hidden, only Save runs. Ticking
+  // Mail/Notify here on top of what the original Send (or the batch this
+  // file belongs to) already has pending would send/notify that one file
+  // twice, so this isn't a real choice at this point — just a retry.
+  restrictToSaveOnly?: boolean
 }) {
   const [save, setSave] = useState(true)
   const [mail, setMail] = useState(false)
@@ -99,9 +106,10 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
       // CUSDEC Passed always saves — is_saved_to_db must be true so the
       // document is never treated as temporary and never gets deleted on pick.
       const effectiveSave = save || isCusdecPassed
-      const effectiveNotify = (notify || isCusdecPassed) && !notifyDisabled
+      const effectiveMail = restrictToSaveOnly ? false : mail
+      const effectiveNotify = restrictToSaveOnly ? false : (notify || isCusdecPassed) && !notifyDisabled
       let matchedReference: string | undefined
-      if (effectiveSave && isCusdecPassed && reference.trim()) {
+      if (effectiveSave && !restrictToSaveOnly && isCusdecPassed && reference.trim()) {
         try {
           const r = await fetch(`/api/temp-shipments?reference=${encodeURIComponent(reference.trim())}`, { headers: await authHeader() })
           const d = await r.json()
@@ -109,10 +117,10 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         } catch { /* lookup failure just falls through — saves without a shipment merge */ }
       }
       if (effectiveSave) {
-        const r = await onSave(matchedReference, { save: effectiveSave, mail, notify: effectiveNotify, reason, reasonNote })
+        const r = await onSave(matchedReference, { save: effectiveSave, mail: effectiveMail, notify: effectiveNotify, reason: restrictToSaveOnly ? '' : reason, reasonNote: restrictToSaveOnly ? '' : reasonNote })
         if (!r.ok) throw new Error(r.error || 'Save failed')
         files = r.results || []
-      } else if (mail || effectiveNotify) {
+      } else if (effectiveMail || effectiveNotify) {
         // Mail/Notify still need a real, viewable file even when Save is
         // unticked — upload to Drive without touching uploaded_documents or
         // the structured table.
@@ -128,7 +136,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
           method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
           body: JSON.stringify({
             file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: effectiveSave, notify: effectiveNotify, uploaded_by_name: uploaderName,
-            reason: reason || undefined, reason_note: reason === 'Other' ? reasonNote.trim() : undefined,
+            reason: restrictToSaveOnly ? undefined : (reason || undefined), reason_note: !restrictToSaveOnly && reason === 'Other' ? reasonNote.trim() : undefined,
             doc_type: f.docType || docType || undefined,
             // f.cusdecId (the row this specific file's Save just created/matched)
             // is only known per-file for a fresh upload — the cusdecId PROP is
@@ -140,7 +148,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         })
       ))
 
-      if (mail && files.length) {
+      if (effectiveMail && files.length) {
         setEmailAttachments(files.map(f => ({ filename: f.fileName, url: f.driveLink })))
         return // EmailPdfModal takes over; onDone() fires when it's closed
       }
@@ -175,6 +183,9 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         </div>
         <div className="p-5 space-y-3">
           <p className="text-xs text-gray-500 truncate">{label}</p>
+          {restrictToSaveOnly && (
+            <p className="text-[11px] text-amber-600 -mt-1">Fixing a save error — this just retries Save for this file. Mail/Notify for the rest of the batch will happen automatically once every file in it is saved.</p>
+          )}
           {!hideSaveAndNotify && (
             <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
               <input type="checkbox" checked={save} disabled={notify} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
@@ -182,12 +193,14 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
               <span className="text-sm text-gray-800">Save (to Drive + Database)</span>
             </label>
           )}
-          <label className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50">
-            <input type="checkbox" checked={mail} onChange={e => setMail(e.target.checked)} className="w-4 h-4"/>
-            <Mail size={15} className="text-gray-500"/>
-            <span className="text-sm text-gray-800">Mail</span>
-          </label>
-          {!hideSaveAndNotify && (
+          {!restrictToSaveOnly && (
+            <label className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50">
+              <input type="checkbox" checked={mail} onChange={e => setMail(e.target.checked)} className="w-4 h-4"/>
+              <Mail size={15} className="text-gray-500"/>
+              <span className="text-sm text-gray-800">Mail</span>
+            </label>
+          )}
+          {!hideSaveAndNotify && !restrictToSaveOnly && (
             <>
               <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${(isCusdecPassed || notifyDisabled) ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
                 <input type="checkbox" checked={(notify || isCusdecPassed) && !notifyDisabled} disabled={isCusdecPassed || notifyDisabled} onChange={e => setNotifyChecked(e.target.checked)} className="w-4 h-4"/>
@@ -200,6 +213,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
             </>
           )}
 
+          {!restrictToSaveOnly && (
           <div className="pt-1">
             <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>
             <select value={reason} onChange={e => setReasonChecked(e.target.value)} className="input text-sm">
@@ -228,12 +242,13 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
               </>
             )}
           </div>
+          )}
 
           {error && <p className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
         </div>
         <div className="flex gap-3 p-5 border-t">
           <button onClick={onClose} disabled={busy} className="btn-secondary flex-1 disabled:opacity-50">Cancel</button>
-          <button onClick={handleDone} disabled={busy || (!save && !mail && !notify && !isCusdecPassed)} className="btn-primary flex-1 flex items-center justify-center gap-2">
+          <button onClick={handleDone} disabled={busy || (restrictToSaveOnly ? !save : (!save && !mail && !notify && !isCusdecPassed))} className="btn-primary flex-1 flex items-center justify-center gap-2">
             {busy ? <Loader size={14} className="animate-spin"/> : null}Done
           </button>
         </div>
