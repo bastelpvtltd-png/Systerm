@@ -15,7 +15,7 @@ export interface SendResultFile { fileName: string; driveLink: string; docType?:
 // everything in one message.
 const REASON_OPTIONS = ['', 'CUSDEC Passed', 'Container Moved', 'Boat Note Passed', 'Final Document', 'Other']
 
-export default function SendModal({ label, uploaderName, docType, cusdecId, cusdecNumber, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason, hideSaveAndNotify, restrictToSaveOnly }: {
+export default function SendModal({ label, uploaderName, docType, cusdecId, cusdecNumber, onSave, onGetDriveLinks, onClose, onDone, notifyDisabled, notifyDisabledReason, hideSaveAndNotify, restrictToSaveOnly, requireReason }: {
   label: string
   uploaderName?: string
   docType?: string
@@ -45,6 +45,10 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
   // file belongs to) already has pending would send/notify that one file
   // twice, so this isn't a real choice at this point — just a retry.
   restrictToSaveOnly?: boolean
+  // Upload Docs' Send flow wants Reason picked every time, not left at
+  // "— None —" — other callers of this modal don't ask for this, so it
+  // defaults off.
+  requireReason?: boolean
 }) {
   const [save, setSave] = useState(true)
   const [mail, setMail] = useState(false)
@@ -99,6 +103,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
 
   async function handleDone() {
+    if (!restrictToSaveOnly && requireReason && !reason) { setError('Pick a Reason before sending'); return }
     if (reason === 'Other' && !reasonNote.trim()) { setError('Type a reason for "Other"'); return }
     setBusy(true); setError('')
     try {
@@ -215,7 +220,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
 
           {!restrictToSaveOnly && (
           <div className="pt-1">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Reason{requireReason ? ' (required)' : ' (optional)'}</label>
             <select value={reason} onChange={e => setReasonChecked(e.target.value)} className="input text-sm">
               {REASON_OPTIONS.map(r => <option key={r} value={r}>{r || '— None —'}</option>)}
             </select>
@@ -248,7 +253,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         </div>
         <div className="flex gap-3 p-5 border-t">
           <button onClick={onClose} disabled={busy} className="btn-secondary flex-1 disabled:opacity-50">Cancel</button>
-          <button onClick={handleDone} disabled={busy || (restrictToSaveOnly ? !save : (!save && !mail && !notify && !isCusdecPassed))} className="btn-primary flex-1 flex items-center justify-center gap-2">
+          <button onClick={handleDone} disabled={busy || (restrictToSaveOnly ? !save : (!save && !mail && !notify && !isCusdecPassed)) || (!restrictToSaveOnly && requireReason && !reason)} className="btn-primary flex-1 flex items-center justify-center gap-2">
             {busy ? <Loader size={14} className="animate-spin"/> : null}Done
           </button>
         </div>

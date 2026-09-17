@@ -29,6 +29,11 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [sent, setSent] = useState(false)
+  // Which of the passed-in attachments actually go out — defaults to all of
+  // them, but a batch send hands this modal every file it just saved, and
+  // the person may want to mail only some of those right now.
+  const [included, setIncluded] = useState<boolean[]>(() => attachments.map(() => true))
+  const selectedAttachments = attachments.filter((_, i) => included[i])
 
   useEffect(() => {
     authHeader().then(h => fetch('/api/saved-recipients', { headers: h })).then(r => r.json()).then(d => setEmails(d.emails || [])).catch(() => {})
@@ -51,12 +56,12 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
 
   async function send() {
     const toAddr = to.trim()
-    if (!toAddr || !subject.trim()) return
+    if (!toAddr || !subject.trim() || !selectedAttachments.length) return
     setSending(true); setError('')
     try {
       const res = await fetch('/api/send-email', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ to: toAddr, cc: cc.trim() || undefined, bcc: bcc.trim() || undefined, subject: subject.trim(), body, attachments, useDocsAccount: true }),
+        body: JSON.stringify({ to: toAddr, cc: cc.trim() || undefined, bcc: bcc.trim() || undefined, subject: subject.trim(), body, attachments: selectedAttachments, useDocsAccount: true }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
@@ -81,7 +86,7 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
         </div>
         <div className="p-5 space-y-3">
           {sent ? (
-            <p className="text-sm text-green-600">✓ Sent to {to}</p>
+            <p className="text-sm text-green-600">✓ Sent {selectedAttachments.length} file{selectedAttachments.length !== 1 ? 's' : ''} to {to}</p>
           ) : (
             <>
               <div>
@@ -112,7 +117,18 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
                 <label className="block text-xs font-medium text-gray-600 mb-1">Message (optional)</label>
                 <textarea value={body} onChange={e => setBody(e.target.value)} rows={4} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
               </div>
-              <p className="text-xs text-gray-400">Attaching: {attachments.map(a => a.filename).join(', ')}</p>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Attaching ({selectedAttachments.length}/{attachments.length})</label>
+                <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-40 overflow-y-auto">
+                  {attachments.map((a, i) => (
+                    <label key={a.filename + i} className="flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-gray-50">
+                      <input type="checkbox" checked={included[i]} onChange={e => setIncluded(prev => prev.map((v, j) => j === i ? e.target.checked : v))} className="w-3.5 h-3.5"/>
+                      <span className={included[i] ? 'text-gray-700' : 'text-gray-400 line-through'}>{a.filename}</span>
+                    </label>
+                  ))}
+                </div>
+                {!selectedAttachments.length && <p className="text-[11px] text-red-600 mt-1">Pick at least one file to mail.</p>}
+              </div>
               {error && <p className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle size={13}/>{error}</p>}
             </>
           )}
@@ -120,7 +136,7 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
         <div className="flex gap-3 p-5 border-t">
           <button onClick={onClose} className="btn-secondary flex-1">{sent ? 'Close' : 'Cancel'}</button>
           {!sent && (
-            <button onClick={send} disabled={sending || !to.trim() || !subject.trim()} className="btn-primary flex-1 flex items-center justify-center gap-2">
+            <button onClick={send} disabled={sending || !to.trim() || !subject.trim() || !selectedAttachments.length} className="btn-primary flex-1 flex items-center justify-center gap-2">
               {sending ? <Loader size={14} className="animate-spin"/> : <Mail size={14}/>}Send
             </button>
           )}
