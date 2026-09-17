@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { X, Loader, Save, Mail, Bell, AlertTriangle, Link2 } from 'lucide-react'
 import { authHeader } from '@/lib/supabase'
-import EmailPdfModal, { type EmailAttachment } from './EmailPdfModal'
+import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
 
 export interface SendResultFile { fileName: string; driveLink: string; docType?: string; cusdecId?: string }
 
