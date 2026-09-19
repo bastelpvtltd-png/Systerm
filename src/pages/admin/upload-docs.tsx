@@ -110,6 +110,10 @@ interface UploadItem {
   boxes: Record<string, PctBox>
   variant: 'native' | 'scanned'
   savedReference?: string
+  // The CUSDEC row this file's Save just created/matched — kept on the item
+  // so the Send bookkeeping (document-uploads → upload approval) can pass it
+  // along even when it runs later (after an error was fixed and re-sent).
+  savedCusdecId?: string
   nameManuallySet?: boolean
   skipNotifyOnDone?: boolean
 }
@@ -553,7 +557,10 @@ function DocumentsUploadContent() {
         }
       }
 
-      updateItem(item.id, { status: 'saved', driveLink: link, savedReference: referenceOverride || undefined })
+      updateItem(item.id, { status: 'saved', driveLink: link, savedReference: referenceOverride || undefined, savedCusdecId: cusdecId })
+      // Tell whichever Send this file belongs to that its Save went through
+      // (see the "Send groups" block further down).
+      markGroupSaved(item.id)
       return { ok: true, driveLink: link, cusdecId }
     } catch (e: any) {
       updateItem(item.id, { status: 'error', error: e.message })
@@ -642,12 +649,12 @@ function DocumentsUploadContent() {
         // real next step now, so close the Send popup immediately.
         setSendModalItem(prev => (prev && prev.id === item.id) ? null : prev)
         setMatchModal({ item, matches: d.matches, capInfo: d.capInfo, table: DOC_TYPE_TABLE[docType], choices })
-        return { ok: false, error: 'A matching document already exists — resolve it above, then Send again.' }
+        return { ok: false, error: 'A matching document already exists — resolve it above, then Send again.', modal: true }
       }
       if (d.capInfo && d.capInfo.currentCount >= d.capInfo.cap) {
         setSendModalItem(prev => (prev && prev.id === item.id) ? null : prev)
         setCapModal({ item, capInfo: d.capInfo, choices })
-        return { ok: false, error: "This CUSDEC's CAP is already full — resolve it above, then Send again." }
+        return { ok: false, error: "This CUSDEC's CAP is already full — resolve it above, then Send again.", modal: true }
       }
     } catch (e: any) {
       setError(e.message)
@@ -732,16 +739,19 @@ function DocumentsUploadContent() {
   // ever fire the bookkeeping/Mail/Notify the person actually asked for.
   // Uses persistItem's own return value rather than re-reading `items`,
   // since React may not have re-rendered with the new status yet.
-  async function finishSingleItemAction(item: UploadItem, result: { ok: boolean; driveLink?: string }, opts: { notify: boolean; mail: boolean; reason: string; reasonNote: string; resaved?: boolean }) {
+  async function finishSingleItemAction(item: UploadItem, result: { ok: boolean; driveLink?: string }, opts: { notify: boolean; mail: boolean; reason: string; reasonNote: string; resaved?: boolean }, grouped?: boolean) {
     // The single-file Send panel for this item may still be open behind the
     // popup that just resolved it, stuck showing the old "Save failed" —
     // it's done now, so close it instead of leaving a stale error on screen.
     setSendModalItem(prev => (prev && prev.id === item.id) ? null : prev)
     if (!result.ok || !result.driveLink) return
-    // Part of an active batch? Its Notify/Mail is handled once, for the
-    // whole batch, by the pendingBatchAction watcher — doing it again here
-    // would notify/mail this one file twice.
-    if (pendingBatchAction?.itemIds.includes(item.id)) return
+    // Every Send (single file or batch) is tracked as a "send group" now
+    // (see the Send groups block below) — its Notify/Mail/reason bookkeeping
+    // and auto-clear are handled there once the file is saved, so doing it
+    // again here would register/notify/mail this file twice. This path only
+    // still does the work for a save that was NOT started from a Send (e.g.
+    // the plain "Save All" button hitting a duplicate).
+    if (grouped || sendGroupsRef.current.some(g => g.itemIds.includes(item.id))) return
     try {
       await fetch('/api/document-uploads', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
@@ -771,14 +781,18 @@ function DocumentsUploadContent() {
     // The save itself continues in the background exactly as before; the
     // list row reflects the outcome once it lands.
     setSelectedId(prev => prev === item.id ? null : prev)
-    const r = await persistItem(item, 'replace', matchId)
+    // Flag it BEFORE the save runs, not after: the send group registers this
+    // file the instant its Save lands, and it has to already know this is a
+    // duplicate-replace (no Notify, logged as "re-saved") by then.
     updateItem(item.id, { skipNotifyOnDone: true })
+    const r = await persistItem(item, 'replace', matchId)
+    if (!r.ok) updateItem(item.id, { skipNotifyOnDone: false })
     settleBatchItem(item.id)
     // Replacing the existing row is an update to something already known
     // about, not a new document appearing — Notify never fires for it, even
     // if Notify was ticked on the original Send. Mail still goes out if it
     // was ticked, since the person still wants their copy of the file.
-    await finishSingleItemAction(item, r, { notify: false, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '', resaved: true })
+    await finishSingleItemAction(item, r, { notify: false, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '', resaved: true }, !!choices)
   }
 
   function updateMatchDraft(matchId: string, key: string, value: string) {
@@ -850,7 +864,7 @@ function DocumentsUploadContent() {
     setSelectedId(prev => prev === item.id ? null : prev)
     const r = await persistItem(item, 'insert')
     settleBatchItem(item.id)
-    await finishSingleItemAction(item, r, { notify: !!choices?.notify, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' })
+    await finishSingleItemAction(item, r, { notify: !!choices?.notify, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' }, !!choices)
   }
 
   const selectedItem = items.find(it => it.id === selectedId) || null
@@ -1146,95 +1160,165 @@ function DocumentsUploadContent() {
       (BATCH_SAVE_ORDER[a.detectedType || ''] ?? 99) - (BATCH_SAVE_ORDER[b.detectedType || ''] ?? 99))
     if (sorted.length) setBatchQueue(sorted)
   }
-  // Save always happens now, per file, independent of the others (see
-  // saveOneBatch). Notify/Mail are different: they're one combined action
-  // for the WHOLE batch (one Dashboard notification wave, one email with
-  // every file attached), so they can't fire the moment Done is clicked if
-  // even one file in the batch is still sitting on an error — that would
-  // notify/mail an incomplete batch and then have no good way to add the
-  // fixed file in later. So: if everything saved cleanly, Notify/Mail run
-  // immediately (SendModal's own flow, unchanged). If anything errored,
-  // Notify/Mail are deferred — saved here as pendingBatchAction — and only
-  // fire once every item in this batch has left 'ready'/'error'/'saving'
-  // (fixed-and-saved, or explicitly skipped/removed), via the effect below.
-  // A batch run with Save unticked (Mail/Notify only, via batchGetDriveLinks)
-  // never has a save-error to wait on, so it's never deferred.
-  interface PendingBatchAction { itemIds: string[]; notify: boolean; mail: boolean; reason: string; reasonNote: string }
-  const [pendingBatchAction, setPendingBatchAction] = useState<PendingBatchAction | null>(null)
-  const [deferredEmailAttachments, setDeferredEmailAttachments] = useState<EmailAttachment[] | null>(null)
-  const [deferredReason, setDeferredReason] = useState<{ reason: string; reasonNote: string } | null>(null)
+  // ── Send groups ─────────────────────────────────────────────────────────
+  // Every Send (one file, or "Send All") is tracked as a SEND GROUP: the files
+  // it covers + what was chosen in the Send panel (Mail / Notify / Reason).
+  // Pressing Done closes the panel IMMEDIATELY — Save runs in the background
+  // for each file on its own, and the rest happens automatically:
+  //   • a file's Save fails → it stays in the list with its error; the group
+  //     REMEMBERS the choices. Once it's fixed and Sent again (that retry
+  //     only shows Save — see restrictToSaveOnly below) the remembered
+  //     Reason / Notify / Mail run on their own, then it clears.
+  //   • Reason + Save only (no Mail/Notify) → each file is registered
+  //     (document-uploads → upload approvals, Processed History) and cleared
+  //     the moment its own Save succeeds — one file's error never holds the
+  //     others back.
+  //   • Notify and/or Mail are ONE combined action for the whole group (one
+  //     Dashboard wave, one email with every file attached), so they wait
+  //     until every file in the group has left the error state (saved,
+  //     skipped or removed), then fire once.
+  // A group is only ever dropped once all its files are settled.
+  // A duplicate-replace (matchModal) or a CAP retry resolves through the same
+  // group: persistItem tells the group when the file finally saves.
+  interface SendChoices { mail: boolean; notify: boolean; reason: string; reasonNote: string }
+  interface SendGroup extends SendChoices {
+    id: string
+    itemIds: string[]
+    single: boolean      // a one-file Send (its Mail attachment starts ticked)
+    savedIds: string[]   // files whose Save has succeeded under this Send
+    doneIds: string[]    // files already registered / mailed / cleared
+  }
+  const [sendGroups, setSendGroups] = useState<SendGroup[]>([])
+  const sendGroupsRef = useRef<SendGroup[]>([])
+  sendGroupsRef.current = sendGroups
+  const [mailQueue, setMailQueue] = useState<{ attachments: EmailAttachment[]; reason: string; reasonNote: string; clearIds: string[] }[]>([])
 
-  async function runDeferredBatchAction(action: PendingBatchAction) {
-    const saved = items.filter(it => action.itemIds.includes(it.id) && it.status === 'saved' && it.driveLink)
-    if (!saved.length) return
-    const auth = await authHeader()
-    await Promise.all(saved.map(it => fetch('/api/document-uploads', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
-      body: JSON.stringify({
-        file_name: it.fileName, drive_url: it.driveLink, is_saved_to_db: true, notify: action.notify && !it.skipNotifyOnDone, uploaded_by_name: uploaderName,
-        reason: action.reason || undefined, reason_note: action.reason === 'Other' ? action.reasonNote.trim() : undefined,
-        doc_type: it.detectedType || undefined,
-        // Same duplicate-replace items that skip notify — log them into the
-        // processed history as "re-saved today" instead of leaving no trace.
-        resaved: !!it.skipNotifyOnDone,
-      }),
-    })))
-    // This deferred pass is the actual finish line for these files (their
-    // document-uploads registration just completed) — auto-refresh the list
-    // now, whether or not a Mail popup is about to follow (it uses its own
-    // attachments list, not this one).
-    clearFinishedItems(saved.map(it => ({ fileName: it.fileName })))
-    if (action.mail) {
-      setDeferredReason({ reason: action.reason, reasonNote: action.reasonNote })
-      // Same rule Notify already uses (notify: action.notify && !it.skipNotifyOnDone,
-      // above): a duplicate-replace isn't a new document, so it shouldn't be
-      // mailed out by default either. Still listed and tickable in the Mail
-      // popup — checkedByDefault just starts it unchecked — so a genuine
-      // "yes I do want a copy of this one" is still one click away.
-      setDeferredEmailAttachments(saved.map(it => ({ filename: it.fileName, url: it.driveLink, checkedByDefault: !it.skipNotifyOnDone })))
+  // Called from persistItem the moment a file's Save succeeds.
+  function markGroupSaved(itemId: string) {
+    setSendGroups(prev => prev.some(g => g.itemIds.includes(itemId) && !g.savedIds.includes(itemId))
+      ? prev.map(g => (g.itemIds.includes(itemId) && !g.savedIds.includes(itemId)) ? { ...g, savedIds: [...g.savedIds, itemId] } : g)
+      : prev)
+  }
+
+  function clearItemsById(ids: string[]) {
+    if (!ids.length) return
+    setItems(prev => prev.filter(it => !(ids.includes(it.id) && it.status === 'saved')))
+  }
+
+  // Saves the files one after another in the background. Save order matters
+  // for a batch (see BATCH_SAVE_ORDER), so it stays sequential.
+  async function runSaves(queue: UploadItem[], referenceOverride: string | undefined, batch: boolean, choices?: SendChoices) {
+    for (const item of queue) {
+      try {
+        const r: any = batch ? await saveOneBatch(item, referenceOverride) : await saveOne(item, referenceOverride, choices)
+        // saveOne already puts most failures in the banner; this also covers
+        // a cancelled format warning. Duplicate/CAP conflicts have their own popup.
+        if (!batch && r && !r.ok && !r.modal && r.error) setError(r.error)
+      } catch (e: any) {
+        updateItem(item.id, { status: 'error', error: e.message })
+        if (!batch) setError(e.message)
+      }
     }
   }
 
-  // Watches only while a batch action is actually pending — fires the moment
-  // none of this batch's files are still 'ready'/'error'/'saving'.
-  useEffect(() => {
-    if (!pendingBatchAction) return
-    const stillOpen = items.some(it => pendingBatchAction.itemIds.includes(it.id) && (it.status === 'ready' || it.status === 'error' || it.status === 'saving'))
-    if (stillOpen) return
-    const action = pendingBatchAction
-    setPendingBatchAction(null)
-    runDeferredBatchAction(action)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, pendingBatchAction])
+  // A fresh Send: opens a group for these files (taking them out of any older
+  // group — the newest choices win) and starts saving in the background.
+  function startSend(queue: UploadItem[], choices: SendChoices, referenceOverride: string | undefined, batch: boolean) {
+    if (!queue.length) return
+    const ids = queue.map(q => q.id)
+    const group: SendGroup = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      itemIds: ids, single: queue.length === 1, savedIds: [], doneIds: [],
+      mail: !!choices.mail, notify: !!choices.notify, reason: choices.reason || '', reasonNote: choices.reasonNote || '',
+    }
+    setSendGroups(prev => [
+      ...prev
+        .map(g => ({ ...g, itemIds: g.itemIds.filter(id => !ids.includes(id)), savedIds: g.savedIds.filter(id => !ids.includes(id)) }))
+        .filter(g => g.itemIds.length),
+      group,
+    ])
+    runSaves(queue, referenceOverride, batch, choices)
+  }
 
+  // Registers the saved files of a group (document-uploads: Processed
+  // History, Notify, upload approvals), opens the Mail popup if Mail was
+  // ticked, and auto-clears the finished files from the list.
+  async function processSend(group: SendGroup, ids: string[]) {
+    const saved = items.filter(it => ids.includes(it.id) && it.status === 'saved' && it.driveLink)
+    if (!saved.length) return
+    const auth = await authHeader()
+    const uploader = await getUploader()
+    const okItems: UploadItem[] = []
+    const failed: string[] = []
+    await Promise.all(saved.map(async it => {
+      try {
+        const res = await fetch('/api/document-uploads', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
+          body: JSON.stringify({
+            file_name: it.fileName, drive_url: it.driveLink, is_saved_to_db: true,
+            // A duplicate-replace isn't a new document — never notifies, and
+            // is logged as "re-saved today" instead of leaving no trace.
+            notify: group.notify && !it.skipNotifyOnDone, uploaded_by_name: uploader.name || uploaderName,
+            reason: group.reason || undefined, reason_note: group.reason === 'Other' ? group.reasonNote.trim() : undefined,
+            doc_type: it.detectedType || undefined,
+            // The CUSDEC this file's own Save created/matched — needed so a
+            // CUSDEC Passed upload approval counts the CUSDEC's real cap and
+            // a Final Document can attach to its CUSDEC.
+            cusdec_id: it.savedCusdecId || undefined,
+            resaved: !!it.skipNotifyOnDone,
+          }),
+        })
+        if (!res.ok) throw new Error('register failed')
+        okItems.push(it)
+      } catch { failed.push(it.fileName) }
+    }))
+    if (failed.length) setError(`Saved, but the Send record could not be created for: ${failed.join(', ')} — open it and press Send again.`)
+    if (!okItems.length) return
+    const okIds = okItems.map(it => it.id)
+    if (group.mail) {
+      // Cleared once the Mail popup is closed (Save + Mail + Notify all done).
+      // A one-file Send starts its attachment ticked; in a batch a
+      // duplicate-replace starts unticked (still one click away).
+      setMailQueue(q => [...q, {
+        attachments: okItems.map(it => ({ filename: it.fileName, url: it.driveLink, checkedByDefault: group.single ? true : !it.skipNotifyOnDone })),
+        reason: group.reason, reasonNote: group.reasonNote, clearIds: okIds,
+      }])
+    } else {
+      clearItemsById(okIds)
+    }
+  }
+
+  // Watches the groups: runs the bookkeeping the moment it is allowed to.
+  useEffect(() => {
+    if (!sendGroups.length) return
+    const jobs: { group: SendGroup; ids: string[] }[] = []
+    const next: SendGroup[] = []
+    let changed = false
+    for (const g of sendGroups) {
+      const allSettled = g.itemIds.every(id => {
+        const it = items.find(x => x.id === id)
+        return g.savedIds.includes(id) || !it || it.status === 'skipped'
+      })
+      const combined = g.mail || g.notify
+      const ids = (!combined || allSettled) ? g.savedIds.filter(id => !g.doneIds.includes(id)) : []
+      if (ids.length) { jobs.push({ group: g, ids }); changed = true }
+      if (allSettled) { changed = true; continue }
+      next.push(ids.length ? { ...g, doneIds: [...g.doneIds, ...ids] } : g)
+    }
+    if (!changed) return
+    setSendGroups(next)
+    jobs.forEach(j => processSend(j.group, j.ids))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, sendGroups])
+
+  // "Send All" — the whole batch goes into one group; the modal closes at once.
   async function runBatchSend(referenceOverride?: string, choices?: { save: boolean; mail: boolean; notify: boolean; reason: string; reasonNote: string }): Promise<{ ok: boolean; error?: string; results: SendResultFile[] }> {
     const queue = batchQueue || []
-    const results: SendResultFile[] = []
-    let firstError = ''
-    let anyLeftPending = false
-    for (const item of queue) {
-      const r: any = await saveOneBatch(item, referenceOverride)
-      if (r.ok) {
-        results.push({ fileName: item.fileName, driveLink: r.driveLink, docType: item.detectedType || undefined, cusdecId: r.cusdecId })
-      } else {
-        anyLeftPending = true
-        if (!firstError) firstError = `"${item.fileName}": ${r.error}`
-      }
-    }
-    // Only block "Done" (show the error, keep the modal open) if EVERY file
-    // in the batch failed — if even one went through, let Done finish
-    // normally; the failed ones stay on their cards as 'error' for next time.
-    if (!results.length && queue.length) return { ok: false, error: firstError, results: [] }
-    if (anyLeftPending && choices && (choices.mail || choices.notify)) {
-      // Some files still need fixing — hand Notify/Mail off to the watcher
-      // above instead of running them now for only the files that happened
-      // to save on this pass. Returning empty results tells SendModal there
-      // is nothing left for IT to do (no document-uploads write, no Mail
-      // popup) — that happens later, all at once, in runDeferredBatchAction.
-      setPendingBatchAction({ itemIds: queue.map(it => it.id), notify: choices.notify, mail: choices.mail, reason: choices.reason, reasonNote: choices.reasonNote })
-      return { ok: true, results: [] }
-    }
-    return { ok: true, results }
+    if (!queue.length) return { ok: false, error: 'Nothing to send', results: [] }
+    startSend(queue, { mail: !!choices?.mail, notify: !!choices?.notify, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' }, referenceOverride, true)
+    // Empty results = nothing left for SendModal to do (no document-uploads
+    // write, no Mail popup) — the group above does all of it.
+    return { ok: true, results: [] }
   }
   // Mail/Notify-without-Save path for the whole batch — no structured-table
   // save happens here, so there's nothing that can leave one file half-saved;
@@ -1254,7 +1338,7 @@ function DocumentsUploadContent() {
     return results
   }
   // Auto-refresh: once a file's whole Save + Mail + Notify process has
-  // actually finished (see SendModal's onDone / runDeferredBatchAction
+  // actually finished (see SendModal's onDone / processSend
   // below), drop it from the list automatically instead of leaving it
   // sitting there as "Saved" until someone clicks Delete All. Matched by
   // file name and only ever removes items already in the 'saved' state, so
@@ -1270,6 +1354,13 @@ function DocumentsUploadContent() {
     setItems([])
     setSelectedId(null)
   }
+
+  // The Send panel only shrinks to "Save only" when it is reopened to retry a
+  // file that failed to save AFTER a Send already recorded its Reason/Mail/
+  // Notify (the group remembers them). A file with no Send behind it (e.g.
+  // its type was never identified) gets the full panel instead.
+  const sendModalGroup = sendModalItem ? sendGroups.find(g => g.itemIds.includes(sendModalItem.id)) : undefined
+  const sendModalRestricted = !!sendModalItem && !!sendModalGroup && (items.find(it => it.id === sendModalItem.id)?.status ?? sendModalItem.status) === 'error'
 
   const canSeePreview = canUpload || canSeeUploaded || canPreview || isAdmin
   const panelOptions: Panel[] = (['upload', 'bills', 'preview', 'admin-edit'] as Panel[]).filter(p =>
@@ -2130,11 +2221,11 @@ function DocumentsUploadContent() {
       )}
 
       {emailAttachments && <EmailPdfModal attachments={emailAttachments} onClose={() => setEmailAttachments(null)}/>}
-      {deferredEmailAttachments && (
-        <EmailPdfModal attachments={deferredEmailAttachments}
-          documentReason={deferredReason?.reason || undefined}
-          documentReasonNote={deferredReason?.reason === 'Other' ? deferredReason.reasonNote : undefined}
-          onClose={() => { setDeferredEmailAttachments(null); setDeferredReason(null) }}/>
+      {mailQueue[0] && (
+        <EmailPdfModal key={mailQueue[0].attachments.map(a => a.filename).join('|')} attachments={mailQueue[0].attachments}
+          documentReason={mailQueue[0].reason || undefined}
+          documentReasonNote={mailQueue[0].reason === 'Other' ? mailQueue[0].reasonNote : undefined}
+          onClose={() => { const done = mailQueue[0]; setMailQueue(q => q.slice(1)); clearItemsById(done.clearIds) }}/>
       )}
 
       {sendModalItem && (
@@ -2142,11 +2233,19 @@ function DocumentsUploadContent() {
           label={sendModalItem.fileName}
           uploaderName={uploaderName}
           docType={sendModalItem.detectedType}
-          restrictToSaveOnly={sendModalItem.status === 'error'}
+          restrictToSaveOnly={sendModalRestricted}
           requireReason
           onSave={async (referenceOverride?: string, choices?: PendingChoices) => {
-            const r = await saveOne(sendModalItem, referenceOverride, choices)
-            return { ok: !!r?.ok, error: r?.error, results: r?.ok && r.driveLink ? [{ fileName: sendModalItem.fileName, driveLink: r.driveLink, docType: sendModalItem.detectedType, cusdecId: r.cusdecId }] : [] }
+            // Done closes this panel right away — Save (and then Reason /
+            // Notify / Mail / auto-clear, see "Send groups") continues in
+            // the background; a failure stays on the file's own card.
+            if (sendModalRestricted && sendModalGroup) {
+              // Retry of a file that errored: keep what the original Send chose.
+              runSaves([sendModalItem], referenceOverride, false, { mail: sendModalGroup.mail, notify: sendModalGroup.notify, reason: sendModalGroup.reason, reasonNote: sendModalGroup.reasonNote })
+            } else {
+              startSend([sendModalItem], { mail: !!choices?.mail, notify: !!choices?.notify, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' }, referenceOverride, false)
+            }
+            return { ok: true, results: [] }
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}
           onClose={() => setSendModalItem(null)}

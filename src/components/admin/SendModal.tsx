@@ -196,7 +196,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         <div className="p-5 space-y-3">
           <p className="text-xs text-gray-500 truncate">{label}</p>
           {restrictToSaveOnly && (
-            <p className="text-[11px] text-amber-600 -mt-1">Fixing a save error — this just retries Save for this file. Mail/Notify for the rest of the batch will happen automatically once every file in it is saved.</p>
+            <p className="text-[11px] text-amber-600 -mt-1">Fixing a save error — this just retries Save for this file. The Reason / Mail / Notify you already chose will run automatically once it (and the rest of its batch) is saved.</p>
           )}
           {!hideSaveAndNotify && (
             <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>

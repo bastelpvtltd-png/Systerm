@@ -1555,12 +1555,16 @@ function ApprovalsAccessPanel() {
     if (res.ok) setHistory(prev => prev.filter(x => x.id !== id))
   }
 
-  // Admin-only: undo an approved decision — deletes the count it credited
-  // and reopens the item as pending, so it can be approved (or rejected)
-  // again from scratch. Refused server-side once the count has already
-  // been swept into a balance report.
-  async function revertHistoryEntry(id: string) {
-    if (!confirm('Revert this approval? Its credited count will be removed and it will go back to pending.')) return
+  // Admin-only: undo an approved OR rejected decision and reopen the item as
+  // pending, so it can be approved (or rejected) again from scratch. For an
+  // approved one the count it credited is removed too (refused server-side
+  // once that count has been swept into a balance report); a rejected one
+  // never credited anything, so it just goes back to pending.
+  async function revertHistoryEntry(id: string, status?: 'approved' | 'rejected') {
+    const msg = status === 'rejected'
+      ? 'Revert this rejection? It will go back to pending so it can be approved or rejected again.'
+      : 'Revert this approval? Its credited count will be removed and it will go back to pending.'
+    if (!confirm(msg)) return
     setBusyId(id); setError('')
     try {
       const res = await fetch('/api/doc-approvals', {
@@ -1614,9 +1618,9 @@ function ApprovalsAccessPanel() {
                   {showHistory ? (
                     isAdmin && (
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        {it.status === 'approved' && (
-                          <button onClick={() => revertHistoryEntry(it.id)} disabled={busyId === it.id}
-                            title="Revert to pending — removes the count it credited"
+                        {(it.status === 'approved' || it.status === 'rejected') && (
+                          <button onClick={() => revertHistoryEntry(it.id, it.status)} disabled={busyId === it.id}
+                            title={it.status === 'rejected' ? 'Revert to pending — reopens this rejected item' : 'Revert to pending — removes the count it credited'}
                             className="text-[10px] font-medium text-amber-600 hover:text-amber-700 disabled:opacity-40 border border-amber-200 rounded px-1.5 py-0.5">
                             {busyId === it.id ? <Loader size={11} className="animate-spin"/> : 'Revert'}
                           </button>

@@ -90,6 +90,8 @@ async function withFileNames(rows: any[]) {
 // approved decision (POST action 'revert') is admin-only too — it deletes
 // the work_counts row(s) that decision credited and reopens the item as
 // pending, as long as it hasn't already been swept into a balance report.
+// A REJECTED decision can be reverted the same way (admin-only) — nothing
+// was credited, so it just reopens as pending.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const authed = await requireAuth(req)
   if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
@@ -131,19 +133,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { id, action } = req.body as { id: string; action: 'approve' | 'reject' | 'revert' }
     if (!id || !action) return res.status(400).json({ error: 'id and action required' })
 
-    // Revert: undo a decision that was already approved — deletes the
-    // work_counts row(s) that approval credited and puts it back to
-    // 'pending' so it can be approved again (or rejected) fresh. Admin-only,
-    // and only reachable from the approval HISTORY (already-decided items).
-    // Refused once the credited row has been swept into a balance report
-    // (reported=true) — the count has already left this document behind and
-    // reverting here can no longer be reflected in a report that's already
-    // been generated and sent out.
+    // Revert: undo a decision that was already made — puts it back to
+    // 'pending' so it can be approved (or rejected) fresh. Admin-only, and
+    // only reachable from the approval HISTORY (already-decided items).
+    //   • approved → also deletes the work_counts row(s) that approval
+    //     credited. Refused once the credited row has been swept into a
+    //     balance report (reported=true) — the count has already left this
+    //     document behind and reverting here can no longer be reflected in
+    //     a report that's already been generated and sent out.
+    //   • rejected → a rejection never credited anything, so there is no
+    //     count to remove; it simply reopens as pending. (Refused if the
+    //     same document + stage already has another pending/approved
+    //     approval — e.g. it was re-sent after the rejection — because
+    //     reopening this one too would let the same document be counted
+    //     twice.)
     if (action === 'revert') {
       if (!isAdmin) return res.status(403).json({ error: 'Admin only' })
       const { data: approval } = await sb.from('doc_approvals').select('*').eq('id', id).maybeSingle()
       if (!approval) return res.status(404).json({ error: 'Not found' })
-      if (approval.status !== 'approved') return res.status(400).json({ error: 'Only approved items can be reverted' })
+      if (approval.status !== 'approved' && approval.status !== 'rejected') {
+        return res.status(400).json({ error: 'Only approved or rejected items can be reverted' })
+      }
+
+      if (approval.status === 'rejected') {
+        if (approval.document_id) {
+          const { data: clash } = await sb.from('doc_approvals').select('id')
+            .eq('document_id', approval.document_id).eq('stage', approval.stage)
+            .neq('id', id).in('status', ['pending', 'approved']).limit(1).maybeSingle()
+          if (clash) return res.status(400).json({ error: 'Cannot revert: this document already has another pending/approved entry for the same stage' })
+        }
+        const { error: reopenErr } = await sb.from('doc_approvals')
+          .update({ status: 'pending', decided_by: null, decided_by_name: null, decided_at: null }).eq('id', id)
+        if (reopenErr) return res.status(500).json({ error: 'Revert failed: ' + reopenErr.message })
+        return res.json({ ok: true })
+      }
 
       const wcAction = STAGE_TO_WORK_ACTION[approval.stage]
       if (wcAction) {
