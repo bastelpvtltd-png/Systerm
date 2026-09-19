@@ -2,7 +2,18 @@ import { useEffect, useState } from 'react'
 import { Mail, X, Loader, AlertTriangle } from 'lucide-react'
 import { authHeader, supabase } from '@/lib/supabase'
 
-export interface EmailAttachment { filename: string; url: string }
+export interface EmailAttachment {
+  filename: string
+  url: string
+  // Optional — lets a caller hand over a file that should still be listed
+  // (so it's visible and can be added back with one tap) but not selected
+  // to send by default. Used for batch Save/Mail/Notify sends where some of
+  // the files were duplicate-replaces: Notify already skips those
+  // automatically, and Mail should default to the same set while still
+  // letting the person tick a duplicate back on if they actually want it
+  // mailed. Missing/undefined behaves exactly like `true` (today's default).
+  checkedByDefault?: boolean
+}
 
 // Shared "email this PDF" popup — used from Upload Docs (right after save,
 // and again later from the Uploaded/Preview list if the first send didn't
@@ -32,7 +43,7 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
   // Which of the passed-in attachments actually go out — defaults to all of
   // them, but a batch send hands this modal every file it just saved, and
   // the person may want to mail only some of those right now.
-  const [included, setIncluded] = useState<boolean[]>(() => attachments.map(() => true))
+  const [included, setIncluded] = useState<boolean[]>(() => attachments.map(a => a.checkedByDefault !== false))
   const selectedAttachments = attachments.filter((_, i) => included[i])
 
   useEffect(() => {

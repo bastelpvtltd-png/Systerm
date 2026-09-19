@@ -1157,7 +1157,12 @@ function DocumentsUploadContent() {
     })))
     if (action.mail) {
       setDeferredReason({ reason: action.reason, reasonNote: action.reasonNote })
-      setDeferredEmailAttachments(saved.map(it => ({ filename: it.fileName, url: it.driveLink })))
+      // Same rule Notify already uses (notify: action.notify && !it.skipNotifyOnDone,
+      // above): a duplicate-replace isn't a new document, so it shouldn't be
+      // mailed out by default either. Still listed and tickable in the Mail
+      // popup — checkedByDefault just starts it unchecked — so a genuine
+      // "yes I do want a copy of this one" is still one click away.
+      setDeferredEmailAttachments(saved.map(it => ({ filename: it.fileName, url: it.driveLink, checkedByDefault: !it.skipNotifyOnDone })))
     }
   }
 
@@ -2105,7 +2110,19 @@ function DocumentsUploadContent() {
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}
           onClose={() => setSendModalItem(null)}
-          onDone={() => { setSendModalItem(null); setSelectedId(null) }}
+          // A restrictToSaveOnly Send (sendModalItem.status === 'error' at the
+          // moment it was opened — i.e. this was a fix-the-error-then-resend,
+          // not a fresh Send) should only close the Send popup itself once
+          // the retry is done. Also clearing selectedId used to boot the
+          // person straight out of the item panel they were just fixing
+          // fields in and back to the list — the wrong panel after what was
+          // meant to be a quick retry. A genuine first-time Send still closes
+          // the whole panel as before.
+          onDone={() => {
+            const wasErrorRetry = sendModalItem.status === 'error'
+            setSendModalItem(null)
+            if (!wasErrorRetry) setSelectedId(null)
+          }}
         />
       )}
 
