@@ -143,10 +143,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // log-document-action.ts.
       try {
         if ((doc_type === 'cdn' && reason === 'Container Moved') || (doc_type === 'cusdec' && reason === 'CUSDEC Passed')) {
-          await supabaseAdmin.from('doc_approvals').insert({
-            document_id: data.id, cusdec_id: cusdec_id || null, doc_type, reason,
-            uploaded_by: authed.userId, uploaded_by_name: uploadedByName, stage: 'upload',
-          })
+          // A re-save of the SAME document must not open a second upload
+          // approval while one is pending/approved — approving both would
+          // count the document twice. (A rejected one can still be re-sent.)
+          const { data: existingApproval } = await supabaseAdmin.from('doc_approvals')
+            .select('id').eq('document_id', data.id).eq('stage', 'upload').in('status', ['pending', 'approved']).limit(1).maybeSingle()
+          if (!existingApproval) {
+            await supabaseAdmin.from('doc_approvals').insert({
+              document_id: data.id, cusdec_id: cusdec_id || null, doc_type, reason,
+              uploaded_by: authed.userId, uploaded_by_name: uploadedByName, stage: 'upload',
+            })
+          }
         }
       } catch { /* non-fatal — doc_approvals is supplemental */ }
 

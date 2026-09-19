@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase, authHeader } from '@/lib/supabase'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { CheckCircle, DollarSign, Plus, Loader, TrendingUp, TrendingDown, Send, Check, X, Trash2, Users as UsersIcon, BarChart2, ChevronDown, ChevronRight, Save, Undo2, Briefcase, FileCheck, Clock } from 'lucide-react'
@@ -42,6 +42,11 @@ interface OtherWorkItem {
   created_by: string | null; created_at: string; approved_at: string | null
 }
 type CostFilter = 'cdn' | 'cap' | null
+
+// Fired after an approve/reject so Upload Count, Balance and the results list
+// refresh straight away instead of waiting for their next poll.
+const APPROVALS_CHANGED = 'doc-approvals-changed'
+const notifyApprovalsChanged = () => { try { window.dispatchEvent(new Event(APPROVALS_CHANGED)) } catch {} }
 
 function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId: string | null; isAdmin: boolean; showBalance: boolean; showPayments: boolean }) {
   // ── data ──────────────────────────────────────────────────────────────────
@@ -125,6 +130,12 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
     supabase.from('profiles').select('id, username, full_name').eq('is_shipper', false).then(({ data }) => setUsers((data as any) || []))
     const t = setInterval(load, 15000)
     return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const onChange = () => { load() }
+    window.addEventListener(APPROVALS_CHANGED, onChange)
+    return () => window.removeEventListener(APPROVALS_CHANGED, onChange)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function recordPayment() {
@@ -250,7 +261,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   // Current user computed values — only rows not yet archived into a
   // generated Monthly Report count toward the running balance (reported=true
   // rows are history only, already paid out in an earlier report).
-  const myUnreportedWork = myWorkRows.filter(r => !r.reported)
+  const myUnreportedWork = myWorkRows.filter(isPickRow)
   const myCdn = myUnreportedWork.reduce((s, r) => s + (r.cdn_inc || 0), 0)
   const myCap = myUnreportedWork.reduce((s, r) => s + (r.cap_inc || 0), 0)
   // CAP is now the sum of each CUSDEC's own container count, not one per
@@ -260,6 +271,8 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   const myCo = myUnreportedWork.reduce((s, r) => s + (r.co_inc || 0), 0)
   const mySafta = myUnreportedWork.reduce((s, r) => s + (r.safta_inc || 0), 0)
   const myBoatNote = myUnreportedWork.reduce((s, r) => s + (r.boat_note_inc || 0), 0)
+  // Boat Cap is rated per CUSDEC container (like CAP); the bracket is how many Boat Note documents that came from.
+  const myBoatNoteDocs = myUnreportedWork.filter(r => (r.boat_note_inc || 0) > 0).length
   const myCountWorkEarned = myCdn * rates.cdn_rate + myCap * rates.cap_rate
     + myPytho * (rates.pytho_rate || 0) + myCo * (rates.co_rate || 0) + mySafta * (rates.safta_rate || 0)
     + myBoatNote * (rates.boat_note_rate || 0)
@@ -278,7 +291,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   const myPendingOtherWork = myOtherWork.filter(x => x.status === 'pending')
 
   // Admin: per-user work earned from allWorkRows — same unreported-only rule.
-  const workByUser = allWorkRows.filter(r => !r.reported).reduce((acc, r) => {
+  const workByUser = allWorkRows.filter(isPickRow).reduce((acc, r) => {
     if (!acc[r.user_name]) acc[r.user_name] = { cdn: 0, cap: 0, capCusdecs: 0, pytho: 0, co: 0, safta: 0, boatNote: 0 }
     acc[r.user_name].cdn += r.cdn_inc || 0
     acc[r.user_name].cap += r.cap_inc || 0
@@ -384,7 +397,7 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                       <p className="text-[9px] text-purple-600">{costFilter === 'cap' ? '▲ hide' : '▼ details'}</p>
                     </button>
                     <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
-                      <p className="text-xl font-bold text-blue-700">{myBoatNote}</p>
+                      <p className="text-xl font-bold text-blue-700">{myBoatNote} <span className="text-xs font-normal text-blue-400">({myBoatNoteDocs})</span></p>
                       <p className="text-[10px] text-gray-500 mt-0.5">Boat Cap</p>
                     </div>
                     <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
@@ -493,6 +506,9 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
             )}
           </div>
         )}
+
+        {/* Approved / rejected pick approvals (admin: every user, can delete) */}
+        <ApprovalResultsScroll userId={userId} isAdmin={isAdmin}/>
 
         {/* Admin section */}
         {isAdmin && (
@@ -622,9 +638,9 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                           double-showed work that had already been closed out. */}
                       {historyUser === name && (
                         <div className="divide-y divide-gray-50 max-h-48 overflow-y-auto bg-purple-50/30">
-                          {allWorkRows.filter(r => r.user_name === name && !r.reported).length === 0 ? (
+                          {allWorkRows.filter(r => r.user_name === name && isPickRow(r)).length === 0 ? (
                             <p className="text-xs text-gray-400 p-3">No count history since the last report</p>
-                          ) : allWorkRows.filter(r => r.user_name === name && !r.reported)
+                          ) : allWorkRows.filter(r => r.user_name === name && isPickRow(r))
                               .sort((a, b) => b.created_at.localeCompare(a.created_at))
                               .map(r => (
                             <div key={r.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
@@ -741,6 +757,13 @@ interface WorkCountRow {
   created_at: string
 }
 interface WorkRates { cdn_rate: number; cap_rate: number; pytho_rate?: number; co_rate?: number; safta_rate?: number; boat_note_rate?: number }
+
+// doc-approvals.ts writes an approved upload as action 'approved-upload'
+// ('upload' is the legacy name) — those rows belong to the Upload Count panel.
+function isUploadRow(r: WorkCountRow) { return r.action === 'upload' || r.action === 'approved-upload' }
+// Balance = PICKED work only (Mail/Download from My Picked Tasks, once
+// approved). Upload rows must never feed Cost / Balance.
+function isPickRow(r: WorkCountRow) { return !r.reported && !isUploadRow(r) }
 
 function fmtLKR(n: number) {
   return n.toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -1376,7 +1399,10 @@ function MyTasksContent() {
 
 interface DocApproval {
   id: string; document_id: string; cusdec_id: string | null; doc_type: string; reason: string
-  uploaded_by_name: string; created_at: string; stage: 'upload' | 'billing'
+  uploaded_by_name: string; created_at: string
+  stage: 'upload' | 'billing' | 'boat_note' | 'final_document'
+  // Optional extras — shown whenever the doc-approvals API sends them.
+  file_name?: string | null; document_name?: string | null; uploaded_by?: string | null
   status?: 'approved' | 'rejected'; decided_by_name?: string; decided_at?: string
 }
 
@@ -1393,7 +1419,59 @@ interface DocApproval {
 //                           + own history only, view-only (no buttons at
 //                           all — approving is exclusively the other panel's
 //                           job, enforced server-side too).
+//
+// Both panels are split into two sections by stage:
+//   Upload Approvals — stage 'upload'  → approved items feed Upload Count
+//   Pick Approvals   — every other stage (billing / boat_note / final_document,
+//                      i.e. after Download/Mail of a picked task) → feed Balance
 const stageLabel = (s: string) => s === 'billing' ? 'Billing (CAP)' : s === 'boat_note' ? 'Boat Cap' : s === 'final_document' ? 'Final Document' : 'Upload Count'
+
+type ApprovalGroup = 'upload' | 'pick'
+const APPROVAL_GROUPS: ApprovalGroup[] = ['upload', 'pick']
+const approvalGroup = (it: DocApproval): ApprovalGroup => it.stage === 'upload' ? 'upload' : 'pick'
+const GROUP_META: Record<ApprovalGroup, { title: string; hint: string }> = {
+  upload: { title: 'Upload Approvals', hint: 'Approved items are counted in Upload Count' },
+  pick:   { title: 'Pick Approvals',   hint: 'Approved items are counted in Balance' },
+}
+const approvalDocName = (it: DocApproval) => it.file_name || it.document_name || '—'
+const fmtApprovalDate = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString('en-GB') : ''
+const fmtApprovalTime = (iso?: string | null) => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
+
+// One approval item: uploader name, document type, reason, document name, date, time.
+function ApprovalDetails({ it, showDecision = false }: { it: DocApproval; showDecision?: boolean }) {
+  return (
+    <div className="min-w-0 flex-1">
+      <p className="font-medium text-gray-800">
+        {it.uploaded_by_name}
+        <span className="ml-1.5 px-1.5 py-0.5 rounded bg-gray-100 text-[10px] font-semibold text-gray-600">{it.doc_type?.toUpperCase()}</span>
+        <span className="ml-1.5 text-[11px] font-normal text-gray-500">{stageLabel(it.stage)}</span>
+        {showDecision && it.status && (
+          <span className={`ml-1.5 font-semibold ${it.status === 'approved' ? 'text-green-600' : 'text-red-500'}`}>{it.status}</span>
+        )}
+      </p>
+      <p className="text-gray-700 truncate">{approvalDocName(it)}</p>
+      <p className="text-gray-400">Reason: {it.reason} · {fmtApprovalDate(it.created_at)} · {fmtApprovalTime(it.created_at)}</p>
+      {showDecision && (
+        <p className="text-gray-400">by {it.decided_by_name} · {fmtApprovalDate(it.decided_at)} {fmtApprovalTime(it.decided_at)}</p>
+      )}
+    </div>
+  )
+}
+
+function ApprovalSection({ group, count, actions, children }: { group: ApprovalGroup; count: number; actions?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="border border-gray-100 rounded-xl overflow-hidden mb-3 last:mb-0">
+      <div className="px-3 py-2 bg-gray-50 flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <p className="text-xs font-semibold text-gray-800">{GROUP_META[group].title} <span className="text-gray-400 font-normal">({count})</span></p>
+          <p className="text-[10px] text-gray-400">{GROUP_META[group].hint}</p>
+        </div>
+        {actions}
+      </div>
+      <div className="p-2 space-y-1.5 max-h-72 overflow-y-auto">{children}</div>
+    </div>
+  )
+}
 
 function ApprovalsAccessPanel() {
   const { isAdmin } = usePermission()
@@ -1402,6 +1480,7 @@ function ApprovalsAccessPanel() {
   const [showHistory, setShowHistory] = useState(false)
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [bulkBusy, setBulkBusy] = useState<string | null>(null) // `${group}:${action}`
   const [error, setError] = useState('')
 
   async function load(silent = false) {
@@ -1425,19 +1504,49 @@ function ApprovalsAccessPanel() {
     return () => clearInterval(t)
   }, [])
 
+  async function postDecision(id: string, action: 'approve' | 'reject') {
+    const res = await fetch('/api/doc-approvals', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+      body: JSON.stringify({ id, action }),
+    })
+    const d = await res.json()
+    if (!res.ok) throw new Error(d.error)
+  }
+
   async function decide(id: string, action: 'approve' | 'reject') {
     setBusyId(id); setError('')
     try {
-      const res = await fetch('/api/doc-approvals', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ id, action }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error)
+      await postDecision(id, action)
       setItems(prev => prev.filter(x => x.id !== id))
       if (showHistory) loadHistory()
+      notifyApprovalsChanged()
     } catch (e: any) { setError(e.message) }
     finally { setBusyId(null) }
+  }
+
+  // Approve All / Reject All for one section. Sent one at a time on purpose:
+  // every approve credits its count exactly once server-side, so we don't fire
+  // them in parallel. Items that fail stay in the list; the rest are removed.
+  async function decideAll(group: ApprovalGroup, action: 'approve' | 'reject') {
+    const list = items.filter(it => approvalGroup(it) === group)
+    if (list.length === 0) return
+    const verb = action === 'approve' ? 'Approve' : 'Reject'
+    if (!confirm(`${verb} ALL ${list.length} pending item(s) in ${GROUP_META[group].title}?`)) return
+    setBulkBusy(`${group}:${action}`); setError('')
+    const done: string[] = []
+    let failed = 0
+    let firstError = ''
+    for (const it of list) {
+      try { await postDecision(it.id, action); done.push(it.id) }
+      catch (e: any) { failed += 1; if (!firstError) firstError = e.message }
+    }
+    if (done.length > 0) {
+      setItems(prev => prev.filter(x => !done.includes(x.id)))
+      if (showHistory) loadHistory()
+      notifyApprovalsChanged()
+    }
+    if (failed > 0) setError(`${done.length} done, ${failed} failed — ${firstError}`)
+    setBulkBusy(null)
   }
 
   async function deleteHistoryEntry(id: string) {
@@ -1455,51 +1564,53 @@ function ApprovalsAccessPanel() {
         </button>
       </div>
       {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
-      {showHistory ? (
-        history.length === 0 ? (
-          <p className="text-xs text-gray-400 py-4 text-center">No decided approvals yet</p>
-        ) : (
-          <div className="space-y-1.5">
-            {history.map(it => (
-              <div key={it.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
-                <div>
-                  <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}
-                    <span className={`ml-1.5 font-semibold ${it.status === 'approved' ? 'text-green-600' : 'text-red-500'}`}>{it.status}</span>
-                  </p>
-                  <p className="text-gray-400">by {it.decided_by_name} · {it.decided_at ? new Date(it.decided_at).toLocaleString('en-GB') : ''}</p>
-                </div>
-                {isAdmin && (
-                  <button onClick={() => deleteHistoryEntry(it.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={12}/></button>
-                )}
-              </div>
-            ))}
-          </div>
-        )
-      ) : loading ? (
+
+      {!showHistory && loading ? (
         <div className="flex justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
-      ) : items.length === 0 ? (
-        <p className="text-xs text-gray-400 py-4 text-center">Nothing waiting for approval</p>
       ) : (
-        <div className="space-y-1.5">
-          {items.map(it => (
-            <div key={it.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
-              <div>
-                <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}</p>
-                <p className="text-gray-400">{it.reason} · {new Date(it.created_at).toLocaleString('en-GB')}</p>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => decide(it.id, 'approve')} disabled={busyId === it.id}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
-                  {busyId === it.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
-                </button>
-                <button onClick={() => decide(it.id, 'reject')} disabled={busyId === it.id}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
-                  <X size={10}/>Reject
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+        APPROVAL_GROUPS.map(g => {
+          const list = (showHistory ? history : items).filter(it => approvalGroup(it) === g)
+          const bulkDisabled = !!bulkBusy || !!busyId
+          return (
+            <ApprovalSection key={g} group={g} count={list.length}
+              actions={!showHistory && list.length > 0 ? (
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => decideAll(g, 'approve')} disabled={bulkDisabled}
+                    className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                    {bulkBusy === `${g}:approve` ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve all
+                  </button>
+                  <button onClick={() => decideAll(g, 'reject')} disabled={bulkDisabled}
+                    className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
+                    {bulkBusy === `${g}:reject` ? <Loader size={10} className="animate-spin"/> : <X size={10}/>}Reject all
+                  </button>
+                </div>
+              ) : undefined}>
+              {list.length === 0 ? (
+                <p className="text-xs text-gray-400 py-3 text-center">{showHistory ? 'No decided approvals yet' : 'Nothing waiting for approval'}</p>
+              ) : list.map(it => (
+                <div key={it.id} className="flex items-start justify-between gap-2 text-xs border border-gray-100 rounded-lg p-2.5 bg-white">
+                  <ApprovalDetails it={it} showDecision={showHistory}/>
+                  {showHistory ? (
+                    isAdmin && (
+                      <button onClick={() => deleteHistoryEntry(it.id)} className="text-gray-300 hover:text-red-500 flex-shrink-0"><Trash2 size={12}/></button>
+                    )
+                  ) : (
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button onClick={() => decide(it.id, 'approve')} disabled={busyId === it.id || !!bulkBusy}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-white text-[11px] font-medium disabled:opacity-50" style={{ background: '#22A87A' }}>
+                        {busyId === it.id ? <Loader size={10} className="animate-spin"/> : <Check size={10}/>}Approve
+                      </button>
+                      <button onClick={() => decide(it.id, 'reject')} disabled={busyId === it.id || !!bulkBusy}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
+                        <X size={10}/>Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </ApprovalSection>
+          )
+        })
       )}
     </div>
   )
@@ -1540,41 +1651,140 @@ function MyPendingApprovalsPanel() {
           {showHistory ? 'Hide history' : 'Show history'}
         </button>
       </div>
-      {showHistory ? (
-        history.length === 0 ? (
-          <p className="text-xs text-gray-400 py-4 text-center">No decided items yet</p>
-        ) : (
-          <div className="space-y-1.5">
-            {history.map(it => (
-              <div key={it.id} className="text-xs border border-gray-100 rounded-lg p-2.5">
-                <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}
-                  <span className={`ml-1.5 font-semibold ${it.status === 'approved' ? 'text-green-600' : 'text-red-500'}`}>{it.status}</span>
-                </p>
-                <p className="text-gray-400">by {it.decided_by_name} · {it.decided_at ? new Date(it.decided_at).toLocaleString('en-GB') : ''}</p>
-              </div>
-            ))}
-          </div>
-        )
-      ) : loading ? (
+      {!showHistory && loading ? (
         <div className="flex justify-center py-6"><Loader size={18} className="animate-spin text-gray-400"/></div>
-      ) : items.length === 0 ? (
-        <p className="text-xs text-gray-400 py-4 text-center">Nothing pending right now</p>
       ) : (
-        <div className="space-y-1.5">
-          {items.map(it => (
-            <div key={it.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
-              <div>
-                <p className="font-medium text-gray-800">{it.uploaded_by_name} · {it.doc_type?.toUpperCase()} · {stageLabel(it.stage)}</p>
-                <p className="text-gray-400">{it.reason} · {new Date(it.created_at).toLocaleString('en-GB')}</p>
-              </div>
-              <span className="text-[11px] text-amber-600 font-medium flex-shrink-0">Awaiting approval</span>
+        APPROVAL_GROUPS.map(g => {
+          const list = (showHistory ? history : items).filter(it => approvalGroup(it) === g)
+          return (
+            <ApprovalSection key={g} group={g} count={list.length}>
+              {list.length === 0 ? (
+                <p className="text-xs text-gray-400 py-3 text-center">{showHistory ? 'No decided items yet' : 'Nothing pending right now'}</p>
+              ) : list.map(it => (
+                <div key={it.id} className="flex items-start justify-between gap-2 text-xs border border-gray-100 rounded-lg p-2.5 bg-white">
+                  <ApprovalDetails it={it} showDecision={showHistory}/>
+                  {!showHistory && <span className="text-[11px] text-amber-600 font-medium flex-shrink-0">Awaiting approval</span>}
+                </div>
+              ))}
+            </ApprovalSection>
+          )
+        })
+      )}
+    </div>
+  )
+}
+
+// ── Approval results (lives inside the Balance panel) ────────────────────────
+// Small scrolling list of this user's decided PICK approvals — Rejected
+// (default tab) and Approved. Admin sees every user's and can delete entries;
+// a normal user only ever sees their own. Deleting an entry never changes a
+// count that was already credited.
+function ApprovalResultsScroll({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
+  const [rows, setRows] = useState<DocApproval[]>([])
+  const [open, setOpen] = useState(true)
+  const [tab, setTab] = useState<'rejected' | 'approved'>('rejected')
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  // Admin gets every user's entries; everyone else asks for their own only.
+  async function load() {
+    try {
+      const res = await fetch(`/api/doc-approvals?history=1${isAdmin ? '' : '&mine=1'}`, { headers: await authHeader() })
+      const d = await res.json()
+      if (res.ok) setRows(d.history || [])
+    } catch {}
+  }
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30000)
+    window.addEventListener(APPROVALS_CHANGED, load)
+    return () => { clearInterval(t); window.removeEventListener(APPROVALS_CHANGED, load) }
+  }, [isAdmin]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function remove(id: string) {
+    if (!confirm('Delete this approval entry? The count it already credited (if approved) is not affected.')) return
+    setDeletingId(id); setError('')
+    try {
+      const res = await fetch(`/api/doc-approvals?id=${id}`, { method: 'DELETE', headers: await authHeader() })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Delete failed')
+      setRows(prev => prev.filter(x => x.id !== id))
+    } catch (e: any) { setError(e.message) }
+    finally { setDeletingId(null) }
+  }
+
+  // Picks only; a non-admin never sees anyone else's entries.
+  const mine = rows.filter(it => approvalGroup(it) === 'pick'
+    && (isAdmin || !it.uploaded_by || !userId || it.uploaded_by === userId))
+  const rejected = mine.filter(it => it.status === 'rejected')
+  const approved = mine.filter(it => it.status === 'approved')
+  const shown = tab === 'rejected' ? rejected : approved
+
+  return (
+    <div className="mb-3 border border-gray-100 rounded-xl overflow-hidden">
+      <button onClick={() => setOpen(x => !x)} className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 text-left">
+        <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Approval Results (Picks)</span>
+        <span className="text-[11px] text-gray-500 flex items-center gap-2">
+          {rejected.length > 0 && <span className="text-red-500 font-semibold">{rejected.length} rejected</span>}
+          {open ? '▲' : '▾'}
+        </span>
+      </button>
+      {open && (
+        <div className="p-2">
+          <div className="flex items-center gap-1.5 mb-2">
+            <button onClick={() => setTab('rejected')}
+              className={`px-2 py-0.5 rounded-md text-[11px] font-medium border ${tab === 'rejected' ? 'bg-red-50 border-red-300 text-red-600' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+              Rejected ({rejected.length})
+            </button>
+            <button onClick={() => setTab('approved')}
+              className={`px-2 py-0.5 rounded-md text-[11px] font-medium border ${tab === 'approved' ? 'bg-green-50 border-green-300 text-green-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+              Approved ({approved.length})
+            </button>
+          </div>
+          {error && <p className="text-xs text-red-600 mb-1.5">{error}</p>}
+          {shown.length === 0 ? (
+            <p className="text-xs text-gray-400 py-3 text-center">{tab === 'rejected' ? 'No rejected items' : 'No approved items yet'}</p>
+          ) : (
+            <div className="space-y-1.5 max-h-40 overflow-y-auto">
+              {shown.map(it => (
+                <div key={it.id} className="flex items-start justify-between gap-2 text-xs border border-gray-100 rounded-lg p-2.5 bg-white">
+                  <ApprovalDetails it={it} showDecision/>
+                  {isAdmin && (
+                    <button onClick={() => remove(it.id)} disabled={deletingId === it.id}
+                      className="text-gray-300 hover:text-red-500 disabled:opacity-40 flex-shrink-0">
+                      {deletingId === it.id ? <Loader size={12} className="animate-spin"/> : <Trash2 size={12}/>}
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
   )
 }
+
+// ── Upload Count Panel ───────────────────────────────────────────────────────
+// Upload-stage counts only (rows with action 'approved-upload'). A row exists
+// here once its Upload Approval was approved (server-side, doc-approvals.ts).
+// Counting rule per type:
+//   CDN        → number of PDFs
+//   CUSDEC     → CAP (container) count, with the number of CUSDEC PDFs beside it
+//   Boat Cap / CO / Pytho / SAFTA → number of PDFs (only if such rows exist)
+// Users see their own history; admin sees everyone's and can edit / delete.
+type UploadKey = 'cdn_inc' | 'cusdec_inc' | 'boat_note_inc' | 'co_inc' | 'pytho_inc' | 'safta_inc'
+const UPLOAD_KINDS: { key: UploadKey; label: string; sub: string; tile: string; num: string; text: string; always: boolean }[] = [
+  { key: 'cdn_inc',       label: 'CDN',      sub: 'Container Moved (CDN)', tile: 'bg-green-50',  num: 'text-green-700',  text: 'text-green-600',  always: true  },
+  { key: 'cusdec_inc',    label: 'CUSDEC',   sub: 'CUSDEC Passed',        tile: 'bg-blue-50',   num: 'text-blue-700',   text: 'text-blue-600',   always: true  },
+  { key: 'boat_note_inc', label: 'Boat Cap', sub: 'Boat Note Passed',     tile: 'bg-amber-50',  num: 'text-amber-700',  text: 'text-amber-600',  always: false },
+  { key: 'co_inc',        label: 'CO',       sub: 'CO',                   tile: 'bg-gray-50',   num: 'text-gray-700',   text: 'text-gray-600',   always: false },
+  { key: 'pytho_inc',     label: 'Pytho',    sub: 'Pytho',                tile: 'bg-purple-50', num: 'text-purple-700', text: 'text-purple-600', always: false },
+  { key: 'safta_inc',     label: 'SAFTA',    sub: 'SAFTA',                tile: 'bg-teal-50',   num: 'text-teal-700',   text: 'text-teal-600',   always: false },
+]
+const uploadVal = (r: WorkCountRow, key: UploadKey) => Number(r[key] || 0)
+const uploadTotal = (rows: WorkCountRow[], key: UploadKey) => rows.reduce((s, r) => s + uploadVal(r, key), 0)
+const uploadPdfs = (rows: WorkCountRow[], key: UploadKey) => rows.filter(r => uploadVal(r, key) > 0).length
 
 function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin: boolean }) {
   const [myRows,  setMyRows]  = useState<WorkCountRow[]>([])
@@ -1582,7 +1792,10 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
   const [users,   setUsers]   = useState<Profile[]>([])
   const [showAll, setShowAll] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [editDrafts, setEditDrafts] = useState<Record<string, { cdn_inc?: string; cusdec_inc?: string }>>({})
+  const [savingId, setSavingId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const showAllRef = useRef(false)
 
   // Upload counts follow the same statement cycle as the Balance panel —
   // once a report archives a row (reported=true) it belongs to that report's
@@ -1592,7 +1805,7 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
       const h = await authHeader()
       const r = await fetch('/api/work-counts', { headers: h })
       const d = await r.json()
-      if (d.rows) setMyRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload' && !r.reported))
+      if (d.rows) setMyRows((d.rows as WorkCountRow[]).filter(r => isUploadRow(r) && !r.reported))
     } catch {}
   }
 
@@ -1601,13 +1814,23 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
       const h = await authHeader()
       const r = await fetch('/api/work-counts?all=1', { headers: h })
       const d = await r.json()
-      if (d.rows) setAllRows((d.rows as WorkCountRow[]).filter(r => r.action === 'upload' && !r.reported))
+      if (d.rows) setAllRows((d.rows as WorkCountRow[]).filter(r => isUploadRow(r) && !r.reported))
       const { data } = await supabase.from('profiles').select('id, username, full_name').eq('is_shipper', false)
       setUsers((data as any) || [])
     } catch {}
   }
 
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { showAllRef.current = showAll }, [showAll])
+
+  // Refresh on an interval and right after an approve/reject in this session,
+  // so an approved upload shows up without a page reload.
+  useEffect(() => {
+    const refresh = () => { load(); if (showAllRef.current) loadAll() }
+    refresh()
+    const t = setInterval(refresh, 20000)
+    window.addEventListener(APPROVALS_CHANGED, refresh)
+    return () => { clearInterval(t); window.removeEventListener(APPROVALS_CHANGED, refresh) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function deleteRow(id: string) {
     setDeletingId(id)
@@ -1622,18 +1845,47 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
     finally { setDeletingId(null) }
   }
 
-  const myCdn    = myRows.reduce((s, r) => s + (r.cdn_inc || 0), 0)
-  const myCusdec = myRows.reduce((s, r) => s + (r.cusdec_inc || 0), 0)
+  async function saveEdit(id: string) {
+    const draft = editDrafts[id]
+    if (!draft) return
+    setSavingId(id); setError('')
+    try {
+      const body: Record<string, number | string> = { id }
+      if (draft.cdn_inc !== undefined) body.cdn_inc = Number(draft.cdn_inc) || 0
+      if (draft.cusdec_inc !== undefined) body.cusdec_inc = Number(draft.cusdec_inc) || 0
+      const res = await fetch('/api/work-counts', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify(body),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      const patch: Partial<WorkCountRow> = {}
+      if (body.cdn_inc !== undefined) patch.cdn_inc = body.cdn_inc as number
+      if (body.cusdec_inc !== undefined) patch.cusdec_inc = body.cusdec_inc as number
+      setAllRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+      setMyRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+      setEditDrafts(prev => { const n = { ...prev }; delete n[id]; return n })
+    } catch (e: any) { setError(e.message) }
+    finally { setSavingId(null) }
+  }
+
+  function setDraft(id: string, key: 'cdn_inc' | 'cusdec_inc', value: string) {
+    setEditDrafts(prev => ({ ...prev, [id]: { ...prev[id], [key]: value } }))
+  }
+
+  // Which count badges a row carries (a row normally has exactly one).
+  const rowBadges = (r: WorkCountRow) => UPLOAD_KINDS.filter(k => uploadVal(r, k.key) > 0)
+  const byDateDesc = (a: WorkCountRow, b: WorkCountRow) => b.created_at.localeCompare(a.created_at)
+
+  const myTiles = UPLOAD_KINDS.filter(k => k.always || uploadTotal(myRows, k.key) > 0)
 
   // Group all rows by user for admin summary
   const byUser = allRows.reduce((acc, r) => {
     const name = r.user_name || 'Unknown'
-    if (!acc[name]) acc[name] = { cdn: 0, cusdec: 0, rows: [] }
-    acc[name].cdn    += r.cdn_inc    || 0
-    acc[name].cusdec += r.cusdec_inc || 0
-    acc[name].rows.push(r)
+    if (!acc[name]) acc[name] = []
+    acc[name].push(r)
     return acc
-  }, {} as Record<string, { cdn: number; cusdec: number; rows: WorkCountRow[] }>)
+  }, {} as Record<string, WorkCountRow[]>)
 
   return (
     <div className="card mb-5">
@@ -1655,27 +1907,30 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
       {!showAll && (
         <>
           <div className="grid grid-cols-2 gap-3 mb-3">
-            <div className="bg-green-50 rounded-xl p-3 text-center">
-              <p className="text-2xl font-bold text-green-700">{myCdn}</p>
-              <p className="text-[11px] text-green-600 mt-0.5">Container Moved (CDN)</p>
-            </div>
-            <div className="bg-blue-50 rounded-xl p-3 text-center">
-              <p className="text-2xl font-bold text-blue-700">{myCusdec}</p>
-              <p className="text-[11px] text-blue-600 mt-0.5">CUSDEC Passed</p>
-            </div>
+            {myTiles.map(k => (
+              <div key={k.key} className={`${k.tile} rounded-xl p-3 text-center`}>
+                <p className={`text-2xl font-bold ${k.num}`}>
+                  {uploadTotal(myRows, k.key)}
+                  {k.key === 'cusdec_inc' && <span className="text-xs font-normal opacity-70"> ({uploadPdfs(myRows, k.key)} PDF)</span>}
+                </p>
+                <p className={`text-[11px] ${k.text} mt-0.5`}>{k.sub}</p>
+              </div>
+            ))}
           </div>
 
           {myRows.length > 0 && (
             <div className="border border-gray-100 rounded-lg overflow-hidden">
               <div className="max-h-44 overflow-y-auto divide-y divide-gray-50">
-                {myRows.map(r => (
+                {[...myRows].sort(byDateDesc).map(r => (
                   <div key={r.id} className="flex items-center justify-between px-3 py-2 text-xs">
-                    <div>
+                    <div className="min-w-0">
                       <p className="text-gray-700 font-medium truncate max-w-xs">{r.file_name || '—'}</p>
-                      <p className="text-gray-400">{r.reason} · {new Date(r.created_at).toLocaleDateString('en-GB')}</p>
+                      <p className="text-gray-400">{r.reason} · {new Date(r.created_at).toLocaleDateString('en-GB')} · {new Date(r.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
                     </div>
-                    <span className={`font-bold text-sm ${r.cdn_inc ? 'text-green-600' : 'text-blue-600'}`}>
-                      {r.cdn_inc ? `CDN +${r.cdn_inc}` : `CUSDEC +${r.cusdec_inc}`}
+                    <span className="flex items-center gap-2 flex-shrink-0">
+                      {rowBadges(r).map(k => (
+                        <span key={k.key} className={`font-bold text-sm ${k.text}`}>{k.label} +{uploadVal(r, k.key)}</span>
+                      ))}
                     </span>
                   </div>
                 ))}
@@ -1689,33 +1944,61 @@ function UploadCountPanel({ userId, isAdmin }: { userId: string | null; isAdmin:
       {/* Admin: all users */}
       {isAdmin && showAll && (
         <div className="space-y-3">
-          {Object.entries(byUser).map(([name, data]) => (
+          {Object.entries(byUser).map(([name, rows]) => (
             <div key={name} className="border border-gray-200 rounded-xl overflow-hidden">
-              <div className="px-3 py-2 bg-gray-50 flex items-center justify-between">
+              <div className="px-3 py-2 bg-gray-50 flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-xs font-semibold text-gray-800">{name}</span>
-                <div className="flex items-center gap-3 text-xs">
-                  <span className="text-green-600">CDN: <b>{data.cdn}</b></span>
-                  <span className="text-blue-600">CUSDEC: <b>{data.cusdec}</b></span>
+                <div className="flex items-center gap-3 text-xs flex-wrap">
+                  {UPLOAD_KINDS.filter(k => k.always || uploadTotal(rows, k.key) > 0).map(k => (
+                    <span key={k.key} className={k.text}>
+                      {k.label}: <b>{uploadTotal(rows, k.key)}</b>
+                      {k.key === 'cusdec_inc' && <span className="text-gray-400"> ({uploadPdfs(rows, k.key)} PDF)</span>}
+                    </span>
+                  ))}
                 </div>
               </div>
-              <div className="max-h-40 overflow-y-auto divide-y divide-gray-50">
-                {data.rows.map(r => (
-                  <div key={r.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
-                    <div>
-                      <p className="text-gray-700 truncate max-w-sm">{r.file_name || '—'}</p>
-                      <p className="text-gray-400">{r.reason} · {new Date(r.created_at).toLocaleDateString('en-GB')}</p>
+              <div className="max-h-52 overflow-y-auto divide-y divide-gray-50">
+                {[...rows].sort(byDateDesc).map(r => {
+                  const draft = editDrafts[r.id] || {}
+                  const isDirty = Object.keys(draft).length > 0
+                  return (
+                    <div key={r.id} className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs">
+                      <div className="min-w-0">
+                        <p className="text-gray-700 truncate max-w-sm">{r.file_name || '—'}</p>
+                        <p className="text-gray-400">{r.reason} · {new Date(r.created_at).toLocaleDateString('en-GB')} · {new Date(r.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {rowBadges(r).filter(k => k.key !== 'cdn_inc' && k.key !== 'cusdec_inc').map(k => (
+                          <span key={k.key} className={`font-semibold ${k.text}`}>{k.label} +{uploadVal(r, k.key)}</span>
+                        ))}
+                        <label className="flex flex-col items-center gap-0.5">
+                          <span className="text-[10px] text-gray-400">CDN</span>
+                          <input type="number" min={0}
+                            value={draft.cdn_inc !== undefined ? draft.cdn_inc : r.cdn_inc || 0}
+                            onChange={e => setDraft(r.id, 'cdn_inc', e.target.value)}
+                            className="w-12 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-green-400"/>
+                        </label>
+                        <label className="flex flex-col items-center gap-0.5">
+                          <span className="text-[10px] text-gray-400">CUSDEC</span>
+                          <input type="number" min={0}
+                            value={draft.cusdec_inc !== undefined ? draft.cusdec_inc : r.cusdec_inc || 0}
+                            onChange={e => setDraft(r.id, 'cusdec_inc', e.target.value)}
+                            className="w-14 border border-gray-200 rounded px-1 py-0.5 text-center text-xs focus:outline-none focus:border-blue-400"/>
+                        </label>
+                        {isDirty && (
+                          <button onClick={() => saveEdit(r.id)} disabled={savingId === r.id}
+                            className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px] font-medium text-white disabled:opacity-50 mt-3.5" style={{ background: '#22A87A' }}>
+                            {savingId === r.id ? <Loader size={10} className="animate-spin"/> : <Save size={10}/>}
+                          </button>
+                        )}
+                        <button onClick={() => deleteRow(r.id)} disabled={deletingId === r.id}
+                          className="text-gray-300 hover:text-red-500 disabled:opacity-40 mt-3.5">
+                          {deletingId === r.id ? <Loader size={11} className="animate-spin"/> : <Trash2 size={11}/>}
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className={`font-semibold ${r.cdn_inc ? 'text-green-600' : 'text-blue-600'}`}>
-                        {r.cdn_inc ? `CDN +${r.cdn_inc}` : `CUSDEC +${r.cusdec_inc}`}
-                      </span>
-                      <button onClick={() => deleteRow(r.id)} disabled={deletingId === r.id}
-                        className="text-gray-300 hover:text-red-500 disabled:opacity-40">
-                        {deletingId === r.id ? <Loader size={11} className="animate-spin"/> : <Trash2 size={11}/>}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           ))}

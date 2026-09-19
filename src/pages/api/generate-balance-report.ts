@@ -45,13 +45,24 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   const { data: lastReport } = await sb.from('balance_reports').select('amount').eq('user_id', userId).order('generated_at', { ascending: false }).limit(1).maybeSingle()
   const openingBalance = Number(lastReport?.amount) || 0
 
-  const cdn = (workRows || []).reduce((s, r) => s + (r.cdn_inc || 0), 0)
-  const cusdec = (workRows || []).reduce((s, r) => s + (r.cusdec_inc || 0), 0)
-  const cap = (workRows || []).reduce((s, r) => s + (r.cap_inc || 0), 0)
-  const pytho = (workRows || []).reduce((s, r) => s + (r.pytho_inc || 0), 0)
-  const co = (workRows || []).reduce((s, r) => s + (r.co_inc || 0), 0)
-  const safta = (workRows || []).reduce((s, r) => s + (r.safta_inc || 0), 0)
-  const boatNote = (workRows || []).reduce((s, r) => s + (r.boat_note_inc || 0), 0)
+  // Upload-approval rows (action 'approved-upload') are Upload Count only —
+  // never billed. Only PICKED work (Mail/Download, once approved) earns money.
+  const isUploadRow = (r: any) => r.action === 'upload' || r.action === 'approved-upload'
+  const uploadRows = (workRows || []).filter(isUploadRow)
+  const pickRows = (workRows || []).filter(r => !isUploadRow(r))
+
+  const cdn = pickRows.reduce((s, r) => s + (r.cdn_inc || 0), 0)
+  const cap = pickRows.reduce((s, r) => s + (r.cap_inc || 0), 0)
+  const capCusdecs = pickRows.filter(r => (r.cap_inc || 0) > 0).length
+  const pytho = pickRows.reduce((s, r) => s + (r.pytho_inc || 0), 0)
+  const co = pickRows.reduce((s, r) => s + (r.co_inc || 0), 0)
+  const safta = pickRows.reduce((s, r) => s + (r.safta_inc || 0), 0)
+  const boatNote = pickRows.reduce((s, r) => s + (r.boat_note_inc || 0), 0)
+  const boatNoteDocs = pickRows.filter(r => (r.boat_note_inc || 0) > 0).length
+  // Upload counts (record only): CDN per PDF, CUSDEC by container count.
+  const uploadCdn = uploadRows.reduce((s, r) => s + (r.cdn_inc || 0), 0)
+  const uploadCusdec = uploadRows.reduce((s, r) => s + (r.cusdec_inc || 0), 0)
+  const uploadCusdecPdfs = uploadRows.filter(r => (r.cusdec_inc || 0) > 0).length
   const cdnRate = Number(rates?.cdn_rate) || 0, capRate = Number(rates?.cap_rate) || 0
   const pythoRate = Number(rates?.pytho_rate) || 0, coRate = Number(rates?.co_rate) || 0, saftaRate = Number(rates?.safta_rate) || 0
   const boatNoteRate = Number(rates?.boat_note_rate) || 0
@@ -86,16 +97,20 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   line(`Brought forward from previous report: Rs.${openingBalance.toFixed(2)}`, 11, true)
   y += 2
 
-  line('Upload Count History', 12, true)
+  line('Count Work (Picked)', 12, true)
   line(`CDN: ${cdn} x Rs.${cdnRate.toFixed(2)} = Rs.${(cdn * cdnRate).toFixed(2)}`)
-  // CUSDEC uploads are counted for the record; the CAP line below is what
-  // actually carries the money for a CUSDEC (its own container count).
-  if (cusdec) line(`CUSDEC uploads: ${cusdec}`)
-  line(`CAP: ${cap} x Rs.${capRate.toFixed(2)} = Rs.${(cap * capRate).toFixed(2)}`)
+  // CAP is the CUSDEC's own container count; the bracket is how many CUSDEC PDFs.
+  line(`CAP: ${cap} (${capCusdecs} CUSDEC) x Rs.${capRate.toFixed(2)} = Rs.${(cap * capRate).toFixed(2)}`)
   if (pytho) line(`Pytho: ${pytho} x Rs.${pythoRate.toFixed(2)} = Rs.${(pytho * pythoRate).toFixed(2)}`)
   if (co) line(`CO: ${co} x Rs.${coRate.toFixed(2)} = Rs.${(co * coRate).toFixed(2)}`)
   if (safta) line(`SAFTA: ${safta} x Rs.${saftaRate.toFixed(2)} = Rs.${(safta * saftaRate).toFixed(2)}`)
-  if (boatNote) line(`Boat Cap: ${boatNote} x Rs.${boatNoteRate.toFixed(2)} = Rs.${(boatNote * boatNoteRate).toFixed(2)}`)
+  if (boatNote) line(`Boat Cap: ${boatNote} (${boatNoteDocs} Boat Note) x Rs.${boatNoteRate.toFixed(2)} = Rs.${(boatNote * boatNoteRate).toFixed(2)}`)
+  y += 2
+
+  // Approved uploads — counted for the record, not billed.
+  line('Upload Count (not billed)', 12, true)
+  line(`CDN uploads: ${uploadCdn}`)
+  line(`CUSDEC uploads: ${uploadCusdec} (${uploadCusdecPdfs} PDF)`)
   y += 2
 
   // Statement-style transaction list — every upload/billing entry this
@@ -105,7 +120,7 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   line('Transactions This Period', 12, true)
   const breakdownFields: [string, string][] = [['cdn_inc', 'CDN'], ['cusdec_inc', 'CUSDEC'], ['cap_inc', 'CAP'], ['pytho_inc', 'Pytho'], ['co_inc', 'CO'], ['safta_inc', 'SAFTA'], ['boat_note_inc', 'Boat Cap']]
   const txns = (workRows || [])
-    .flatMap(r => breakdownFields.filter(([f]) => ((r as any)[f] || 0) > 0).map(([f, label]) => ({ date: r.created_at, label, v: (r as any)[f], detail: r.reason || r.action || '' })))
+    .flatMap(r => breakdownFields.filter(([f]) => ((r as any)[f] || 0) > 0).map(([f, label]) => ({ date: r.created_at, label: isUploadRow(r) ? `${label} upload` : label, v: (r as any)[f], detail: r.reason || r.action || '' })))
     .sort((a, b) => a.date.localeCompare(b.date))
   if (!txns.length) line('None', 9)
   for (const t of txns) line(`${new Date(t.date).toLocaleDateString('en-GB')} — ${t.label} +${t.v} — ${t.detail}`, 9)
@@ -117,10 +132,11 @@ async function buildReport(userId: string): Promise<{ ok: true; driveUrl: string
   y += 2
 
   line('Approval / Reject Data', 12, true)
-  const approvedCount = (approvals || []).filter(a => a.status === 'approved').length
-  const rejectedCount = (approvals || []).filter(a => a.status === 'rejected').length
-  const pendingCount = (approvals || []).filter(a => a.status === 'pending').length
-  line(`CUSDEC uploads — Approved: ${approvedCount}, Rejected: ${rejectedCount}, Pending: ${pendingCount}`)
+  const uploadApprovals = (approvals || []).filter(a => a.stage === 'upload')
+  const pickApprovals = (approvals || []).filter(a => a.stage !== 'upload')
+  const countBy = (list: any[], st: string) => list.filter(a => a.status === st).length
+  line(`Upload approvals — Approved: ${countBy(uploadApprovals, 'approved')}, Rejected: ${countBy(uploadApprovals, 'rejected')}, Pending: ${countBy(uploadApprovals, 'pending')}`)
+  line(`Pick approvals — Approved: ${countBy(pickApprovals, 'approved')}, Rejected: ${countBy(pickApprovals, 'rejected')}, Pending: ${countBy(pickApprovals, 'pending')}`)
   y += 2
 
   line('Payments Received This Period', 12, true)
