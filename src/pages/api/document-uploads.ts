@@ -40,15 +40,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         uploadedByName = prof?.full_name || prof?.username || ''
       }
 
-      const { data, error } = await supabaseAdmin.from('document_uploads').insert({
-        file_name, drive_url: drive_url || null, doc_type: doc_type || null,
-        extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
-        status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
-        uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
-        reason: reason || null, reason_note: reason === 'Other' ? (reason_note || null) : null,
-        cusdec_id: cusdec_id || null,
-      }).select().single()
-      if (error) throw error
+      // A "resaved" send (duplicate replace — see resolveMatchReplace in
+      // upload-docs.tsx) is the SAME document going through Send again, not
+      // a new one appearing. Inserting a fresh row every time made it show
+      // up twice in Processed History (once from the original send, once
+      // from today's resave) — same file_name, two rows, looking like two
+      // different documents were processed. When resaved, find that
+      // existing row and update it in place instead, so the document keeps
+      // exactly one Processed History row across any number of resaves.
+      // Matched on file_name only (no more reliable shared key is sent
+      // through this endpoint today) — if two genuinely different documents
+      // ever share an exact file_name this could update the wrong row, so
+      // flag that to whoever reviews this if it turns out to matter.
+      let data: any = null
+      if (resaved) {
+        const { data: existing } = await supabaseAdmin
+          .from('document_uploads')
+          .select('id')
+          .eq('file_name', file_name)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (existing) {
+          const { data: updated, error: updateError } = await supabaseAdmin
+            .from('document_uploads')
+            .update({
+              drive_url: drive_url || null, doc_type: doc_type || null,
+              extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
+              status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
+              uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
+              reason: reason || null, reason_note: reason === 'Other' ? (reason_note || null) : null,
+              cusdec_id: cusdec_id || null,
+            })
+            .eq('id', existing.id)
+            .select().single()
+          if (updateError) throw updateError
+          data = updated
+        }
+      }
+      if (!data) {
+        const { data: inserted, error } = await supabaseAdmin.from('document_uploads').insert({
+          file_name, drive_url: drive_url || null, doc_type: doc_type || null,
+          extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
+          status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
+          uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
+          reason: reason || null, reason_note: reason === 'Other' ? (reason_note || null) : null,
+          cusdec_id: cusdec_id || null,
+        }).select().single()
+        if (error) throw error
+        data = inserted
+      }
 
       // Boat Note Pending's merge-and-pick (dashboard.tsx's confirmPick)
       // pins every CUSDEC it just merged so it can't be picked/merged again

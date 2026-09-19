@@ -764,14 +764,16 @@ function DocumentsUploadContent() {
     if (!matchModal) return
     const { item, choices } = matchModal
     setMatchModal(null)
+    // Close the item's own PDF/detail panel right away too, at the same
+    // instant as matchModal — waiting for persistItem (Drive upload + DB
+    // save) to finish first left it sitting open for a few extra seconds
+    // with nothing happening on screen, which read as "not closing quickly."
+    // The save itself continues in the background exactly as before; the
+    // list row reflects the outcome once it lands.
+    setSelectedId(prev => prev === item.id ? null : prev)
     const r = await persistItem(item, 'replace', matchId)
     updateItem(item.id, { skipNotifyOnDone: true })
     settleBatchItem(item.id)
-    // Replace fully resolves this item's Send — the item detail panel the
-    // person opened it (and fixed it) from should close along with the
-    // popups, the same as a normal successful Send, instead of being left
-    // open behind everything.
-    setSelectedId(prev => prev === item.id ? null : prev)
     // Replacing the existing row is an update to something already known
     // about, not a new document appearing — Notify never fires for it, even
     // if Notify was ticked on the original Send. Mail still goes out if it
@@ -843,11 +845,11 @@ function DocumentsUploadContent() {
     if (!capModal) return
     const { item, choices } = capModal
     setCapModal(null)
+    // Same as resolveMatchReplace above — close the item detail panel the
+    // instant the decision is made, not after the save round-trip finishes.
+    setSelectedId(prev => prev === item.id ? null : prev)
     const r = await persistItem(item, 'insert')
     settleBatchItem(item.id)
-    // Same as resolveMatchReplace above — this fully resolves the Send, so
-    // close the item detail panel along with the popups.
-    setSelectedId(prev => prev === item.id ? null : prev)
     await finishSingleItemAction(item, r, { notify: !!choices?.notify, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' })
   }
 
