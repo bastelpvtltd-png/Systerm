@@ -636,10 +636,16 @@ function DocumentsUploadContent() {
         return { ok: false, error: msg }
       }
       if (d.matches?.length) {
+        // The Send popup that triggered this check would otherwise stay open
+        // behind matchModal, still showing its own stale "already exists"
+        // error — two overlapping popups for one decision. matchModal is the
+        // real next step now, so close the Send popup immediately.
+        setSendModalItem(prev => (prev && prev.id === item.id) ? null : prev)
         setMatchModal({ item, matches: d.matches, capInfo: d.capInfo, table: DOC_TYPE_TABLE[docType], choices })
         return { ok: false, error: 'A matching document already exists — resolve it above, then Send again.' }
       }
       if (d.capInfo && d.capInfo.currentCount >= d.capInfo.cap) {
+        setSendModalItem(prev => (prev && prev.id === item.id) ? null : prev)
         setCapModal({ item, capInfo: d.capInfo, choices })
         return { ok: false, error: "This CUSDEC's CAP is already full — resolve it above, then Send again." }
       }
@@ -726,7 +732,7 @@ function DocumentsUploadContent() {
   // ever fire the bookkeeping/Mail/Notify the person actually asked for.
   // Uses persistItem's own return value rather than re-reading `items`,
   // since React may not have re-rendered with the new status yet.
-  async function finishSingleItemAction(item: UploadItem, result: { ok: boolean; driveLink?: string }, opts: { notify: boolean; mail: boolean; reason: string; reasonNote: string }) {
+  async function finishSingleItemAction(item: UploadItem, result: { ok: boolean; driveLink?: string }, opts: { notify: boolean; mail: boolean; reason: string; reasonNote: string; resaved?: boolean }) {
     // The single-file Send panel for this item may still be open behind the
     // popup that just resolved it, stuck showing the old "Save failed" —
     // it's done now, so close it instead of leaving a stale error on screen.
@@ -743,6 +749,11 @@ function DocumentsUploadContent() {
           file_name: item.fileName, drive_url: result.driveLink, is_saved_to_db: true, notify: opts.notify, uploaded_by_name: uploaderName,
           reason: opts.reason || undefined, reason_note: opts.reason === 'Other' ? opts.reasonNote.trim() : undefined,
           doc_type: item.detectedType || undefined,
+          // Notify is always false for a duplicate-replace, so without this
+          // it would leave no trace at all in the processed history —
+          // resaved logs "this document was re-saved today" independent
+          // of notify.
+          resaved: !!opts.resaved,
         }),
       })
     } catch {}
@@ -756,11 +767,16 @@ function DocumentsUploadContent() {
     const r = await persistItem(item, 'replace', matchId)
     updateItem(item.id, { skipNotifyOnDone: true })
     settleBatchItem(item.id)
+    // Replace fully resolves this item's Send — the item detail panel the
+    // person opened it (and fixed it) from should close along with the
+    // popups, the same as a normal successful Send, instead of being left
+    // open behind everything.
+    setSelectedId(prev => prev === item.id ? null : prev)
     // Replacing the existing row is an update to something already known
     // about, not a new document appearing — Notify never fires for it, even
     // if Notify was ticked on the original Send. Mail still goes out if it
     // was ticked, since the person still wants their copy of the file.
-    await finishSingleItemAction(item, r, { notify: false, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' })
+    await finishSingleItemAction(item, r, { notify: false, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '', resaved: true })
   }
 
   function updateMatchDraft(matchId: string, key: string, value: string) {
@@ -829,6 +845,9 @@ function DocumentsUploadContent() {
     setCapModal(null)
     const r = await persistItem(item, 'insert')
     settleBatchItem(item.id)
+    // Same as resolveMatchReplace above — this fully resolves the Send, so
+    // close the item detail panel along with the popups.
+    setSelectedId(prev => prev === item.id ? null : prev)
     await finishSingleItemAction(item, r, { notify: !!choices?.notify, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' })
   }
 
@@ -1153,6 +1172,9 @@ function DocumentsUploadContent() {
         file_name: it.fileName, drive_url: it.driveLink, is_saved_to_db: true, notify: action.notify && !it.skipNotifyOnDone, uploaded_by_name: uploaderName,
         reason: action.reason || undefined, reason_note: action.reason === 'Other' ? action.reasonNote.trim() : undefined,
         doc_type: it.detectedType || undefined,
+        // Same duplicate-replace items that skip notify — log them into the
+        // processed history as "re-saved today" instead of leaving no trace.
+        resaved: !!it.skipNotifyOnDone,
       }),
     })))
     if (action.mail) {
@@ -1995,7 +2017,7 @@ function DocumentsUploadContent() {
                       className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-medium text-white disabled:opacity-50" style={{ background: '#22A87A' }}>
                       <Save size={12}/> Replace — save new PDF here
                     </button>
-                    <button onClick={() => { const it = matchModal.item; skipItem(it.id); settleBatchItem(it.id); setMatchModal(null); setSendModalItem(prev => (prev && prev.id === it.id) ? null : prev) }}
+                    <button onClick={() => { const it = matchModal.item; skipItem(it.id); settleBatchItem(it.id); setMatchModal(null); setSendModalItem(prev => (prev && prev.id === it.id) ? null : prev); setSelectedId(prev => prev === it.id ? null : prev) }}
                       disabled={resolvingConflict}
                       className="px-3 py-2 rounded-md text-xs font-medium text-gray-500 border border-gray-200 hover:bg-gray-100 disabled:opacity-50">
                       Skip
@@ -2110,19 +2132,7 @@ function DocumentsUploadContent() {
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}
           onClose={() => setSendModalItem(null)}
-          // A restrictToSaveOnly Send (sendModalItem.status === 'error' at the
-          // moment it was opened — i.e. this was a fix-the-error-then-resend,
-          // not a fresh Send) should only close the Send popup itself once
-          // the retry is done. Also clearing selectedId used to boot the
-          // person straight out of the item panel they were just fixing
-          // fields in and back to the list — the wrong panel after what was
-          // meant to be a quick retry. A genuine first-time Send still closes
-          // the whole panel as before.
-          onDone={() => {
-            const wasErrorRetry = sendModalItem.status === 'error'
-            setSendModalItem(null)
-            if (!wasErrorRetry) setSelectedId(null)
-          }}
+          onDone={() => { setSendModalItem(null); setSelectedId(null) }}
         />
       )}
 

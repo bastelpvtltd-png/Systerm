@@ -31,7 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'POST') {
       const authed = await requireAuth(req)
       if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
-      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note, cusdec_id, cusdec_number, lock_cusdec_ids } = req.body
+      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note, cusdec_id, cusdec_number, lock_cusdec_ids, resaved } = req.body
       if (!file_name) return res.status(400).json({ error: 'file_name required' })
 
       let uploadedByName = uploaded_by_name || ''
@@ -124,6 +124,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'notify',
           pdf_notify_user: uploadedByName, notify_update_time: nowIso,
         })
+      }
+
+      // A duplicate-replace save always sends notify: false (see
+      // upload-docs.tsx's resolveMatchReplace/runDeferredBatchAction — it's
+      // an update to something already known about, not a new document, so
+      // it never joins the Dashboard's notify queue). That meant it left
+      // NO trace at all in pick_history_log — from the processed-history
+      // view it looked exactly like nothing happened. Log it separately,
+      // regardless of the notify flag, so the history correctly shows
+      // "this document was re-saved today" for this file.
+      if (resaved) {
+        try {
+          await supabaseAdmin.from('pick_history_log').insert({
+            document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'resaved',
+          })
+        } catch { /* non-fatal — history logging must never block the send itself */ }
       }
 
       // Conflict detection: if a document of the same type + extracted reference
