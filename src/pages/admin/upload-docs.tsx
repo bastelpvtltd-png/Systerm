@@ -1179,6 +1179,11 @@ function DocumentsUploadContent() {
         resaved: !!it.skipNotifyOnDone,
       }),
     })))
+    // This deferred pass is the actual finish line for these files (their
+    // document-uploads registration just completed) — auto-refresh the list
+    // now, whether or not a Mail popup is about to follow (it uses its own
+    // attachments list, not this one).
+    clearFinishedItems(saved.map(it => ({ fileName: it.fileName })))
     if (action.mail) {
       setDeferredReason({ reason: action.reason, reasonNote: action.reasonNote })
       // Same rule Notify already uses (notify: action.notify && !it.skipNotifyOnDone,
@@ -1247,6 +1252,17 @@ function DocumentsUploadContent() {
       }
     }
     return results
+  }
+  // Auto-refresh: once a file's whole Save + Mail + Notify process has
+  // actually finished (see SendModal's onDone / runDeferredBatchAction
+  // below), drop it from the list automatically instead of leaving it
+  // sitting there as "Saved" until someone clicks Delete All. Matched by
+  // file name and only ever removes items already in the 'saved' state, so
+  // a file that ended up 'error' (still needs attention) is never touched.
+  function clearFinishedItems(files?: { fileName: string }[]) {
+    if (!files || !files.length) return
+    const names = new Set(files.map(f => f.fileName))
+    setItems(prev => prev.filter(it => !(names.has(it.fileName) && it.status === 'saved')))
   }
   function handleDeleteAll() {
     if (!items.length) return
@@ -2134,7 +2150,7 @@ function DocumentsUploadContent() {
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}
           onClose={() => setSendModalItem(null)}
-          onDone={() => { setSendModalItem(null); setSelectedId(null) }}
+          onDone={(files) => { setSendModalItem(null); setSelectedId(null); clearFinishedItems(files) }}
         />
       )}
 
@@ -2148,7 +2164,7 @@ function DocumentsUploadContent() {
           onSave={runBatchSend}
           onGetDriveLinks={batchGetDriveLinks}
           onClose={() => setBatchQueue(null)}
-          onDone={() => setBatchQueue(null)}
+          onDone={(files) => { setBatchQueue(null); clearFinishedItems(files) }}
         />
       )}
     </>

@@ -1555,6 +1555,27 @@ function ApprovalsAccessPanel() {
     if (res.ok) setHistory(prev => prev.filter(x => x.id !== id))
   }
 
+  // Admin-only: undo an approved decision — deletes the count it credited
+  // and reopens the item as pending, so it can be approved (or rejected)
+  // again from scratch. Refused server-side once the count has already
+  // been swept into a balance report.
+  async function revertHistoryEntry(id: string) {
+    if (!confirm('Revert this approval? Its credited count will be removed and it will go back to pending.')) return
+    setBusyId(id); setError('')
+    try {
+      const res = await fetch('/api/doc-approvals', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ id, action: 'revert' }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setHistory(prev => prev.filter(x => x.id !== id))
+      load(true)
+      notifyApprovalsChanged()
+    } catch (e: any) { setError(e.message) }
+    finally { setBusyId(null) }
+  }
+
   return (
     <div className="card mb-5">
       <div className="flex items-center justify-between mb-3">
@@ -1592,7 +1613,16 @@ function ApprovalsAccessPanel() {
                   <ApprovalDetails it={it} showDecision={showHistory}/>
                   {showHistory ? (
                     isAdmin && (
-                      <button onClick={() => deleteHistoryEntry(it.id)} className="text-gray-300 hover:text-red-500 flex-shrink-0"><Trash2 size={12}/></button>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {it.status === 'approved' && (
+                          <button onClick={() => revertHistoryEntry(it.id)} disabled={busyId === it.id}
+                            title="Revert to pending — removes the count it credited"
+                            className="text-[10px] font-medium text-amber-600 hover:text-amber-700 disabled:opacity-40 border border-amber-200 rounded px-1.5 py-0.5">
+                            {busyId === it.id ? <Loader size={11} className="animate-spin"/> : 'Revert'}
+                          </button>
+                        )}
+                        <button onClick={() => deleteHistoryEntry(it.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={12}/></button>
+                      </div>
                     )
                   ) : (
                     <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1685,6 +1715,11 @@ function ApprovalResultsScroll({ userId, isAdmin }: { userId: string | null; isA
   const [tab, setTab] = useState<'rejected' | 'approved'>('rejected')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  // Admin-only tick-and-delete: select a batch of entries in the currently
+  // shown tab and remove them all in one go, instead of one Trash2 click
+  // at a time.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   // Admin gets every user's entries; everyone else asks for their own only.
   async function load() {
@@ -1709,8 +1744,28 @@ function ApprovalResultsScroll({ userId, isAdmin }: { userId: string | null; isA
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || 'Delete failed')
       setRows(prev => prev.filter(x => x.id !== id))
+      setSelected(prev => { if (!prev.has(id)) return prev; const next = new Set(prev); next.delete(id); return next })
     } catch (e: any) { setError(e.message) }
     finally { setDeletingId(null) }
+  }
+
+  function toggleSelected(id: string) {
+    setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
+  }
+
+  async function removeSelected() {
+    if (!selected.size) return
+    if (!confirm(`Delete ${selected.size} selected approval entr${selected.size === 1 ? 'y' : 'ies'}? The counts they already credited (if approved) are not affected.`)) return
+    setBulkDeleting(true); setError('')
+    try {
+      const ids = Array.from(selected)
+      const res = await fetch(`/api/doc-approvals?ids=${ids.join(',')}`, { method: 'DELETE', headers: await authHeader() })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Delete failed')
+      setRows(prev => prev.filter(x => !selected.has(x.id)))
+      setSelected(new Set())
+    } catch (e: any) { setError(e.message) }
+    finally { setBulkDeleting(false) }
   }
 
   // Picks only; a non-admin never sees anyone else's entries.
@@ -1731,15 +1786,23 @@ function ApprovalResultsScroll({ userId, isAdmin }: { userId: string | null; isA
       </button>
       {open && (
         <div className="p-2">
-          <div className="flex items-center gap-1.5 mb-2">
-            <button onClick={() => setTab('rejected')}
-              className={`px-2 py-0.5 rounded-md text-[11px] font-medium border ${tab === 'rejected' ? 'bg-red-50 border-red-300 text-red-600' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
-              Rejected ({rejected.length})
-            </button>
-            <button onClick={() => setTab('approved')}
-              className={`px-2 py-0.5 rounded-md text-[11px] font-medium border ${tab === 'approved' ? 'bg-green-50 border-green-300 text-green-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
-              Approved ({approved.length})
-            </button>
+          <div className="flex items-center justify-between gap-1.5 mb-2 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => { setTab('rejected'); setSelected(new Set()) }}
+                className={`px-2 py-0.5 rounded-md text-[11px] font-medium border ${tab === 'rejected' ? 'bg-red-50 border-red-300 text-red-600' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+                Rejected ({rejected.length})
+              </button>
+              <button onClick={() => { setTab('approved'); setSelected(new Set()) }}
+                className={`px-2 py-0.5 rounded-md text-[11px] font-medium border ${tab === 'approved' ? 'bg-green-50 border-green-300 text-green-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+                Approved ({approved.length})
+              </button>
+            </div>
+            {isAdmin && selected.size > 0 && (
+              <button onClick={removeSelected} disabled={bulkDeleting}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-md border border-red-300 text-red-600 text-[11px] font-medium disabled:opacity-50 hover:bg-red-50">
+                {bulkDeleting ? <Loader size={10} className="animate-spin"/> : <Trash2 size={10}/>}Delete selected ({selected.size})
+              </button>
+            )}
           </div>
           {error && <p className="text-xs text-red-600 mb-1.5">{error}</p>}
           {shown.length === 0 ? (
@@ -1748,6 +1811,10 @@ function ApprovalResultsScroll({ userId, isAdmin }: { userId: string | null; isA
             <div className="space-y-1.5 max-h-40 overflow-y-auto">
               {shown.map(it => (
                 <div key={it.id} className="flex items-start justify-between gap-2 text-xs border border-gray-100 rounded-lg p-2.5 bg-white">
+                  {isAdmin && (
+                    <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggleSelected(it.id)}
+                      className="w-3.5 h-3.5 mt-0.5 flex-shrink-0"/>
+                  )}
                   <ApprovalDetails it={it} showDecision/>
                   {isAdmin && (
                     <button onClick={() => remove(it.id)} disabled={deletingId === it.id}

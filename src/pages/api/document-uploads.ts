@@ -56,12 +56,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (resaved) {
         const { data: existing } = await supabaseAdmin
           .from('document_uploads')
-          .select('id')
+          .select('id, reason, reason_note')
           .eq('file_name', file_name)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
         if (existing) {
+          // A duplicate-replace resave is the SAME document being sent
+          // again, not a new one with its own reason — keep whatever reason
+          // it was FIRST saved with, no matter what reason this particular
+          // resend happened to carry. Otherwise the second (or third...)
+          // PDF added as a duplicate could silently overwrite the original
+          // reason the document is actually filed/approved under.
           const { data: updated, error: updateError } = await supabaseAdmin
             .from('document_uploads')
             .update({
@@ -69,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
               status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
               uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
-              reason: reason || null, reason_note: reason === 'Other' ? (reason_note || null) : null,
+              reason: existing.reason ?? null, reason_note: existing.reason_note ?? null,
               cusdec_id: cusdec_id || null,
             })
             .eq('id', existing.id)

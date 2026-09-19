@@ -32,7 +32,14 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
   onSave: (referenceOverride?: string, choices?: { save: boolean; mail: boolean; notify: boolean; reason: string; reasonNote: string }) => Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }>
   onGetDriveLinks: () => Promise<SendResultFile[]>
   onClose: () => void
-  onDone: () => void
+  // Fires once this Send is truly finished — Save + Mail + Notify all done
+  // (or skipped). Carries the files that actually went all the way through,
+  // so the caller (Upload Docs) can auto-clear exactly those from its list
+  // instead of leaving them sitting there until someone clicks Delete All.
+  // A batch send that defers some files for retry passes an empty array
+  // here — those files aren't done yet, so nothing should be cleared until
+  // the deferred pass (elsewhere) actually finishes them.
+  onDone: (files?: SendResultFile[]) => void
   // Lets a caller with its own business rules (e.g. Party's Copy: no
   // notifying once the CUSDEC is Green/Blue, or once a link is already
   // saved) lock Notify off without forking this modal.
@@ -155,10 +162,10 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
 
       if (effectiveMail && files.length) {
         setEmailAttachments(files.map(f => ({ filename: f.fileName, url: f.driveLink })))
-        return // EmailPdfModal takes over; onDone() fires when it's closed
+        return // EmailPdfModal takes over; onDone(files) fires when it's closed
       }
 
-      onDone()
+      onDone(files)
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -170,7 +177,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
     return (
       <EmailPdfModal attachments={emailAttachments}
         documentReason={reason || undefined} documentReasonNote={reason === 'Other' ? reasonNote : undefined}
-        onClose={() => { setEmailAttachments(null); onDone() }}/>
+        onClose={() => { const done = emailAttachments.map(a => ({ fileName: a.filename, driveLink: a.url })); setEmailAttachments(null); onDone(done) }}/>
     )
   }
 

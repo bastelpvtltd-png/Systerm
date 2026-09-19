@@ -31,6 +31,13 @@ function mismatchError(a: any): string | null {
   return null
 }
 
+// The work_counts.action value each approval stage writes when approved —
+// used by "revert" (below) to find and undo exactly the row(s) an approval
+// created, without touching counts from any other stage or document.
+const STAGE_TO_WORK_ACTION: Record<string, string> = {
+  upload: 'approved-upload', billing: 'approved-billing', boat_note: 'approved-boat-note', final_document: 'approved-final-document',
+}
+
 // The CUSDEC's own container (cap) count; 1 when it isn't set.
 async function cusdecCap(cusdecId: string | null): Promise<number> {
   if (!cusdecId) return 1
@@ -72,11 +79,17 @@ async function withFileNames(rows: any[]) {
 // Two separate grantable panels, both gated (neither shows by default):
 //   'Approvals' (section:my-tasks.cusdec-approval, or admin) — full power:
 //               sees EVERY pending item + full history, Approve/Reject.
-//   'Pending Approvals' (section:my-tasks.approvals-view) — read only, also
-//               sees EVERY pending item + full history, no action buttons.
+//   'Pending Approvals' (section:my-tasks.approvals-view) — read only, and
+//               sees only the CALLER's OWN pending items + own history, no
+//               action buttons. Only admins/full approvers see everyone's
+//               data — a plain view grant no longer does.
 // Approving/rejecting still requires the 'Approvals' grant specifically —
 // holding only the view grant never allows POST. Deleting a history entry
-// stays admin-only either way (see DELETE below).
+// stays admin-only either way (see DELETE below; it now also accepts a
+// comma-separated ?ids= for a tick-and-delete batch). Reverting an already
+// approved decision (POST action 'revert') is admin-only too — it deletes
+// the work_counts row(s) that decision credited and reopens the item as
+// pending, as long as it hasn't already been swept into a balance report.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const authed = await requireAuth(req)
   if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
@@ -89,10 +102,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'GET') {
     // ?mine=1 → only the caller's OWN items, open to any signed-in user (the
     // Balance panel's approved/rejected list). Without it the view/approve
-    // grant is still required and everyone's items come back.
+    // grant is still required.
+    // Cross-user visibility (seeing everyone's pending items/history, not
+    // just your own) is reserved for admins and full approvers
+    // (section:my-tasks.cusdec-approval) — they're the ones who actually
+    // have to review and decide on other people's submissions. The
+    // read-only 'approvals-view' grant only gets you INTO this endpoint;
+    // it no longer also shows you everyone else's data — same as any other
+    // signed-in user, it's your own items only.
     const mine = req.query.mine === '1'
     if (!canView && !mine) return res.status(403).json({ error: 'Access required: section:my-tasks.approvals-view or section:my-tasks.cusdec-approval' })
-    const ownOnly = mine || !canView
+    const ownOnly = mine || !canApproveAll
     if (req.query.history === '1') {
       let hq = sb.from('doc_approvals').select('*').neq('status', 'pending').order('decided_at', { ascending: false }).limit(100)
       if (ownOnly) hq = hq.eq('uploaded_by', authed.userId)
@@ -108,9 +128,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
-    if (!canApproveAll) return res.status(403).json({ error: 'Access required: section:my-tasks.cusdec-approval' })
-    const { id, action } = req.body as { id: string; action: 'approve' | 'reject' }
+    const { id, action } = req.body as { id: string; action: 'approve' | 'reject' | 'revert' }
     if (!id || !action) return res.status(400).json({ error: 'id and action required' })
+
+    // Revert: undo a decision that was already approved — deletes the
+    // work_counts row(s) that approval credited and puts it back to
+    // 'pending' so it can be approved again (or rejected) fresh. Admin-only,
+    // and only reachable from the approval HISTORY (already-decided items).
+    // Refused once the credited row has been swept into a balance report
+    // (reported=true) — the count has already left this document behind and
+    // reverting here can no longer be reflected in a report that's already
+    // been generated and sent out.
+    if (action === 'revert') {
+      if (!isAdmin) return res.status(403).json({ error: 'Admin only' })
+      const { data: approval } = await sb.from('doc_approvals').select('*').eq('id', id).maybeSingle()
+      if (!approval) return res.status(404).json({ error: 'Not found' })
+      if (approval.status !== 'approved') return res.status(400).json({ error: 'Only approved items can be reverted' })
+
+      const wcAction = STAGE_TO_WORK_ACTION[approval.stage]
+      if (wcAction) {
+        const { data: wcRows } = await sb.from('work_counts').select('id, reported').eq('document_id', approval.document_id).eq('action', wcAction)
+        if ((wcRows || []).some((r: any) => r.reported)) {
+          return res.status(400).json({ error: 'Cannot revert: already included in a balance report' })
+        }
+        const wcIds = (wcRows || []).map((r: any) => r.id)
+        if (wcIds.length) {
+          const { error: delErr } = await sb.from('work_counts').delete().in('id', wcIds)
+          if (delErr) return res.status(500).json({ error: 'Revert failed: ' + delErr.message })
+        }
+      }
+      await sb.from('doc_approvals').update({ status: 'pending', decided_by: null, decided_by_name: null, decided_at: null }).eq('id', id)
+      return res.json({ ok: true })
+    }
+
+    if (!canApproveAll) return res.status(403).json({ error: 'Access required: section:my-tasks.cusdec-approval' })
 
     const { data: approval } = await sb.from('doc_approvals').select('*').eq('id', id).maybeSingle()
     if (!approval) return res.status(404).json({ error: 'Not found' })
@@ -190,11 +241,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // as Pick History's bulk-delete.
     const adminAuthed = await requireAdmin(req)
     if (!adminAuthed.ok) return res.status(adminAuthed.status).json({ error: adminAuthed.error })
-    const { id } = req.query
-    if (!id) return res.status(400).json({ error: 'id required' })
-    const { error } = await sb.from('doc_approvals').delete().eq('id', id as string)
+    // Accepts either a single ?id=... or a tick-and-delete batch as
+    // ?ids=id1,id2,id3 (the Balance panel's multi-select delete).
+    const { id, ids } = req.query
+    const idList = ids ? String(ids).split(',').map(s => s.trim()).filter(Boolean) : (id ? [String(id)] : [])
+    if (!idList.length) return res.status(400).json({ error: 'id or ids required' })
+    const { error } = await sb.from('doc_approvals').delete().in('id', idList)
     if (error) return res.status(500).json({ error: error.message })
-    return res.json({ ok: true })
+    return res.json({ ok: true, deleted: idList.length })
   }
 
   res.status(405).end()
