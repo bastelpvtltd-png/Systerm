@@ -8,6 +8,49 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// PDFs sent as base64 (Mail-only sends that were never saved) can be bigger
+// than Next's 1 MB default body limit. (Vercel itself caps a request at ~4.5 MB.)
+export const config = { api: { bodyParser: { sizeLimit: '10mb' } } }
+
+// A Drive "view" link (drive.google.com/file/d/<id>/view) is a WEB PAGE, not
+// the file — fetching it and attaching the result produces an "PDF" that is
+// really HTML, which is exactly why the recipient's PDF wouldn't open even
+// though the mail itself went through. Turn Drive links into the direct
+// download URL first.
+function toDirectDownloadUrl(url: string): string {
+  try {
+    const u = new URL(url)
+    if (!/(^|\.)(drive|docs)\.google\.com$/.test(u.hostname)) return url
+    const id = u.pathname.match(/\/d\/([\w-]+)/)?.[1] || u.searchParams.get('id')
+    return id ? `https://drive.google.com/uc?export=download&id=${id}` : url
+  } catch { return url }
+}
+
+// Never send a broken attachment silently: a ".pdf" whose bytes aren't a PDF
+// (e.g. Drive answered with a sign-in/permission page) fails the send with a
+// clear message instead of arriving as a file nobody can open.
+async function loadAttachment(a: Attachment): Promise<{ filename: string; content: Buffer; contentType?: string }> {
+  let buf: Buffer
+  if (a.base64) {
+    buf = Buffer.from(a.base64, 'base64')
+  } else {
+    const r = await fetch(toDirectDownloadUrl(a.url!), { redirect: 'follow' })
+    if (!r.ok) throw new Error(`Could not download "${a.filename}" to attach it (HTTP ${r.status})`)
+    buf = Buffer.from(await r.arrayBuffer())
+  }
+  const isPdfBytes = buf.subarray(0, 1024).includes('%PDF-')
+  const looksLikePdfName = /\.pdf$/i.test(a.filename)
+  if (looksLikePdfName && !isPdfBytes) {
+    throw new Error(`"${a.filename}" could not be attached — Drive returned a web page instead of the PDF (the file's link may not be downloadable). Nothing was sent.`)
+  }
+  // A renamed file with no ".pdf" on the end arrives as an unknown file type
+  // that can't be opened — give real PDFs the extension and type.
+  if (isPdfBytes) {
+    return { filename: looksLikePdfName ? a.filename : `${a.filename}.pdf`, content: buf, contentType: 'application/pdf' }
+  }
+  return { filename: a.filename, content: buf }
+}
+
 // Most attachments are Drive-hosted files fetched by url; a few callers
 // (e.g. Done Boat Note's merge, which is deliberately never saved anywhere)
 // only have the bytes in memory, so they send base64 directly instead.
@@ -34,14 +77,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       auth: { user, pass },
     })
 
-    let mailAttachments: { filename: string; content: Buffer }[] | undefined
+    let mailAttachments: { filename: string; content: Buffer; contentType?: string }[] | undefined
     if (attachments?.length) {
-      mailAttachments = await Promise.all(attachments.map(async a => {
-        if (a.base64) return { filename: a.filename, content: Buffer.from(a.base64, 'base64') }
-        const r = await fetch(a.url!)
-        const buf = Buffer.from(await r.arrayBuffer())
-        return { filename: a.filename, content: buf }
-      }))
+      mailAttachments = await Promise.all(attachments.map(loadAttachment))
     }
 
     const html = `

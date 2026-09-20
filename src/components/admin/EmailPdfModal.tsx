@@ -5,6 +5,11 @@ import { authHeader, supabase } from '@/lib/supabase'
 export interface EmailAttachment {
   filename: string
   url: string
+  // Optional — the PDF's bytes (base64), for a file that isn't stored
+  // anywhere (a Mail-only send with nothing saved) or when the caller would
+  // rather not depend on the Drive link being downloadable. send-email.ts
+  // uses this first and only falls back to `url` when it's missing.
+  base64?: string
   // Optional — lets a caller hand over a file that should still be listed
   // (so it's visible and can be added back with one tap) but not selected
   // to send by default. Used for batch Save/Mail/Notify sends where some of

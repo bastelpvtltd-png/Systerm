@@ -1279,8 +1279,12 @@ function DocumentsUploadContent() {
       // Cleared once the Mail popup is closed (Save + Mail + Notify all done).
       // A one-file Send starts its attachment ticked; in a batch a
       // duplicate-replace starts unticked (still one click away).
+      // The bytes ride along when they fit in a single request (~3 MB total)
+      // so the recipient always gets the real PDF; bigger sends fall back to
+      // the Drive link (send-email downloads it server-side).
+      const withBytes = okItems.reduce((n, it) => n + (it.base64?.length || 0), 0) <= 3_000_000
       setMailQueue(q => [...q, {
-        attachments: okItems.map(it => ({ filename: it.fileName, url: it.driveLink, checkedByDefault: group.single ? true : !it.skipNotifyOnDone })),
+        attachments: okItems.map(it => ({ filename: it.fileName, url: it.driveLink, base64: withBytes ? it.base64 : undefined, checkedByDefault: group.single ? true : !it.skipNotifyOnDone })),
         reason: group.reason, reasonNote: group.reasonNote, clearIds: okIds,
       }])
     } else {
@@ -2273,6 +2277,7 @@ function DocumentsUploadContent() {
             return { ok: true, results: [] }
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}
+          onGetMailFiles={async () => [{ filename: sendModalItem.fileName, base64: sendModalItem.base64 }]}
           onClose={() => setSendModalItem(null)}
           onDone={(files) => { setSendModalItem(null); setSelectedId(null); clearFinishedItems(files) }}
         />
@@ -2287,6 +2292,7 @@ function DocumentsUploadContent() {
           requireReason
           onSave={runBatchSend}
           onGetDriveLinks={batchGetDriveLinks}
+          onGetMailFiles={async () => (batchQueue || []).map(it => ({ filename: it.fileName, base64: it.base64 }))}
           onClose={() => setBatchQueue(null)}
           onDone={(files) => { setBatchQueue(null); clearFinishedItems(files) }}
         />
