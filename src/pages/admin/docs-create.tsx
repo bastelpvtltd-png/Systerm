@@ -23,6 +23,71 @@ function isPartiesCopySlug(slug: string): boolean {
   return norm.includes('party') && norm.includes('copy')
 }
 
+// ── Sheet Routing (set up on Templates → Google Sheet → "Sheet Routing") ──
+// The server normally resolves the Fill/Print tab itself from the CUSDEC's
+// TIN VAT. Two cases it can't: Manual Entry (no CUSDEC, so no TIN VAT) and
+// any hiccup on its side — both used to drop straight into the "pick a
+// sheet" prompt even though the routing had already been saved. Here the
+// saved routing is read on the client too, using the same rule the server
+// uses (an "All Shippers" route always wins, otherwise the route holding
+// this shipper's TIN VAT), so the prompt only appears when there truly is
+// no saved route that covers this document.
+interface SavedSheetRoute { route_type: 'fill' | 'print'; sheet_gid: string; tin_vat_list: string[] }
+const ALL_SHIPPERS_ROUTE = '__all__'
+interface RoutedGids { fill: string; print: string }
+
+async function fetchSheetRoutes(documentType: string): Promise<SavedSheetRoute[]> {
+  if (!documentType) return []
+  try {
+    const h = await authHeader()
+    const tr = await fetch('/api/doc-templates', { headers: h })
+    if (!tr.ok) return []
+    const td = await tr.json()
+    const tpl = (td.templates || []).find((t: any) => t.document_type === documentType)
+    if (!tpl?.id) return []
+    const rr = await fetch(`/api/template-sheet-routes?template_id=${tpl.id}`, { headers: h })
+    if (!rr.ok) return []
+    const rd = await rr.json()
+    return (rd.routes || []) as SavedSheetRoute[]
+  } catch { return [] }
+}
+
+function routedGids(routes: SavedSheetRoute[], tinVat?: string): RoutedGids {
+  const pick = (type: 'fill' | 'print') => {
+    const list = routes.filter(r => r.route_type === type)
+    const all = list.find(r => (r.tin_vat_list || []).includes(ALL_SHIPPERS_ROUTE))
+    if (all) return all.sheet_gid
+    if (!tinVat) return ''
+    return list.find(r => (r.tin_vat_list || []).includes(tinVat))?.sheet_gid || ''
+  }
+  return { fill: pick('fill'), print: pick('print') }
+}
+
+function useSheetRoutes(documentType: string): SavedSheetRoute[] {
+  const [routes, setRoutes] = useState<SavedSheetRoute[]>([])
+  useEffect(() => {
+    let cancelled = false
+    setRoutes([])
+    fetchSheetRoutes(documentType).then(r => { if (!cancelled) setRoutes(r) })
+    return () => { cancelled = true }
+  }, [documentType])
+  return routes
+}
+
+// POST to a generate endpoint; if the server answers "pick a sheet" but the
+// saved routing already covers this shipper (or everyone), retry once with
+// those sheets instead of bothering the user.
+async function postGenerate(url: string, headers: Record<string, string>, body: Record<string, unknown>, routed: RoutedGids) {
+  const send = (b: Record<string, unknown>) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(b) })
+  let res = await send(body)
+  let d = await res.json()
+  if (!res.ok && d.needsSheetSelection && !body.fill_sheet_gid && !body.print_sheet_gid && routed.fill && routed.print) {
+    res = await send({ ...body, fill_sheet_gid: routed.fill, print_sheet_gid: routed.print })
+    d = await res.json()
+  }
+  return { res, d }
+}
+
 interface CusdecRec { id: string; code?: string; number: string; exporter: string; consignee: string; vessel: string; voyage_no: string; bl_no: string; gross_mass: string; net_mass: string; discharge_port: string; location_of_goods: string; created_at: string; cap?: string; export_release_passed?: boolean; boat_note_url?: string; declarant_code?: string }
 // No consignee column on cdn — the buyer's name/address only lives on the
 // matched CUSDEC row (see CdnTextPanel.selectCdn).
@@ -170,6 +235,9 @@ function BoatNoteContent() {
   const [bnPrintSheetGid, setBnPrintSheetGid] = useState('')
   const [bnSheetPickNeeded, setBnSheetPickNeeded] = useState(false)
   const [bnSheetPickMessage, setBnSheetPickMessage] = useState('')
+  // Routing already saved on Templates — used so the prompt above only shows
+  // when no saved route actually covers this shipper.
+  const bnRoutes = useSheetRoutes('boat_note')
 
   // ── Boat Note: Manual Entry sub-tab (no CUSDEC — type the template
   // fields by hand, generate the same Google Sheets template PDF, then
@@ -215,11 +283,8 @@ function BoatNoteContent() {
       const body: Record<string, unknown> = { document_type: 'boat_note', manual_values: manual }
       if (bnFillSheetGid) body.fill_sheet_gid = bnFillSheetGid
       if (bnPrintSheetGid) body.print_sheet_gid = bnPrintSheetGid
-      const res = await fetch('/api/doc-generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify(body),
-      })
-      const d = await res.json()
+      // Manual Entry has no TIN VAT — only an "All Shippers" route can apply.
+      const { res, d } = await postGenerate('/api/doc-generate', h, body, routedGids(bnRoutes))
       if (!res.ok) {
         if (d.needsSheetSelection) {
           setBnSheets(d.sheets || [])
@@ -396,11 +461,8 @@ function BoatNoteContent() {
     const body: Record<string, unknown> = { document_type: 'boat_note', cusdec_id: selCusdec, cdn_ids: selCdns }
     if (bnFillSheetGid) body.fill_sheet_gid = bnFillSheetGid
     if (bnPrintSheetGid) body.print_sheet_gid = bnPrintSheetGid
-    const pdfRes = await fetch('/api/doc-generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-      body: JSON.stringify(body),
-    })
-    const pdfD = await pdfRes.json()
+    const bnTin = (cusdecs.find(c => c.id === selCusdec) as any)?.tin_vat as string | undefined
+    const { res: pdfRes, d: pdfD } = await postGenerate('/api/doc-generate', h, body, routedGids(bnRoutes, bnTin))
     if (!pdfRes.ok) {
       if (pdfD.needsSheetSelection) {
         setBnSheets(pdfD.sheets || [])
@@ -1435,6 +1497,7 @@ function PartiesCopyPanel() {
   // (see isPartiesCopySlug) — Generate always produces this template's PDF;
   // there's no built-in jsPDF fallback layout anymore.
   const [tplDocType, setTplDocType] = useState('')
+  const proRoutes = useSheetRoutes(tplDocType)
 
   function load() {
     authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=500', { headers: h })).then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
@@ -1488,11 +1551,7 @@ function PartiesCopyPanel() {
       const body: Record<string, unknown> = { document_type: tplDocType, cusdec_id: selected.id }
       if (proFillGid) body.fill_sheet_gid = proFillGid
       if (proPrintGid) body.print_sheet_gid = proPrintGid
-      const res = await fetch('/api/generate-parties-copy-pro', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify(body),
-      })
-      const d = await res.json()
+      const { res, d } = await postGenerate('/api/generate-parties-copy-pro', h, body, routedGids(proRoutes, (selected as any)?.tin_vat))
       if (!res.ok) {
         if (d.needsSheetSelection) {
           setProSheets(d.sheets || [])
@@ -1910,6 +1969,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   // is reused rather than silently guessing a sheet.
   const [cusdecNeedsSheetPick, setCusdecNeedsSheetPick] = useState(false)
   const [sheetPickMessage, setSheetPickMessage] = useState('')
+  const sheetRoutes = useSheetRoutes(documentType)
 
   useEffect(() => {
     async function load() {
@@ -1995,7 +2055,12 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const curIsBlue = !!selectedCusdec?.export_release_passed
   const curIsGreen = !!selectedCusdec && !curIsBlue && capNum > 0 && cdnCount >= capNum && selectedCdns.every(c => c.boat_note_passed)
 
-  const manualSheetChoiceRequired = entryMode === 'manual' && manualSheets.length > 0
+  // Fill/Print already chosen on the template (Sheet Routing) → don't ask
+  // again. Manual Entry can only be covered by an "All Shippers" route (no
+  // TIN VAT to match); Database mode is matched by the CUSDEC's TIN VAT.
+  const routed = routedGids(sheetRoutes, entryMode === 'cusdec' ? (selectedCusdec as any)?.tin_vat : undefined)
+  const routingCoversThis = !!(routed.fill && routed.print)
+  const manualSheetChoiceRequired = entryMode === 'manual' && manualSheets.length > 0 && !routingCoversThis
   const sheetPickerVisible = manualSheetChoiceRequired || (entryMode === 'cusdec' && cusdecNeedsSheetPick)
   const manualSheetChoiceMissing = sheetPickerVisible && (!fillSheetGid || !printSheetGid)
   const cdnPickMissing = entryMode === 'cusdec' && needsCdnPick && selectedCdns.length > 0 && !selectedCdnId
@@ -2020,11 +2085,11 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
       }
       if (fillSheetGid) body.fill_sheet_gid = fillSheetGid
       if (printSheetGid) body.print_sheet_gid = printSheetGid
-      const res = await fetch('/api/doc-generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify(body),
-      })
-      const d = await res.json()
+      if (entryMode === 'manual' && routingCoversThis && !fillSheetGid && !printSheetGid) {
+        body.fill_sheet_gid = routed.fill
+        body.print_sheet_gid = routed.print
+      }
+      const { res, d } = await postGenerate('/api/doc-generate', h, body, routed)
       if (!res.ok) {
         if (d.needsSheetSelection) {
           setManualSheets(d.sheets || [])
@@ -2153,7 +2218,13 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         />
       )}
 
-      {entryMode === 'manual' && manualSheets.length > 0 && (
+      {entryMode === 'manual' && manualSheets.length > 0 && routingCoversThis && (
+        <p className="text-[11px] text-gray-400 max-w-xl">
+          Sheets come from this template's Sheet Routing (All Shippers) — Fill: <span className="font-medium text-gray-600">{manualSheets.find(x => String(x.sheetId) === routed.fill)?.title || routed.fill}</span>, Print: <span className="font-medium text-gray-600">{manualSheets.find(x => String(x.sheetId) === routed.print)?.title || routed.print}</span>.
+        </p>
+      )}
+
+      {manualSheetChoiceRequired && (
         <div className="card max-w-xl">
           <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Sheet &amp; Print Sheet</h2>
           <p className="text-xs text-gray-400 mb-3">No CUSDEC to auto-route by — pick which sheet tab to fill and which to print.</p>

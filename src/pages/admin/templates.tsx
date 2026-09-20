@@ -36,6 +36,7 @@ const TEMPLATE_FORMATS = [
 type TemplateFormat = typeof TEMPLATE_FORMATS[number]['value']
 
 const DOC_TYPES = BUILTIN_DOC_TYPES
+const LAST_DOC_TYPE_KEY = 'templates:last-doc-type'
 
 // Picking these document types only makes sense with one template format
 // each — auto-select it so the mapping UI below (Sheet columns vs. the
@@ -205,6 +206,17 @@ function DocTemplatesContent() {
   const [sheetsLoading, setSheetsLoading] = useState(false)
   const [sheetsWarn, setSheetsWarn]   = useState('')
   const lastFetchedUrl = useRef('')  // avoid double-fetch when loadTemplate sets urlInput
+  // Bumped on every loadTemplate() so a slow response for a previous document
+  // type can't overwrite the one currently on screen.
+  const loadSeq = useRef(0)
+  // True only once the saved Sheet Routing for the current template has been
+  // read back successfully (or there's nothing to read yet). Save Template
+  // only re-saves routing when this is true — otherwise a failed load (which
+  // leaves the lists empty) would wipe the routes that ARE in the database.
+  const routesLoadedRef = useRef(false)
+  // Custom doc type remembered from before a refresh, waiting for the
+  // saved-types list to arrive so the dropdown can actually show it.
+  const restoreTypeRef = useRef('')
   const [extraDocTypes, setExtraDocTypes] = useState<{ value: string; label: string }[]>([])
   const [addingNewType, setAddingNewType] = useState(false)
   const [newTypeLabel, setNewTypeLabel]   = useState('')
@@ -231,34 +243,71 @@ function DocTemplatesContent() {
     }).catch(() => {})
   }, [])
 
-  async function loadRoutes(tplId: string) {
-    if (!tplId) { setFillRoutes([]); setPrintRoutes([]); return }
+  // Reads the saved Sheet Routing for a template back from the database.
+  // `only` refreshes just one list (used after saving Fill or Print alone, so
+  // the other list's unsaved edits aren't overwritten). Failures are shown —
+  // an empty list must never silently mean "couldn't load".
+  async function loadRoutes(tplId: string, seq?: number, only?: 'fill' | 'print'): Promise<boolean> {
+    const stale = () => seq !== undefined && seq !== loadSeq.current
+    if (!tplId) {
+      if (!stale()) { setFillRoutes([]); setPrintRoutes([]); routesLoadedRef.current = true }
+      return true
+    }
     try {
       const h = await authHeader()
       const res = await fetch(`/api/template-sheet-routes?template_id=${tplId}`, { headers: h })
-      const d = await res.json()
+      const d = await res.json().catch(() => ({}))
+      if (stale()) return false
+      if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
       const routes: SheetRoute[] = d.routes || []
-      setFillRoutes(routes.filter(r => r.route_type === 'fill'))
-      setPrintRoutes(routes.filter(r => r.route_type === 'print'))
-    } catch { setFillRoutes([]); setPrintRoutes([]) }
+      if (!only || only === 'fill')  setFillRoutes(routes.filter(r => r.route_type === 'fill'))
+      if (!only || only === 'print') setPrintRoutes(routes.filter(r => r.route_type === 'print'))
+      routesLoadedRef.current = true
+      return true
+    } catch (e: any) {
+      if (stale()) return false
+      routesLoadedRef.current = false
+      if (!only) { setFillRoutes([]); setPrintRoutes([]) }
+      setRoutesStatus(`✗ Could not load the saved Sheet Routing: ${e.message}`)
+      return false
+    }
+  }
+
+  async function postRoutes(tplId: string, routeType: 'fill' | 'print', list: SheetRoute[]) {
+    const h = await authHeader()
+    const res = await fetch('/api/template-sheet-routes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+      body: JSON.stringify({ template_id: tplId, route_type: routeType, routes: list }),
+    })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
   }
 
   async function saveRoutes(routeType: 'fill' | 'print') {
     if (!templateId) { setRoutesStatus('Save the template first (needs a Google Sheets URL) before configuring routing.'); return }
     setRoutesSaving(routeType); setRoutesStatus('')
     try {
-      const list = routeType === 'fill' ? fillRoutes : printRoutes
-      const h = await authHeader()
-      const res = await fetch('/api/template-sheet-routes', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
-        body: JSON.stringify({ template_id: templateId, route_type: routeType, routes: list }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error)
-      setRoutesStatus(`✓ ${routeType === 'fill' ? 'Fill' : 'Print'} Sheet routing saved`)
+      await postRoutes(templateId, routeType, routeType === 'fill' ? fillRoutes : printRoutes)
+      // Read it straight back from the database — what's on screen after this
+      // is what will still be there after a refresh, not just local state.
+      const ok = await loadRoutes(templateId, undefined, routeType)
+      if (ok) setRoutesStatus(`✓ ${routeType === 'fill' ? 'Fill' : 'Print'} Sheet routing saved`)
     } catch (e: any) { setRoutesStatus(`✗ ${e.message}`) }
     finally { setRoutesSaving('') }
   }
+
+  // Remember which document type was open, so a refresh lands back on it
+  // instead of always resetting to Boat Note (where the routing you just
+  // saved on another type looks like it's gone).
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(LAST_DOC_TYPE_KEY)
+      if (!v || v === 'boat_note') return
+      if (DOC_TYPES.some(t => t.value === v)) setDocType(v)
+      else restoreTypeRef.current = v
+    } catch {}
+  }, [])
+  useEffect(() => { try { localStorage.setItem(LAST_DOC_TYPE_KEY, docType) } catch {} }, [docType])
 
   // Load cusdec/cdn columns once
   useEffect(() => {
@@ -289,6 +338,8 @@ function DocTemplatesContent() {
         .filter((v, i, arr) => arr.indexOf(v) === i)
         .map(v => ({ value: v, label: titleCaseSlug(v) }))
       setExtraDocTypes(extras)
+      if (restoreTypeRef.current && extras.some(e => e.value === restoreTypeRef.current)) setDocType(restoreTypeRef.current)
+      restoreTypeRef.current = ''
     }
     loadExtraTypes()
   }, [])
@@ -304,12 +355,17 @@ function DocTemplatesContent() {
 
   useEffect(() => { loadTemplate() }, [docType]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function loadTemplate() {
-    setError(''); setStatus('')
+  // keepMessages: Save Template calls this to refresh the form from the
+  // database afterwards — it must not wipe the "✓ saved" message it just set.
+  async function loadTemplate(keepMessages = false) {
+    const seq = ++loadSeq.current
+    if (!keepMessages) { setError(''); setStatus('') }
     const h = await authHeader()
     const res = await fetch('/api/doc-templates', { headers: h })
+    if (seq !== loadSeq.current) return
     if (!res.ok) return
     const d = await res.json()
+    if (seq !== loadSeq.current) return
     const found: GSheet | null = (d.templates || []).find((t: GSheet) => t.document_type === docType) || null
     const url = found?.template_url || ''
     const format = found?.template_format || DOC_TYPE_DEFAULT_FORMAT[docType] || 'google_sheet'
@@ -331,9 +387,10 @@ function DocTemplatesContent() {
     setFitToPage(found?.fit_to_page !== false)
     setTemplateId(found?.id || '')
     setRoutesStatus('')
-    loadRoutes(found?.id || '')
+    routesLoadedRef.current = false
     if (format === 'google_sheet' && url) fetchSheets(url)
     else { setSheetNames([]); setSheetsWithGid([]) }
+    await loadRoutes(found?.id || '', seq)
   }
 
   async function fetchSheets(url: string) {
@@ -382,7 +439,7 @@ function DocTemplatesContent() {
   }
 
   async function save() {
-    setSaving(true); setError('')
+    setSaving(true); setError(''); setStatus('')
     try {
       const h = await authHeader()
       let body: Record<string, unknown>
@@ -438,8 +495,36 @@ function DocTemplatesContent() {
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      setStatus('✓ Template saved')
-      await loadTemplate()
+
+      // Sheet Routing lives in its own table, keyed by this template's id, and
+      // used to be saved ONLY by the two small "Save" buttons in that card —
+      // Save Template then reloaded the form from the database, silently
+      // throwing away any routing edits that hadn't been saved separately.
+      // Now Save Template saves routing too (and re-saves against whatever id
+      // the template has after saving, in case saving re-created the row).
+      let routeErr = ''
+      if (templateFormat === 'google_sheet' && routesLoadedRef.current) {
+        try {
+          const lr = await fetch('/api/doc-templates', { headers: h })
+          const ld = await lr.json()
+          const tpl = ((ld.templates || []) as GSheet[]).find(t => t.document_type === docType)
+          if (!tpl?.id) throw new Error('could not find the saved template')
+          const hadTemplate = !!templateId
+          if (hadTemplate || fillRoutes.length)  await postRoutes(tpl.id, 'fill', fillRoutes)
+          if (hadTemplate || printRoutes.length) await postRoutes(tpl.id, 'print', printRoutes)
+        } catch (e: any) { routeErr = e.message }
+      }
+
+      // Reload from the database (what a refresh would show), then set the
+      // message — loadTemplate() used to clear it instantly, so a successful
+      // save gave no confirmation at all.
+      await loadTemplate(true)
+      if (routeErr) {
+        setStatus('✓ Template saved')
+        setRoutesStatus(`✗ Template saved, but Sheet Routing did not save: ${routeErr}`)
+      } else {
+        setStatus(templateFormat === 'google_sheet' ? '✓ Template and Sheet Routing saved' : '✓ Template saved')
+      }
     } catch (e: any) { setError(e.message) }
     finally { setSaving(false) }
   }
@@ -705,10 +790,13 @@ function DocTemplatesContent() {
       {/* Sheet Routing — optional, Google Sheets only. Different shippers'
           data can fill (and print) on different physical tabs of the same
           spreadsheet, matched by TIN VAT at generation time. */}
-      {templateFormat === 'google_sheet' && sheetsWithGid.length > 0 && (
+      {templateFormat === 'google_sheet' && (sheetsWithGid.length > 0 || fillRoutes.length > 0 || printRoutes.length > 0 || !!routesStatus) && (
         <div className="card">
           <h2 className="font-semibold text-gray-900 text-sm mb-1">Sheet Routing <span className="text-gray-400 font-normal">(optional)</span></h2>
-          <p className="text-xs text-gray-400 mb-3">Route different shippers' CUSDECs to different sheet tabs — pick a sheet, then tick which shippers (by TIN VAT) use it. A CUSDEC with no matching route falls back to the spreadsheet's first sheet.</p>
+          <p className="text-xs text-gray-400 mb-3">Route different shippers' CUSDECs to different sheet tabs — pick a sheet, then tick which shippers (by TIN VAT) use it. A CUSDEC with no matching route falls back to the spreadsheet's first sheet. Routing is saved together with <strong>Save Template</strong> (or on its own with the Save buttons below) and reloaded from the database every time you open this page.</p>
+          {sheetsWithGid.length === 0 && !sheetsLoading && (
+            <p className="text-[11px] text-amber-600 mb-3">Couldn't load the sheet list from Google, so new routes can't be added right now{sheetsWarn ? ` (${sheetsWarn})` : ''} — the routes already saved are still shown and kept.</p>
+          )}
           {routesStatus && <p className={`text-xs mb-3 font-medium ${routesStatus.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{routesStatus}</p>}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <SheetRouteEditor
