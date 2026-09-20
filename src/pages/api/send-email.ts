@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '@/lib/serverAuth'
+import { getDriveClient } from '@/lib/driveFolders'
 const nodemailer = require('nodemailer')
 
 const supabaseAdmin = createClient(
@@ -13,35 +14,52 @@ const supabaseAdmin = createClient(
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } }
 
 // A Drive "view" link (drive.google.com/file/d/<id>/view) is a WEB PAGE, not
-// the file — fetching it and attaching the result produces an "PDF" that is
-// really HTML, which is exactly why the recipient's PDF wouldn't open even
-// though the mail itself went through. Turn Drive links into the direct
-// download URL first.
-function toDirectDownloadUrl(url: string): string {
+// the file — fetching it and attaching the result produces a "PDF" that is
+// really HTML, which is why a recipient's PDF wouldn't open even though the
+// mail itself went through. So a saved file is always taken from Drive
+// itself: by file id, through the Drive API (the same login the uploads use).
+function driveFileId(url: string): string | null {
   try {
     const u = new URL(url)
-    if (!/(^|\.)(drive|docs)\.google\.com$/.test(u.hostname)) return url
-    const id = u.pathname.match(/\/d\/([\w-]+)/)?.[1] || u.searchParams.get('id')
-    return id ? `https://drive.google.com/uc?export=download&id=${id}` : url
-  } catch { return url }
+    if (!/(^|\.)(drive|docs)\.google\.com$/.test(u.hostname)) return null
+    return u.pathname.match(/\/d\/([\w-]+)/)?.[1] || u.searchParams.get('id')
+  } catch { return null }
+}
+
+async function downloadFromDrive(fileId: string): Promise<Buffer> {
+  const drive: any = getDriveClient()
+  const r = await drive.files.get({ fileId, alt: 'media', supportsAllDrives: true }, { responseType: 'arraybuffer' })
+  return Buffer.from(r.data as ArrayBuffer)
 }
 
 // Never send a broken attachment silently: a ".pdf" whose bytes aren't a PDF
-// (e.g. Drive answered with a sign-in/permission page) fails the send with a
-// clear message instead of arriving as a file nobody can open.
+// fails the send with a clear message instead of arriving as a file nobody
+// can open.
 async function loadAttachment(a: Attachment): Promise<{ filename: string; content: Buffer; contentType?: string }> {
-  let buf: Buffer
+  let buf: Buffer | null = null
   if (a.base64) {
+    // Mail-only send of a file that was never saved — bytes came from the page.
     buf = Buffer.from(a.base64, 'base64')
   } else {
-    const r = await fetch(toDirectDownloadUrl(a.url!), { redirect: 'follow' })
-    if (!r.ok) throw new Error(`Could not download "${a.filename}" to attach it (HTTP ${r.status})`)
-    buf = Buffer.from(await r.arrayBuffer())
+    const id = driveFileId(a.url!)
+    if (id) {
+      try { buf = await downloadFromDrive(id) }
+      catch (e: any) { console.error('[send-email] Drive API download failed, trying public link:', e?.response?.data || e?.message) }
+      if (!buf) {
+        const r = await fetch(`https://drive.google.com/uc?export=download&id=${id}`, { redirect: 'follow' })
+        if (r.ok) buf = Buffer.from(await r.arrayBuffer())
+      }
+    } else {
+      const r = await fetch(a.url!, { redirect: 'follow' })
+      if (!r.ok) throw new Error(`Could not download "${a.filename}" to attach it (HTTP ${r.status})`)
+      buf = Buffer.from(await r.arrayBuffer())
+    }
+    if (!buf) throw new Error(`Could not download "${a.filename}" from Drive to attach it. Nothing was sent.`)
   }
   const isPdfBytes = buf.subarray(0, 1024).includes('%PDF-')
   const looksLikePdfName = /\.pdf$/i.test(a.filename)
   if (looksLikePdfName && !isPdfBytes) {
-    throw new Error(`"${a.filename}" could not be attached — Drive returned a web page instead of the PDF (the file's link may not be downloadable). Nothing was sent.`)
+    throw new Error(`"${a.filename}" could not be attached — Drive returned a web page instead of the PDF. Nothing was sent.`)
   }
   // A renamed file with no ".pdf" on the end arrives as an unknown file type
   // that can't be opened — give real PDFs the extension and type.

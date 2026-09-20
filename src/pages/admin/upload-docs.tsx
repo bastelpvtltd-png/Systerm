@@ -1237,7 +1237,20 @@ function DocumentsUploadContent() {
         .filter(g => g.itemIds.length),
       group,
     ])
-    runSaves(queue, referenceOverride, batch, choices)
+    // Let the panel close and repaint first — the save's first steps can pop
+    // a browser confirm (e.g. a container-number format warning), which would
+    // otherwise appear while the Send panel is still on screen.
+    setTimeout(() => { runSaves(queue, referenceOverride, batch, choices) }, 60)
+  }
+
+  // Mail-only sends (nothing saved) attach the PDFs straight from the page.
+  // One request can only carry a few MB, so refuse clearly instead of failing.
+  function mailFilesFor(queue: UploadItem[]): { filename: string; base64: string }[] {
+    const total = queue.reduce((n, it) => n + (it.base64?.length || 0), 0)
+    if (total > 4_000_000) {
+      throw new Error(`These PDFs are too big to mail without saving (about ${(total * 0.75 / 1048576).toFixed(1)} MB; the limit is roughly 3 MB in total). Mail fewer files at once, or tick Save.`)
+    }
+    return queue.map(it => ({ filename: it.fileName, base64: it.base64 }))
   }
 
   // Registers the saved files of a group (document-uploads: Processed
@@ -1279,12 +1292,10 @@ function DocumentsUploadContent() {
       // Cleared once the Mail popup is closed (Save + Mail + Notify all done).
       // A one-file Send starts its attachment ticked; in a batch a
       // duplicate-replace starts unticked (still one click away).
-      // The bytes ride along when they fit in a single request (~3 MB total)
-      // so the recipient always gets the real PDF; bigger sends fall back to
-      // the Drive link (send-email downloads it server-side).
-      const withBytes = okItems.reduce((n, it) => n + (it.base64?.length || 0), 0) <= 3_000_000
+      // A saved file is mailed straight from its Drive copy — send-email
+      // downloads it from Drive server-side (no bytes travel from here).
       setMailQueue(q => [...q, {
-        attachments: okItems.map(it => ({ filename: it.fileName, url: it.driveLink, base64: withBytes ? it.base64 : undefined, checkedByDefault: group.single ? true : !it.skipNotifyOnDone })),
+        attachments: okItems.map(it => ({ filename: it.fileName, url: it.driveLink, checkedByDefault: group.single ? true : !it.skipNotifyOnDone })),
         reason: group.reason, reasonNote: group.reasonNote, clearIds: okIds,
       }])
     } else {
@@ -2270,14 +2281,16 @@ function DocumentsUploadContent() {
             // the background; a failure stays on the file's own card.
             if (sendModalRestricted && sendModalGroup) {
               // Retry of a file that errored: keep what the original Send chose.
-              runSaves([sendModalItem], referenceOverride, false, { mail: sendModalGroup.mail, notify: sendModalGroup.notify, reason: sendModalGroup.reason, reasonNote: sendModalGroup.reasonNote })
+              const keep = { mail: sendModalGroup.mail, notify: sendModalGroup.notify, reason: sendModalGroup.reason, reasonNote: sendModalGroup.reasonNote }
+              const it = sendModalItem
+              setTimeout(() => { runSaves([it], referenceOverride, false, keep) }, 60)
             } else {
               startSend([sendModalItem], { mail: !!choices?.mail, notify: !!choices?.notify, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '' }, referenceOverride, false)
             }
             return { ok: true, results: [] }
           }}
           onGetDriveLinks={async () => [{ fileName: sendModalItem.fileName, driveLink: await uploadToDriveOnly(sendModalItem), docType: sendModalItem.detectedType }]}
-          onGetMailFiles={async () => [{ filename: sendModalItem.fileName, base64: sendModalItem.base64 }]}
+          onGetMailFiles={async () => mailFilesFor([sendModalItem])}
           onClose={() => setSendModalItem(null)}
           onDone={(files) => { setSendModalItem(null); setSelectedId(null); clearFinishedItems(files) }}
         />
@@ -2292,7 +2305,7 @@ function DocumentsUploadContent() {
           requireReason
           onSave={runBatchSend}
           onGetDriveLinks={batchGetDriveLinks}
-          onGetMailFiles={async () => (batchQueue || []).map(it => ({ filename: it.fileName, base64: it.base64 }))}
+          onGetMailFiles={async () => mailFilesFor(batchQueue || [])}
           onClose={() => setBatchQueue(null)}
           onDone={(files) => { setBatchQueue(null); clearFinishedItems(files) }}
         />

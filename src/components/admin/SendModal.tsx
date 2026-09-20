@@ -180,8 +180,12 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
       // One file's bookkeeping doesn't depend on another's — running them
       // together instead of one-at-a-time is most of what made "Done" feel
       // slow on a multi-file Send All.
-      const auth = await authHeader()
-      await Promise.all(files.filter(f => f.driveLink).map(f =>
+      // (Skipped entirely when there is nothing to register — e.g. Upload Docs'
+      // background Send returns no files — so Done closes this panel at once
+      // instead of waiting on an auth round-trip it doesn't need.)
+      const registerable = files.filter(f => f.driveLink)
+      const auth = registerable.length ? await authHeader() : {}
+      await Promise.all(registerable.map(f =>
         fetch('/api/document-uploads', {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
           body: JSON.stringify({
@@ -260,6 +264,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
               {notifyDisabled && <p className="text-[11px] text-amber-600 -mt-1">{notifyDisabledReason || 'Notify is not available for this item.'}</p>}
               {!notifyDisabled && notify && !isCusdecPassed && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
               {!notifyDisabled && isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Notify is on, and Notify needs Save, so keep Save ticked.</p>}
+              {!notifyDisabled && !save && (notify || isCusdecPassed) && <p className="text-[11px] text-red-600 -mt-1">Notify can't be done without Save — tick Save first.</p>}
             </>
           )}
 
