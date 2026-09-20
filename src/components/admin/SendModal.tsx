@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { X, Loader, Save, Mail, Bell, AlertTriangle, Link2 } from 'lucide-react'
 import { authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from './EmailPdfModal'
@@ -93,11 +93,24 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
       .catch(() => {})
   }, [useReference])
 
+  // Some reasons tick (and thereby lock) Save/Notify for you. That lock must
+  // follow the reason, not stick around: remember what the ticks were before a
+  // forcing reason took over, and put them back the moment a reason that
+  // doesn't force anything is picked (Boat Note Passed, Other, None...). A
+  // tick the person changes by hand afterwards is theirs — it's kept.
+  const preForce = useRef<{ save: boolean; notify: boolean } | null>(null)
   function setNotifyChecked(checked: boolean) {
+    preForce.current = null
     setNotify(checked)
     if (checked) setSave(true)
   }
   function setReasonChecked(value: string) {
+    const forcing = value === 'CUSDEC Passed' || value === 'Container Moved' || value === 'Final Document'
+    if (forcing && !preForce.current) preForce.current = { save, notify }
+    if (!forcing && preForce.current) {
+      setSave(preForce.current.save); setNotify(preForce.current.notify)
+      preForce.current = null
+    }
     setReason(value)
     if (value === 'CUSDEC Passed') {
       setSave(true)
@@ -108,18 +121,28 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
   }
   const [error, setError] = useState('')
   const [emailAttachments, setEmailAttachments] = useState<EmailAttachment[] | null>(null)
+  // Shown when Done is pressed with Notify wanted but Save unticked — Notify
+  // only works for a saved file, so ask instead of erroring (or silently saving).
+  const [showSavePrompt, setShowSavePrompt] = useState(false)
 
-  async function handleDone() {
+  async function handleDone(mode?: 'save' | 'mailOnly') {
     if (!restrictToSaveOnly && requireReason && !reason) { setError('Pick a Reason before sending'); return }
     if (reason === 'Other' && !reasonNote.trim()) { setError('Type a reason for "Other"'); return }
     setBusy(true); setError('')
     try {
       let files: SendResultFile[] = []
-      // CUSDEC Passed always saves — is_saved_to_db must be true so the
-      // document is never treated as temporary and never gets deleted on pick.
-      const effectiveSave = save || isCusdecPassed
+      // Save is exactly what the Save tick says — an unticked Save never
+      // touches the database (so no duplicate check either), even for CUSDEC
+      // Passed. The one exception is when Notify is wanted without Save: that
+      // is asked below (showSavePrompt) and comes back here as `mode`.
+      const wantsNotify = !restrictToSaveOnly && (notify || isCusdecPassed) && !notifyDisabled
+      if (!mode && !restrictToSaveOnly && !hideSaveAndNotify && !save && wantsNotify) {
+        setShowSavePrompt(true)
+        return
+      }
+      const effectiveSave = mode === 'save' ? true : mode === 'mailOnly' ? false : save
       const effectiveMail = restrictToSaveOnly ? false : mail
-      const effectiveNotify = restrictToSaveOnly ? false : (notify || isCusdecPassed) && !notifyDisabled
+      const effectiveNotify = mode === 'mailOnly' ? false : wantsNotify
       let matchedReference: string | undefined
       if (effectiveSave && !restrictToSaveOnly && isCusdecPassed && reference.trim()) {
         try {
@@ -148,7 +171,11 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
           method: 'POST', headers: { 'Content-Type': 'application/json', ...auth },
           body: JSON.stringify({
             file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: effectiveSave, notify: effectiveNotify, uploaded_by_name: uploaderName,
-            reason: restrictToSaveOnly ? undefined : (reason || undefined), reason_note: !restrictToSaveOnly && reason === 'Other' ? reasonNote.trim() : undefined,
+            // A Mail-only send (nothing saved, no Notify) is not a document
+            // that was filed — leaving the reason off keeps it from opening an
+            // upload approval (CDN Container Moved / CUSDEC Passed) for a file
+            // that was never saved. The reason still goes in the email itself.
+            reason: (restrictToSaveOnly || mode === 'mailOnly') ? undefined : (reason || undefined), reason_note: !restrictToSaveOnly && mode !== 'mailOnly' && reason === 'Other' ? reasonNote.trim() : undefined,
             doc_type: f.docType || docType || undefined,
             // f.cusdecId (the row this specific file's Save just created/matched)
             // is only known per-file for a fresh upload — the cusdecId PROP is
@@ -181,6 +208,37 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
     )
   }
 
+  if (showSavePrompt) {
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+        <div className="bg-white rounded-2xl w-full max-w-sm">
+          <div className="flex items-center gap-2 p-5 border-b">
+            <AlertTriangle size={18} className="text-amber-500"/>
+            <h2 className="font-bold text-gray-900">Notify needs Save</h2>
+          </div>
+          <div className="p-5 space-y-2">
+            <p className="text-xs text-gray-500 truncate">{label}</p>
+            <p className="text-sm text-gray-700">
+              Save isn't ticked, so this file can't be notified. Do you want to Save it (and Notify)?
+              {mail ? ' Or send it by Mail only — nothing will be saved or notified.' : ''}
+            </p>
+          </div>
+          <div className="flex gap-2 p-5 border-t">
+            <button onClick={() => setShowSavePrompt(false)} className="btn-secondary flex-1">Back</button>
+            {mail && (
+              <button onClick={() => { setShowSavePrompt(false); handleDone('mailOnly') }} className="btn-secondary flex-1 flex items-center justify-center gap-1.5">
+                <Mail size={14}/>Mail only
+              </button>
+            )}
+            <button onClick={() => { setShowSavePrompt(false); setSave(true); handleDone('save') }} className="btn-primary flex-1 flex items-center justify-center gap-1.5">
+              <Save size={14}/>Save &amp; Notify
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
       <div className="bg-white rounded-2xl w-full max-w-sm">
@@ -200,7 +258,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
           )}
           {!hideSaveAndNotify && (
             <label className={`flex items-center gap-3 p-3 rounded-lg border border-gray-100 ${notify ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}>
-              <input type="checkbox" checked={save} disabled={notify} onChange={e => setSave(e.target.checked)} className="w-4 h-4"/>
+              <input type="checkbox" checked={save} disabled={notify} onChange={e => { preForce.current = null; setSave(e.target.checked) }} className="w-4 h-4"/>
               <Save size={15} className="text-gray-500"/>
               <span className="text-sm text-gray-800">Save (to Drive + Database)</span>
             </label>
@@ -221,7 +279,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
               </label>
               {notifyDisabled && <p className="text-[11px] text-amber-600 -mt-1">{notifyDisabledReason || 'Notify is not available for this item.'}</p>}
               {!notifyDisabled && notify && !isCusdecPassed && <p className="text-[11px] text-gray-400 -mt-1">Notify requires Save — locked on while Notify is ticked.</p>}
-              {!notifyDisabled && isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Notify always on. Save is ticked by default; untick only if you want Drive-only (temporary) upload.</p>}
+              {!notifyDisabled && isCusdecPassed && <p className="text-[11px] text-green-600 -mt-1">CUSDEC Passed — Notify is on. Save is ticked by default; if you untick it you'll be asked whether to Save or send by Mail only.</p>}
             </>
           )}
 
@@ -260,7 +318,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         </div>
         <div className="flex gap-3 p-5 border-t">
           <button onClick={onClose} disabled={busy} className="btn-secondary flex-1 disabled:opacity-50">Cancel</button>
-          <button onClick={handleDone} disabled={busy || (restrictToSaveOnly ? !save : (!save && !mail && !notify && !isCusdecPassed)) || (!restrictToSaveOnly && requireReason && !reason)} className="btn-primary flex-1 flex items-center justify-center gap-2">
+          <button onClick={() => handleDone()} disabled={busy || (restrictToSaveOnly ? !save : (!save && !mail && !notify && !isCusdecPassed)) || (!restrictToSaveOnly && requireReason && !reason)} className="btn-primary flex-1 flex items-center justify-center gap-2">
             {busy ? <Loader size={14} className="animate-spin"/> : null}Done
           </button>
         </div>

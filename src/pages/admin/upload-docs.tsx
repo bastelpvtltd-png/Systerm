@@ -1362,6 +1362,19 @@ function DocumentsUploadContent() {
   const sendModalGroup = sendModalItem ? sendGroups.find(g => g.itemIds.includes(sendModalItem.id)) : undefined
   const sendModalRestricted = !!sendModalItem && !!sendModalGroup && (items.find(it => it.id === sendModalItem.id)?.status ?? sendModalItem.status) === 'error'
 
+  // Preview panel — "Select all" acts on the documents currently listed
+  // (i.e. respects the type filter); only ones with a Drive link can be picked.
+  const selectableRecs = records.filter(r => r.drive_url)
+  const allRecsSelected = selectableRecs.length > 0 && selectableRecs.every(r => selectedPreviewDocs[r.id])
+  function toggleSelectAllRecs() {
+    setSelectedPreviewDocs(prev => {
+      const next = { ...prev }
+      if (allRecsSelected) selectableRecs.forEach(r => { delete next[r.id] })
+      else selectableRecs.forEach(r => { next[r.id] = { filename: r.file_name, url: r.drive_url } })
+      return next
+    })
+  }
+
   const canSeePreview = canUpload || canSeeUploaded || canPreview || isAdmin
   const panelOptions: Panel[] = (['upload', 'bills', 'preview', 'admin-edit'] as Panel[]).filter(p =>
     p === 'upload' ? (canUpload || canSeeUploaded) :
@@ -1570,6 +1583,17 @@ function DocumentsUploadContent() {
               ) : records.length === 0 ? (
                 <div className="text-center py-10 text-gray-400 text-sm">No documents found</div>
               ) : (
+                <>
+                <div className="flex items-center justify-between mb-2 text-xs">
+                  <button onClick={toggleSelectAllRecs} disabled={selectableRecs.length === 0}
+                    className="flex items-center gap-1.5 text-gray-600 hover:text-green-700 disabled:opacity-40">
+                    {allRecsSelected ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>}
+                    Select all ({selectableRecs.length})
+                  </button>
+                  {Object.keys(selectedPreviewDocs).length > 0 && (
+                    <span className="text-gray-400">{Object.keys(selectedPreviewDocs).length} selected</span>
+                  )}
+                </div>
                 <div className="space-y-1.5 max-h-[500px] overflow-y-auto">
                   {records.map(rec => {
                     const color = TYPE_COLORS[rec.doc_type] || '#6b7280'
@@ -1605,6 +1629,7 @@ function DocumentsUploadContent() {
                     )
                   })}
                 </div>
+                </>
               )}
             </div>
 
