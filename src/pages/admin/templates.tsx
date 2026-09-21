@@ -131,12 +131,22 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
           // name cached in the DB from whenever this route was first saved,
           // which goes stale the moment the tab is renamed in Google Sheets.
           const liveName = sheets.find(s => String(s.sheetId) === r.sheet_gid)?.title || r.sheet_name
+          // What was saved, spelled out on the card itself (not hidden behind
+          // "edit"), so a reopened template visibly shows its saved routing.
+          const nameOf = (t: string) => shippers.find(s => s.tin_vat === t)?.exporter?.slice(0, 24) || t
+          const summary = isAll ? 'All Shippers'
+            : r.tin_vat_list.length === 0 ? 'No shippers selected yet'
+            : r.tin_vat_list.slice(0, 3).map(nameOf).join(', ') + (r.tin_vat_list.length > 3 ? ` +${r.tin_vat_list.length - 3} more` : '')
+          // Saved TIN VATs that aren't among the shippers loaded from recent
+          // CUSDECs — still listed (and tickable off) instead of vanishing.
+          const missing = r.tin_vat_list.filter(t => t !== ALL_SHIPPERS && !shippers.some(s => s.tin_vat === t))
           return (
             <div key={r.sheet_gid} className="border border-gray-100 rounded-lg p-2">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-medium text-gray-800">{liveName}</span>
                 <button onClick={() => removeRoute(idx)} className="text-gray-300 hover:text-red-500"><X size={13}/></button>
               </div>
+              <p className={`text-[11px] mb-1 ${r.tin_vat_list.length === 0 ? 'text-amber-600' : 'text-gray-500'}`}>{summary}</p>
               <button onClick={() => setPickerOpenIdx(pickerOpenIdx === idx ? null : idx)} className="text-[11px] text-blue-600 hover:underline mb-1.5">
                 {pickerOpenIdx === idx ? 'Hide shippers' : isAll ? 'All Shippers — edit' : `${r.tin_vat_list.length} shipper(s) — edit`}
               </button>
@@ -151,6 +161,12 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
                   {!isAll && (
                     <div className="max-h-40 overflow-y-auto space-y-1">
                       <input value={shipperSearch} onChange={e => setShipperSearch(e.target.value)} placeholder="Search shipper..." className="input text-xs w-full mb-1"/>
+                      {missing.map(t => (
+                        <label key={`saved-${t}`} className="flex items-center gap-2 text-[11px] px-1 py-0.5 rounded cursor-pointer hover:bg-gray-50">
+                          <input type="checkbox" checked onChange={() => toggleShipper(idx, t)}/>
+                          <span className="truncate">{t} <span className="text-gray-400">· saved (not in the recent CUSDEC list)</span></span>
+                        </label>
+                      ))}
                       {shippers.filter(s => !shipperSearch || s.exporter.toLowerCase().includes(shipperSearch.toLowerCase()) || s.tin_vat.includes(shipperSearch)).map(s => (
                         <label key={s.tin_vat} className={`flex items-center gap-2 text-[11px] px-1 py-0.5 rounded ${(takenElsewhere.has(s.tin_vat) || allTakenElsewhere) ? 'opacity-40' : 'cursor-pointer hover:bg-gray-50'}`}>
                           <input type="checkbox" checked={r.tin_vat_list.includes(s.tin_vat)} disabled={takenElsewhere.has(s.tin_vat) || allTakenElsewhere}
@@ -255,7 +271,7 @@ function DocTemplatesContent() {
     }
     try {
       const h = await authHeader()
-      const res = await fetch(`/api/template-sheet-routes?template_id=${tplId}`, { headers: h })
+      const res = await fetch(`/api/template-sheet-routes?template_id=${tplId}`, { headers: h, cache: 'no-store' })
       const d = await res.json().catch(() => ({}))
       if (stale()) return false
       if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
@@ -265,6 +281,10 @@ function DocTemplatesContent() {
       if (!only || only === 'fill')  setFillRoutes(routes.filter(r => r.route_type === 'fill'))
       if (!only || only === 'print') setPrintRoutes(routes.filter(r => r.route_type === 'print'))
       routesLoadedRef.current = true
+      if (!only && routes.length) {
+        const nf = routes.filter(r => r.route_type === 'fill').length, np = routes.filter(r => r.route_type === 'print').length
+        setRoutesStatus(`✓ Saved routing loaded: ${nf} Fill route${nf === 1 ? '' : 's'}, ${np} Print route${np === 1 ? '' : 's'}`)
+      }
       return true
     } catch (e: any) {
       if (stale()) return false
@@ -505,6 +525,13 @@ function DocTemplatesContent() {
       // Now Save Template saves routing too (and re-saves against whatever id
       // the template has after saving, in case saving re-created the row).
       let routeErr = ''
+      if (templateFormat === 'google_sheet' && !routesLoadedRef.current) {
+        // Never say "Sheet Routing saved" when it wasn't even attempted. If the
+        // saved routing couldn't be read when the page opened, the lists on
+        // screen are empty placeholders — writing them back would wipe the
+        // real ones, so they're left untouched.
+        routeErr = 'the saved routing was not loaded yet (or failed to load), so it was left untouched — reload the page and try again'
+      }
       if (templateFormat === 'google_sheet' && routesLoadedRef.current) {
         try {
           const lr = await fetch('/api/doc-templates', { headers: h })

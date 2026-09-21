@@ -711,7 +711,7 @@ function BoatNoteContent() {
   async function onSaveBnModal(): Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }> {
     if (!bnPdf || !selCusdec) return { ok: false, error: 'No PDF or CUSDEC selected' }
     const alreadySaved = !!(savedBnUrl || cusdecs.find(c => c.id === selCusdec)?.boat_note_url)
-    if (alreadySaved && !window.confirm('Boat Note eka mekata dhanma save wela tiyenawa. Replace karannada?'))
+    if (alreadySaved && !window.confirm('Boat Note eka mekata dhanma save wela tiyenawa.\n\nOK = existing eka udin replace karanna (aluth entry ekak hadenne nha)\nCancel = skip karanna (existing eka thiyenawa)'))
       return { ok: false, error: 'Save cancelled — existing link kept as-is.' }
     try {
       const h = await authHeader()
@@ -1030,6 +1030,8 @@ function BoatNoteContent() {
                     onSave={onSaveBnModal}
                     onGetDriveLinks={onGetDriveLinksBnModal}
                     onGetMailFiles={onGetMailFilesBn}
+                    notifyDisabled={bnEntryMode === 'cusdec' && (curHasBnUrl || !!savedBnUrl)}
+                    notifyDisabledReason="Already saved — Notify isn't available for a replace."
                     onClose={() => setSendModalBnOpen(false)}
                     onDone={() => { setSendModalBnOpen(false); loadCusdecs(true); setBnHistoryRefreshKey(k => k + 1) }}
                   />
@@ -1534,7 +1536,7 @@ function PartiesCopyPanel() {
 
   async function onSaveProModal(): Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }> {
     if (!proPdf || !selected) return { ok: false, error: 'No PDF generated' }
-    if (selected.party_copy_url && !window.confirm("Party's Copy link mekata dhanma save wela tiyenawa. Replace karannada?"))
+    if (selected.party_copy_url && !window.confirm("Party's Copy eka mekata dhanma save wela tiyenawa.\n\nOK = existing eka udin replace karanna (aluth entry ekak hadenne nha)\nCancel = skip karanna (existing eka thiyenawa)"))
       return { ok: false, error: 'Save cancelled — existing link kept as-is.' }
     try {
       const h = await authHeader()
@@ -2086,7 +2088,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
 
   async function onSaveModal(): Promise<{ ok: boolean; results?: SendResultFile[]; error?: string }> {
     if (!pdf) return { ok: false, error: 'No PDF generated' }
-    if (entryMode === 'cusdec' && savedLink && !window.confirm(`${label} eka mekata dhanma save wela tiyenawa. Replace karannada?`))
+    if (entryMode === 'cusdec' && savedLink && !window.confirm(`${label} eka mekata dhanma save wela tiyenawa.\n\nOK = existing eka udin replace karanna (aluth entry ekak hadenne nha)\nCancel = skip karanna (existing eka thiyenawa)`))
       return { ok: false, error: 'Save cancelled — existing link kept as-is.' }
     try {
       const h = await authHeader()
@@ -2348,7 +2350,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
 // populated by SendModal's Save tick — see document-uploads.ts) rather than
 // a new table: a generation only shows up here once actually saved via
 // Send, not on every raw/test Generate click.
-interface HistoryDoc { id: string; doc_type: string; file_name: string; drive_url: string; created_at: string }
+interface HistoryDoc { id: string; doc_type: string; file_name: string; drive_url: string; created_at: string; updated_at?: string }
 
 function GenerationHistoryPanel({ documentType, refreshKey }: { documentType: string; refreshKey?: number }) {
   const [items, setItems] = useState<HistoryDoc[]>([])
@@ -2427,7 +2429,7 @@ function GenerationHistoryPanel({ documentType, refreshKey }: { documentType: st
           <div key={item.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2">
             <div className="min-w-0">
               <p className="font-medium text-gray-800 truncate">{item.file_name}</p>
-              <p className="text-gray-400">{new Date(item.created_at).toLocaleString('en-GB')}</p>
+              <p className="text-gray-400">{new Date(item.updated_at || item.created_at).toLocaleString('en-GB')}</p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0 ml-2">
               <a href={item.drive_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline" title="View">View</a>

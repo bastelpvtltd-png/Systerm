@@ -19,6 +19,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!template_id) return res.status(400).json({ error: 'template_id required' })
       const { data, error } = await sb.from('template_sheet_routes').select('*').eq('template_id', template_id).order('created_at')
       if (error) throw error
+      // Always read live from the database — a cached copy is exactly how a
+      // saved route could "disappear" after a refresh.
+      res.setHeader('Cache-Control', 'no-store')
       return res.json({ routes: data || [] })
     }
 
@@ -48,7 +51,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const { error } = await sb.from('template_sheet_routes').insert(rows)
         if (error) throw error
       }
-      return res.json({ ok: true, saved: routes.length })
+      // Hand back what is actually stored now, so the page shows the
+      // database's answer instead of assuming the save worked.
+      const { data: stored, error: readErr } = await sb.from('template_sheet_routes').select('*').eq('template_id', template_id).eq('route_type', route_type).order('created_at')
+      if (readErr) throw readErr
+      if ((stored || []).length !== routes.length) {
+        return res.status(500).json({ error: `Routing did not save completely — sent ${routes.length} route(s), the database holds ${(stored || []).length}. Check the template_sheet_routes table's constraints.` })
+      }
+      return res.json({ ok: true, saved: routes.length, routes: stored || [] })
     }
 
     res.status(405).end()

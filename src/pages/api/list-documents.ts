@@ -18,11 +18,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { doc_type, limit } = req.query
     const limitNum = Math.min(200, Math.max(1, parseInt(String(limit || '50'), 10) || 50))
+    // Over-fetch, then collapse below: the same document (same doc_type +
+    // file name) must show as ONE row however many times it was generated/
+    // saved, so the limit is applied after collapsing, not before.
     let query = supabaseAdmin
       .from('uploaded_documents')
-      .select('id, doc_type, file_name, drive_url, extracted_data, uploaded_by, created_at')
+      .select('id, doc_type, file_name, drive_url, extracted_data, uploaded_by, created_at, updated_at')
       .order('created_at', { ascending: false })
-      .limit(limitNum)
+      .limit(Math.min(600, limitNum * 3))
 
     if (doc_type) query = query.eq('doc_type', doc_type as string)
     // Preview access control: non-admins only ever see PDFs they uploaded.
@@ -30,7 +33,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { data, error } = await query
     if (error) return res.status(400).json({ error: error.message })
-    res.json({ records: data || [] })
+    const seen = new Set<string>()
+    const records = (data || []).filter(r => {
+      const key = `${r.doc_type || ''}|${r.file_name || ''}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    }).slice(0, limitNum)
+    res.json({ records })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
   }

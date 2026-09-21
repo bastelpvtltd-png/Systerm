@@ -23,10 +23,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('id', cusdec_id)
     if (error) return res.status(400).json({ error: error.message })
 
-    await supabaseAdmin.from('uploaded_documents').insert({
-      doc_type: 'party_copy', file_name: file_name || 'party_copy.pdf', file_url: '', drive_url,
-      uploaded_by: authed.userId, updated_at: new Date().toISOString(),
-    })
+    // Saving the Party's Copy again (Replace) is the same document — update
+    // its existing History row instead of adding a second one.
+    const nowIso = new Date().toISOString()
+    const partyFileName = file_name || 'party_copy.pdf'
+    const { data: prevDoc } = await supabaseAdmin.from('uploaded_documents').select('id')
+      .eq('doc_type', 'party_copy').eq('file_name', partyFileName)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+    if (prevDoc) {
+      await supabaseAdmin.from('uploaded_documents')
+        .update({ drive_url, uploaded_by: authed.userId, updated_at: nowIso })
+        .eq('id', prevDoc.id)
+    } else {
+      await supabaseAdmin.from('uploaded_documents').insert({
+        doc_type: 'party_copy', file_name: partyFileName, file_url: '', drive_url,
+        uploaded_by: authed.userId, updated_at: nowIso,
+      })
+    }
 
     res.json({ ok: true })
   } catch (err: any) {

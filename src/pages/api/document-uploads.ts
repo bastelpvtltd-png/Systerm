@@ -40,75 +40,76 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         uploadedByName = prof?.full_name || prof?.username || ''
       }
 
-      // A "resaved" send is the SAME document going through Send again (a
-      // duplicate replace in Upload Docs, or a regenerated document in Docs
-      // Create that replaces the one already saved) — not a new document.
-      // Inserting a fresh row every time made it show up twice in Processed
-      // History, looking like two different documents were processed. When
-      // resaved, find that existing row and update it in place, so a
-      // document keeps exactly one row across any number of resaves.
-      //
-      // How the existing row is found:
-      //  • single_per_cusdec (sent by Docs Create — Boat Note, Party's Copy,
-      //    Invoice etc. are one document per CUSDEC per type): by
-      //    (cusdec_id, doc_type). A regenerated file often has a different
-      //    file_name, so matching on the name alone missed it and a second
-      //    row was created.
-      //  • otherwise (Upload Docs — a CUSDEC can own many CDNs/barcodes, so
-      //    cusdec_id + doc_type is NOT unique there): by file_name only, as
-      //    before.
+      // The SAME document going through Send again must never become a second
+      // row (it showed up twice in Processed History, looking like two
+      // different documents). Two ways it is recognised:
+      //  • single_per_cusdec — sent by Docs Create, where a document type is
+      //    one-per-CUSDEC (Boat Note, Party's Copy, Invoice...). Matched by
+      //    (cusdec_id, doc_type) whether or not the page thought it was a
+      //    re-save, and even when the regenerated file has a different name.
+      //  • resaved — Upload Docs' duplicate "Replace". A CUSDEC can own many
+      //    CDNs/barcodes there, so (cusdec_id, doc_type) is NOT unique; matched
+      //    by file_name only, as before.
+      // Either way the existing row is updated in place: exactly one row per
+      // document, however many times it is sent.
       let data: any = null
-      if (resaved) {
-        let existing: { id: string; reason: string | null; reason_note: string | null } | null = null
-        if (single_per_cusdec && cusdec_id && doc_type) {
-          const { data: byCusdec } = await supabaseAdmin
-            .from('document_uploads')
-            .select('id, reason, reason_note')
-            .eq('cusdec_id', cusdec_id).eq('doc_type', doc_type)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-          existing = byCusdec
-        }
-        if (!existing) {
-          const { data: byName } = await supabaseAdmin
-            .from('document_uploads')
-            .select('id, reason, reason_note')
-            .eq('file_name', file_name)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-          existing = byName
-        }
-        if (existing) {
-          // The Reason picked on THIS send is the current one, so Processed
-          // History shows it (it used to keep the very first reason, which
-          // left a document stuck showing a reason that no longer applied).
-          // Only when this send carries no reason at all is the old one kept.
-          const newReason = reason || null
-          const { data: updated, error: updateError } = await supabaseAdmin
-            .from('document_uploads')
-            .update({
-              drive_url: drive_url || null, doc_type: doc_type || null,
-              file_name,
-              extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
-              status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
-              uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
-              reason: newReason ?? existing.reason ?? null,
-              reason_note: newReason ? (newReason === 'Other' ? (reason_note || null) : null) : (existing.reason_note ?? null),
-              cusdec_id: cusdec_id || null,
-            })
-            .eq('id', existing.id)
-            .select().single()
-          if (updateError) throw updateError
-          data = updated
-        }
+      let existing: { id: string; reason: string | null; reason_note: string | null } | null = null
+      if (single_per_cusdec && cusdec_id && doc_type) {
+        const { data: byCusdec } = await supabaseAdmin
+          .from('document_uploads')
+          .select('id, reason, reason_note')
+          .eq('cusdec_id', cusdec_id).eq('doc_type', doc_type)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        existing = byCusdec
+      }
+      if (!existing && (resaved || single_per_cusdec)) {
+        // Docs Create rows saved before cusdec_id was being recorded have no
+        // cusdec_id to match on, but their file name is stable (e.g. B55296.pdf
+        // is always the Boat Note of CUSDEC 55296) — so fall back to the name,
+        // scoped to the same doc_type for Docs Create sends.
+        let nameQuery = supabaseAdmin
+          .from('document_uploads')
+          .select('id, reason, reason_note')
+          .eq('file_name', file_name)
+        if (single_per_cusdec && doc_type) nameQuery = nameQuery.eq('doc_type', doc_type)
+        const { data: byName } = await nameQuery
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        existing = byName
+      }
+      // A re-send of a document already on record is a replace, not a new
+      // document: it never notifies (same rule as Upload Docs' duplicate
+      // Replace) and is logged as "re-saved" instead.
+      const isResave = !!(resaved || existing)
+      const doNotify = !!notify && !isResave
+      if (existing) {
+        // Keep the reason the document was FIRST filed with — the resend's
+        // reason must not overwrite it, so Processed History keeps showing the
+        // original one.
+        const { data: updated, error: updateError } = await supabaseAdmin
+          .from('document_uploads')
+          .update({
+            drive_url: drive_url || null, doc_type: doc_type || null,
+            file_name,
+            extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
+            status: doNotify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
+            uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
+            reason: existing.reason ?? null, reason_note: existing.reason_note ?? null,
+            cusdec_id: cusdec_id || null,
+          })
+          .eq('id', existing.id)
+          .select().single()
+        if (updateError) throw updateError
+        data = updated
       }
       if (!data) {
         const { data: inserted, error } = await supabaseAdmin.from('document_uploads').insert({
           file_name, drive_url: drive_url || null, doc_type: doc_type || null,
           extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
-          status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
+          status: doNotify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
           uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
           reason: reason || null, reason_note: reason === 'Other' ? (reason_note || null) : null,
           cusdec_id: cusdec_id || null,
@@ -145,7 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // (document-link.ts / final-document-tasks.ts's own `done`/`update`
       // actions) already keeps cusdec_document_links current without a new
       // task or a second notify.
-      if (reason === 'Final Document' && cusdec_id && doc_type && drive_url && notify) {
+      if (reason === 'Final Document' && cusdec_id && doc_type && drive_url && doNotify) {
         const { data: existingTask } = await supabaseAdmin.from('final_document_tasks')
           .select('id').eq('cusdec_id', cusdec_id).eq('document_type', doc_type).in('status', ['pending', 'picked']).maybeSingle()
         if (!existingTask) {
@@ -189,15 +190,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // ways at once, so a document could show as "pending" in the Final
       // Document panel after it had already been picked via Active Log (or
       // vice versa). Final Document sends skip this generic path entirely.
-      if (notify && reason !== 'Final Document') {
-        const nowIso = new Date().toISOString()
-        await supabaseAdmin.from('dashboard_notifications').insert({
-          document_id: data.id, uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
-        })
-        await supabaseAdmin.from('pick_history_log').insert({
-          document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'notify',
-          pdf_notify_user: uploadedByName, notify_update_time: nowIso,
-        })
+      if (doNotify && reason !== 'Final Document') {
+        // One document = one Activity Log entry. If this document already has
+        // a notification (a second Send of the same document, a double click),
+        // don't add another — that is what made the same file show up twice
+        // in the Activity Log and get a second "Notified" event.
+        const { data: existingNotification } = await supabaseAdmin.from('dashboard_notifications')
+          .select('id').eq('document_id', data.id).limit(1).maybeSingle()
+        if (!existingNotification) {
+          const nowIso = new Date().toISOString()
+          await supabaseAdmin.from('dashboard_notifications').insert({
+            document_id: data.id, uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
+          })
+          await supabaseAdmin.from('pick_history_log').insert({
+            document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'notify',
+            pdf_notify_user: uploadedByName, notify_update_time: nowIso,
+          })
+        }
       }
 
       // A duplicate-replace save always sends notify: false (see
@@ -208,7 +217,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // view it looked exactly like nothing happened. Log it separately,
       // regardless of the notify flag, so the history correctly shows
       // "this document was re-saved today" for this file.
-      if (resaved) {
+      if (isResave) {
         try {
           await supabaseAdmin.from('pick_history_log').insert({
             document_id: data.id, user_id: authed.userId, user_name: uploadedByName, action: 'resaved',
