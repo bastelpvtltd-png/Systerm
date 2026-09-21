@@ -196,10 +196,23 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     if (fill_sheet_gid && !tabTitle(fill_sheet_gid)) throw new Error('The selected Fill Sheet no longer exists in the spreadsheet — pick again.')
     if (print_sheet_gid && !tabTitle(print_sheet_gid)) throw new Error('The selected Print Sheet no longer exists in the spreadsheet — pick again.')
 
-    const fillRoute = fill_sheet_gid ? { sheet_gid: fill_sheet_gid } : findRoute('fill')
-    const printRoute = print_sheet_gid ? { sheet_gid: print_sheet_gid } : findRoute('print')
-    const routedFillSheet = fillRoute ? tabTitle(fillRoute.sheet_gid) : undefined
-    const routedPrintSheet = printRoute ? tabTitle(printRoute.sheet_gid) : undefined
+    const fillRoute: { sheet_gid: string; sheet_name?: string } | undefined = fill_sheet_gid ? { sheet_gid: fill_sheet_gid } : findRoute('fill')
+    const printRoute: { sheet_gid: string; sheet_name?: string } | undefined = print_sheet_gid ? { sheet_gid: print_sheet_gid } : findRoute('print')
+    // A saved route is resolved by its sheet ID (gid) first — that survives
+    // renaming the tab — and, if no tab in the spreadsheet carries that ID
+    // any more (spreadsheet re-created/re-linked, tab duplicated and the old
+    // one deleted, ids saved from a different copy of the file), by the tab
+    // NAME saved with the route. Only when neither exists is the tab
+    // genuinely gone.
+    const norm = (v?: string | null) => String(v ?? '').trim().toLowerCase()
+    const tabForRoute = (r?: { sheet_gid: string; sheet_name?: string }) => {
+      if (!r) return undefined
+      return tabTitle(r.sheet_gid)
+        || (r.sheet_name ? liveSheets.find(s => s.title === r.sheet_name)?.title : undefined)
+        || (r.sheet_name ? liveSheets.find(s => norm(s.title) === norm(r.sheet_name))?.title : undefined)
+    }
+    const routedFillSheet = tabForRoute(fillRoute)
+    const routedPrintSheet = tabForRoute(printRoute)
 
     // Sheet Routing is the ONLY source of truth for which tab to fill/print
     // once any route exists for this template — there's no falling back to
@@ -215,14 +228,18 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     const needFill = fillRoutingInUse && !routedFillSheet
     const needPrint = printRoutingInUse && !routedPrintSheet
     if (needFill || needPrint) {
-      const why = (label: 'Fill' | 'Print', hadRoute: boolean) => hadRoute
-        ? `The routed ${label} Sheet tab no longer exists.`
+      // When a route matched but its tab can't be found, spell out what was
+      // saved and what the spreadsheet really contains, so a stale/mismatched
+      // sheet ID or a different spreadsheet is obvious at a glance.
+      const tabsFound = liveSheets.map(s => `${s.title} (${s.sheetId})`).join(', ')
+      const why = (label: 'Fill' | 'Print', route?: { sheet_gid: string; sheet_name?: string }) => route
+        ? `The routed ${label} Sheet tab ("${route.sheet_name || '?'}", id ${route.sheet_gid}) was not found in the spreadsheet …${spreadsheetId.slice(-6)}. Tabs found: ${tabsFound || 'none'}.`
         : tinVat
           ? `No ${label} Sheet route matches this shipper's TIN VAT (${tinVat}).`
           : `No ${label} Sheet route could be matched (no TIN VAT on this record).`
       const parts: string[] = []
-      if (needFill) parts.push(why('Fill', !!fillRoute))
-      if (needPrint) parts.push(why('Print', !!printRoute))
+      if (needFill) parts.push(why('Fill', fillRoute))
+      if (needPrint) parts.push(why('Print', printRoute))
       const err: any = new Error(`${parts.join(' ')} Pick the sheet below (used for this one generate only), or add a route in Templates.`)
       err.code = 'SHEET_SELECTION_REQUIRED'
       err.sheets = liveSheets

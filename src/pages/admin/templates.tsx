@@ -96,6 +96,25 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
   const [newSheetGid, setNewSheetGid] = useState('')
   const [pickerOpenIdx, setPickerOpenIdx] = useState<number | null>(null)
   const [shipperSearch, setShipperSearch] = useState('')
+  const [healed, setHealed] = useState(false)
+
+  // A route's saved sheet ID can stop matching the spreadsheet (file
+  // re-linked/re-created, tab re-made) while the tab NAME still exists — it
+  // used to keep showing the cached name, look fine, and then fail at
+  // generate time. Re-point such routes at the live tab's ID (generation
+  // does the same by name on the server); Save then stores the fresh ID.
+  useEffect(() => {
+    if (!sheets.length) return
+    const hasLive = (gid: string) => sheets.some(s => String(s.sheetId) === gid)
+    const stale = routes.filter(r => !hasLive(r.sheet_gid) && sheets.some(s => s.title === r.sheet_name))
+    if (!stale.length) return
+    setRoutes(prev => prev.map(r => {
+      if (hasLive(r.sheet_gid)) return r
+      const byName = sheets.find(s => s.title === r.sheet_name)
+      return byName ? { ...r, sheet_gid: String(byName.sheetId) } : r
+    }))
+    setHealed(true)
+  }, [sheets, routes]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function addRoute() {
     if (!newSheetGid) return
@@ -131,6 +150,8 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
           // name cached in the DB from whenever this route was first saved,
           // which goes stale the moment the tab is renamed in Google Sheets.
           const liveName = sheets.find(s => String(s.sheetId) === r.sheet_gid)?.title || r.sheet_name
+          // Sheet list loaded, yet neither this route's ID nor its name is in it.
+          const tabMissing = sheets.length > 0 && !sheets.some(s => String(s.sheetId) === r.sheet_gid || s.title === r.sheet_name)
           // What was saved, spelled out on the card itself (not hidden behind
           // "edit"), so a reopened template visibly shows its saved routing.
           const nameOf = (t: string) => shippers.find(s => s.tin_vat === t)?.exporter?.slice(0, 24) || t
@@ -146,6 +167,7 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
                 <span className="text-xs font-medium text-gray-800">{liveName}</span>
                 <button onClick={() => removeRoute(idx)} className="text-gray-300 hover:text-red-500"><X size={13}/></button>
               </div>
+              {tabMissing && <p className="text-[11px] mb-1 text-red-500">⚠ This tab isn't in the linked spreadsheet any more — remove it and add the right one.</p>}
               <p className={`text-[11px] mb-1 ${r.tin_vat_list.length === 0 ? 'text-amber-600' : 'text-gray-500'}`}>{summary}</p>
               <button onClick={() => setPickerOpenIdx(pickerOpenIdx === idx ? null : idx)} className="text-[11px] text-blue-600 hover:underline mb-1.5">
                 {pickerOpenIdx === idx ? 'Hide shippers' : isAll ? 'All Shippers — edit' : `${r.tin_vat_list.length} shipper(s) — edit`}
@@ -182,6 +204,7 @@ function SheetRouteEditor({ title, routeType, routes, setRoutes, sheets, shipper
           )
         })}
         {routes.length === 0 && <p className="text-[11px] text-gray-400">No routes — using the default sheet for everyone.</p>}
+        {healed && <p className="text-[11px] text-amber-600">Sheet IDs were out of date and have been refreshed from the spreadsheet — press Save to keep them.</p>}
       </div>
       <div className="flex gap-1.5 mb-2">
         <select value={newSheetGid} onChange={e => setNewSheetGid(e.target.value)} className="input text-xs flex-1">
