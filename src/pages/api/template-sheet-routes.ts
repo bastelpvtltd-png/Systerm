@@ -29,17 +29,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       if (!template_id || !route_type || !Array.isArray(routes)) return res.status(400).json({ error: 'template_id, route_type and routes required' })
 
-      await sb.from('template_sheet_routes').delete().eq('template_id', template_id).eq('route_type', route_type)
-      if (routes.length) {
-        const rows = routes.filter(r => r.sheet_gid && r.tin_vat_list?.length).map(r => ({
-          template_id, route_type, sheet_gid: r.sheet_gid, sheet_name: r.sheet_name, tin_vat_list: r.tin_vat_list,
-        }))
-        if (rows.length) {
-          const { error } = await sb.from('template_sheet_routes').insert(rows)
-          if (error) throw error
-        }
+      // A route with no sheet or no shippers used to be dropped silently here
+      // while the page still said "saved" — so it looked saved, then was gone
+      // after a refresh. Refuse it loudly instead, before touching anything
+      // already stored.
+      const incomplete = routes.filter(r => !r.sheet_gid || !r.tin_vat_list?.length)
+      if (incomplete.length) {
+        const names = incomplete.map(r => `"${r.sheet_name || r.sheet_gid || 'unnamed sheet'}"`).join(', ')
+        return res.status(400).json({ error: `Nothing was saved: ${names} ha shipper kenek (nathnam "All Shippers") select karala natha. Shipper select karanna, nathnam e sheet eka remove karanna.` })
       }
-      return res.json({ ok: true })
+
+      const { error: delErr } = await sb.from('template_sheet_routes').delete().eq('template_id', template_id).eq('route_type', route_type)
+      if (delErr) throw delErr
+      if (routes.length) {
+        const rows = routes.map(r => ({
+          template_id, route_type, sheet_gid: String(r.sheet_gid), sheet_name: r.sheet_name, tin_vat_list: r.tin_vat_list,
+        }))
+        const { error } = await sb.from('template_sheet_routes').insert(rows)
+        if (error) throw error
+      }
+      return res.json({ ok: true, saved: routes.length })
     }
 
     res.status(405).end()

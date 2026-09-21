@@ -3,7 +3,18 @@ import { X, Loader, Save, Mail, Bell, AlertTriangle, Link2 } from 'lucide-react'
 import { authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from './EmailPdfModal'
 
-export interface SendResultFile { fileName: string; driveLink: string; docType?: string; cusdecId?: string }
+export interface SendResultFile {
+  fileName: string; driveLink: string; docType?: string; cusdecId?: string
+  // This save replaced a document that was already saved (same document,
+  // regenerated). Passed on to document-uploads so it updates the existing
+  // Processed History row instead of adding a second one for the same document.
+  resaved?: boolean
+  // This document type is one-per-CUSDEC (Docs Create: Boat Note, Party's
+  // Copy, Invoice...), so a resave can be matched to its existing row by
+  // (cusdec_id, doc_type) even when the regenerated file has a new name.
+  // Upload Docs never sets this — a CUSDEC can own many CDNs/barcodes there.
+  singlePerCusdec?: boolean
+}
 
 // The Upload Docs "Send" workflow: Save is ticked by default (matches the
 // old one-click Save behavior), Mail/Notify are opt-in. Nothing touches
@@ -64,7 +75,10 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
   // defaults off.
   requireReason?: boolean
 }) {
-  const [save, setSave] = useState(true)
+  // With Save/Notify hidden (Manual Entry — nothing to save the document
+  // against) Save must start unticked: it can't be unticked by hand, and a
+  // hidden-but-ticked Save silently uploaded to Drive and logged a history row.
+  const [save, setSave] = useState(!hideSaveAndNotify)
   const [mail, setMail] = useState(false)
   const [notify, setNotify] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -140,7 +154,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
       // Passed. Notify only works for a saved file, so Notify wanted with Save
       // unticked is an error shown right here in this panel (it stays open):
       // tick Save to notify, or drop Notify to send by Mail only.
-      const wantsNotify = !restrictToSaveOnly && (notify || isCusdecPassed) && !notifyDisabled
+      const wantsNotify = !restrictToSaveOnly && !hideSaveAndNotify && (notify || isCusdecPassed) && !notifyDisabled
       if (!restrictToSaveOnly && !hideSaveAndNotify && !save && wantsNotify) {
         setError(isCusdecPassed
           ? "Notify can't be done without Save — tick Save as well to notify. (Notify is always on for CUSDEC Passed; pick another Reason for a Mail-only send.)"
@@ -192,6 +206,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
             file_name: f.fileName, drive_url: f.driveLink, is_saved_to_db: effectiveSave, notify: effectiveNotify, uploaded_by_name: uploaderName,
             reason: restrictToSaveOnly ? undefined : (reason || undefined), reason_note: !restrictToSaveOnly && reason === 'Other' ? reasonNote.trim() : undefined,
             doc_type: f.docType || docType || undefined,
+            resaved: f.resaved || undefined, single_per_cusdec: f.singlePerCusdec || undefined,
             // f.cusdecId (the row this specific file's Save just created/matched)
             // is only known per-file for a fresh upload — the cusdecId PROP is
             // only ever populated by callers already working an existing saved
@@ -303,7 +318,7 @@ export default function SendModal({ label, uploaderName, docType, cusdecId, cusd
         </div>
         <div className="flex gap-3 p-5 border-t">
           <button onClick={onClose} disabled={busy} className="btn-secondary flex-1 disabled:opacity-50">Cancel</button>
-          <button onClick={() => handleDone()} disabled={busy || (restrictToSaveOnly ? !save : (!save && !mail && !notify && !isCusdecPassed)) || (!restrictToSaveOnly && requireReason && !reason)} className="btn-primary flex-1 flex items-center justify-center gap-2">
+          <button onClick={() => handleDone()} disabled={busy || (restrictToSaveOnly ? !save : (!save && !mail && !(notify && !hideSaveAndNotify) && !(isCusdecPassed && !hideSaveAndNotify))) || (!restrictToSaveOnly && requireReason && !reason)} className="btn-primary flex-1 flex items-center justify-center gap-2">
             {busy ? <Loader size={14} className="animate-spin"/> : null}Done
           </button>
         </div>

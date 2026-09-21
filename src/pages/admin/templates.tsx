@@ -259,7 +259,9 @@ function DocTemplatesContent() {
       const d = await res.json().catch(() => ({}))
       if (stale()) return false
       if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
-      const routes: SheetRoute[] = d.routes || []
+      // sheet_gid can come back as a number depending on the column type; the
+      // editor compares it with String(sheetId), so keep it a string.
+      const routes: SheetRoute[] = (d.routes || []).map((r: SheetRoute) => ({ ...r, sheet_gid: String(r.sheet_gid), tin_vat_list: r.tin_vat_list || [] }))
       if (!only || only === 'fill')  setFillRoutes(routes.filter(r => r.route_type === 'fill'))
       if (!only || only === 'print') setPrintRoutes(routes.filter(r => r.route_type === 'print'))
       routesLoadedRef.current = true

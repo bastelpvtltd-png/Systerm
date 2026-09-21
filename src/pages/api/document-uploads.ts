@@ -31,7 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'POST') {
       const authed = await requireAuth(req)
       if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
-      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note, cusdec_id, cusdec_number, lock_cusdec_ids, resaved } = req.body
+      const { file_name, drive_url, doc_type, extracted_data, is_saved_to_db, notify, uploaded_by_name, reason, reason_note, cusdec_id, cusdec_number, lock_cusdec_ids, resaved, single_per_cusdec } = req.body
       if (!file_name) return res.status(400).json({ error: 'file_name required' })
 
       let uploadedByName = uploaded_by_name || ''
@@ -40,42 +40,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         uploadedByName = prof?.full_name || prof?.username || ''
       }
 
-      // A "resaved" send (duplicate replace — see resolveMatchReplace in
-      // upload-docs.tsx) is the SAME document going through Send again, not
-      // a new one appearing. Inserting a fresh row every time made it show
-      // up twice in Processed History (once from the original send, once
-      // from today's resave) — same file_name, two rows, looking like two
-      // different documents were processed. When resaved, find that
-      // existing row and update it in place instead, so the document keeps
-      // exactly one Processed History row across any number of resaves.
-      // Matched on file_name only (no more reliable shared key is sent
-      // through this endpoint today) — if two genuinely different documents
-      // ever share an exact file_name this could update the wrong row, so
-      // flag that to whoever reviews this if it turns out to matter.
+      // A "resaved" send is the SAME document going through Send again (a
+      // duplicate replace in Upload Docs, or a regenerated document in Docs
+      // Create that replaces the one already saved) — not a new document.
+      // Inserting a fresh row every time made it show up twice in Processed
+      // History, looking like two different documents were processed. When
+      // resaved, find that existing row and update it in place, so a
+      // document keeps exactly one row across any number of resaves.
+      //
+      // How the existing row is found:
+      //  • single_per_cusdec (sent by Docs Create — Boat Note, Party's Copy,
+      //    Invoice etc. are one document per CUSDEC per type): by
+      //    (cusdec_id, doc_type). A regenerated file often has a different
+      //    file_name, so matching on the name alone missed it and a second
+      //    row was created.
+      //  • otherwise (Upload Docs — a CUSDEC can own many CDNs/barcodes, so
+      //    cusdec_id + doc_type is NOT unique there): by file_name only, as
+      //    before.
       let data: any = null
       if (resaved) {
-        const { data: existing } = await supabaseAdmin
-          .from('document_uploads')
-          .select('id, reason, reason_note')
-          .eq('file_name', file_name)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
+        let existing: { id: string; reason: string | null; reason_note: string | null } | null = null
+        if (single_per_cusdec && cusdec_id && doc_type) {
+          const { data: byCusdec } = await supabaseAdmin
+            .from('document_uploads')
+            .select('id, reason, reason_note')
+            .eq('cusdec_id', cusdec_id).eq('doc_type', doc_type)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          existing = byCusdec
+        }
+        if (!existing) {
+          const { data: byName } = await supabaseAdmin
+            .from('document_uploads')
+            .select('id, reason, reason_note')
+            .eq('file_name', file_name)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          existing = byName
+        }
         if (existing) {
-          // A duplicate-replace resave is the SAME document being sent
-          // again, not a new one with its own reason — keep whatever reason
-          // it was FIRST saved with, no matter what reason this particular
-          // resend happened to carry. Otherwise the second (or third...)
-          // PDF added as a duplicate could silently overwrite the original
-          // reason the document is actually filed/approved under.
+          // The Reason picked on THIS send is the current one, so Processed
+          // History shows it (it used to keep the very first reason, which
+          // left a document stuck showing a reason that no longer applied).
+          // Only when this send carries no reason at all is the old one kept.
+          const newReason = reason || null
           const { data: updated, error: updateError } = await supabaseAdmin
             .from('document_uploads')
             .update({
               drive_url: drive_url || null, doc_type: doc_type || null,
+              file_name,
               extracted_data: extracted_data || null, is_saved_to_db: !!is_saved_to_db,
               status: notify ? 'notified' : (is_saved_to_db ? 'completed' : 'pending_action'),
               uploaded_by: authed.userId, uploaded_by_name: uploadedByName,
-              reason: existing.reason ?? null, reason_note: existing.reason_note ?? null,
+              reason: newReason ?? existing.reason ?? null,
+              reason_note: newReason ? (newReason === 'Other' ? (reason_note || null) : null) : (existing.reason_note ?? null),
               cusdec_id: cusdec_id || null,
             })
             .eq('id', existing.id)

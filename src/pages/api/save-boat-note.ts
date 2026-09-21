@@ -31,10 +31,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .maybeSingle()
     if (error) return res.status(400).json({ error: error.message })
 
-    await supabaseAdmin.from('uploaded_documents').insert({
-      doc_type: 'boat_note', file_name: file_name || 'boat_note.pdf', file_url: '', drive_url,
-      uploaded_by: authed.userId, updated_at: nowIso,
-    })
+    // Saving the Boat Note again (Replace) is the same document — update its
+    // existing row instead of adding a second one for it to the History /
+    // Database lists.
+    const boatNoteFileName = file_name || 'boat_note.pdf'
+    const { data: prevDoc } = await supabaseAdmin.from('uploaded_documents').select('id')
+      .eq('doc_type', 'boat_note').eq('file_name', boatNoteFileName)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+    if (prevDoc) {
+      await supabaseAdmin.from('uploaded_documents')
+        .update({ drive_url, uploaded_by: authed.userId, updated_at: nowIso })
+        .eq('id', prevDoc.id)
+    } else {
+      await supabaseAdmin.from('uploaded_documents').insert({
+        doc_type: 'boat_note', file_name: boatNoteFileName, file_url: '', drive_url,
+        uploaded_by: authed.userId, updated_at: nowIso,
+      })
+    }
 
     // Every Save Only also archives into the "Done Boat Note" list.
     const { data: prof } = await supabaseAdmin.from('profiles').select('username, full_name').eq('id', authed.userId).maybeSingle()
