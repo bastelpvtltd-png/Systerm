@@ -521,6 +521,17 @@ function DashboardContent() {
   )
 }
 
+// Activity Log reason filter — same reasons the Send panel offers
+// (SendModal's REASON_OPTIONS), plus "All".
+const ACTIVITY_REASON_FILTERS = ['All', 'Boat Note Passed', 'CUSDEC Passed', 'Container Moved', 'Final Document', 'Other']
+
+// Temporary merged files (CUSDEC set / Boat Note set / CDN set) made by
+// /api/merge-picked-boat-notes when Boat Note Passed (B...) documents are
+// mailed or downloaded from My Picked Tasks.
+type TempMergedFile = { fileName: string; driveLink: string; driveId: string; docType: string }
+const TEMP_BACKUP_EMAIL = 'bathiyapradeep7788@gmail.com'
+const TEMP_MERGE_SUBJECT = 'Boat Note Passed'
+
 // ── Incoming (Notify) — every signed-in user sees every still-active
 // notification; Pick locks it to just them (see pick-task.ts's atomic claim).
 // Multiple can be ticked and picked together in one go.
@@ -533,6 +544,7 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
   const [deleting, setDeleting] = useState(false)
   const [viewing, setViewing] = useState<any | null>(null)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
+  const [reasonFilter, setReasonFilter] = useState('All')
 
   async function load(silent = false) {
     if (!silent) setLoading(true)
@@ -553,9 +565,14 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
   }, [])
 
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
-  const selectedIds = Object.keys(selected).filter(id => selected[id])
-  const allSelected = items.length > 0 && selectedIds.length === items.length
-  function toggleAll() { setSelected(allSelected ? {} : Object.fromEntries(items.map(n => [n.id, true]))) }
+  // Everything below (Select all, Pick Selected, Delete Selected) works on
+  // the FILTERED list only, so picking "Boat Note Passed" + Select all can
+  // never pick a CUSDEC Passed item that isn't on screen.
+  const visibleItems = reasonFilter === 'All' ? items : items.filter(n => (n.document_uploads?.reason || '') === reasonFilter)
+  const selectedIds = visibleItems.filter(n => selected[n.id]).map(n => n.id)
+  const allSelected = visibleItems.length > 0 && selectedIds.length === visibleItems.length
+  function toggleAll() { setSelected(allSelected ? {} : Object.fromEntries(visibleItems.map(n => [n.id, true]))) }
+  function reasonCount(r: string) { return r === 'All' ? items.length : items.filter(n => (n.document_uploads?.reason || '') === r).length }
 
   async function pickOne(n: any): Promise<boolean> {
     try {
@@ -581,7 +598,7 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
 
   async function pickSelected() {
     setPickingAll(true)
-    const toPick = items.filter(n => selected[n.id])
+    const toPick = visibleItems.filter(n => selected[n.id])
     let anyOk = false
     for (const n of toPick) {
       const ok = await pickOne(n)
@@ -640,16 +657,22 @@ function IncomingPanel({ onPicked }: { onPicked: () => void }) {
           </div>
         )}
       </div>
+      <div className="flex items-center gap-2 mb-2">
+        <select value={reasonFilter} onChange={e => { setReasonFilter(e.target.value); setSelected({}) }}
+          className="border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-green-400">
+          {ACTIVITY_REASON_FILTERS.map(r => <option key={r} value={r}>{r === 'All' ? 'All reasons' : r} ({reasonCount(r)})</option>)}
+        </select>
+      </div>
       {loading ? (
         <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
-      ) : items.length === 0 ? (
-        <p className="text-xs text-gray-400 text-center py-6">Nothing waiting</p>
+      ) : visibleItems.length === 0 ? (
+        <p className="text-xs text-gray-400 text-center py-6">{items.length === 0 ? 'Nothing waiting' : `Nothing waiting for "${reasonFilter}"`}</p>
       ) : (
         <div className="space-y-1.5 max-h-80 overflow-y-auto">
           <button onClick={toggleAll} className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 px-0.5 pb-1">
             {allSelected ? <CheckSquare size={14} className="text-green-600"/> : <Square size={14}/>} Select all
           </button>
-          {items.map(n => (
+          {visibleItems.map(n => (
             <div key={n.id} className="flex items-center justify-between text-xs border border-gray-100 rounded-lg p-2.5">
               <div className="flex items-center gap-2 min-w-0">
                 <button onClick={() => toggle(n.id)} className="flex-shrink-0 text-gray-300 hover:text-green-600">
@@ -713,6 +736,10 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   const [pendingMailActions, setPendingMailActions] = useState<{ taskIds: string[]; docIds: { id: string; ephemeral: boolean }[] } | null>(null)
   const [emailReason, setEmailReason] = useState<{ reason: string | null; note: string | null } | null>(null)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
+  // Boat Note Passed merge: true while the merged sets are being built, and
+  // the temporary Drive files that go out with the current Mail popup.
+  const [merging, setMerging] = useState(false)
+  const [tempFiles, setTempFiles] = useState<TempMergedFile[] | null>(null)
 
   async function load(silent = false) {
     if (!silent) setLoading(true)
@@ -800,40 +827,149 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     })).catch(() => {})
   }
 
+  // ── Boat Note Passed (B...) documents ────────────────────────────────
+  // Mail/Download of these does NOT send the B PDF itself: the server finds
+  // each one's CUSDEC/Party's Copy/CDNs in the database and builds up to
+  // three merged temporary files for the whole selection (CUSDEC set, Boat
+  // Note set, CDN set). Those are what gets mailed/downloaded.
+  function isBoatNoteTask(t: any): boolean {
+    const d = t?.document_uploads
+    return !!d && d.reason === 'Boat Note Passed' && (d.doc_type === 'boat_note' || /^B\d/i.test(d.file_name || ''))
+  }
+
+  async function mergeBoatNoteTasks(boatTasks: any[]): Promise<TempMergedFile[] | null> {
+    setMerging(true)
+    try {
+      const res = await fetch('/api/merge-picked-boat-notes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ document_ids: boatTasks.map(t => t.document_uploads.id) }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Merge failed')
+      if (Array.isArray(d.warnings) && d.warnings.length) alert('Note:\n- ' + d.warnings.join('\n- '))
+      return d.files as TempMergedFile[]
+    } catch (e: any) {
+      alert(e.message)
+      return null
+    } finally {
+      setMerging(false)
+    }
+  }
+
+  // Uses the same /api/delete-temp-merge-file endpoint the Automation > Merge
+  // PDF tab already uses for its temporary Drive copy (one call per file).
+  function deleteTempFiles(files: TempMergedFile[]) {
+    authHeader().then(h => Promise.all(files.map(f => fetch('/api/delete-temp-merge-file', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+      body: JSON.stringify({ drive_url: f.driveLink }),
+    }).catch(() => {})))).catch(() => {})
+  }
+
+  // After Mail/Download: OK deletes the temporary merged files. Cancel first
+  // emails them to the backup address (subject = the reason), and only
+  // deletes them once that mail has actually gone out — if the mail fails
+  // the files are kept so nothing is lost.
+  async function cleanupTempFiles(files: TempMergedFile[]) {
+    const ok = confirm(`Delete the ${files.length} temporary merged file${files.length === 1 ? '' : 's'}?\n\nOK = delete now.\nCancel = they are emailed to ${TEMP_BACKUP_EMAIL} first, then deleted.`)
+    if (!ok) {
+      try {
+        const res = await fetch('/api/send-email', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+          body: JSON.stringify({
+            to: TEMP_BACKUP_EMAIL, subject: TEMP_MERGE_SUBJECT, body: '',
+            attachments: files.map(f => ({ filename: f.fileName, url: f.driveLink })), useDocsAccount: true,
+          }),
+        })
+        const d = await res.json()
+        if (!res.ok) throw new Error(d.error)
+      } catch (e: any) {
+        alert(`Could not email the temporary files to ${TEMP_BACKUP_EMAIL} (${e.message}). They were NOT deleted.`)
+        return
+      }
+    }
+    deleteTempFiles(files)
+  }
+
+  // A hidden iframe starts a download without being treated as a popup
+  // (window.open after an await gets blocked by the browser).
+  function downloadViaFrame(url: string) {
+    const f = document.createElement('iframe')
+    f.style.display = 'none'
+    f.src = url
+    document.body.appendChild(f)
+    setTimeout(() => f.remove(), 60000)
+  }
+
   // Mail or Download — whichever happens first — auto-resolves the task
   // server-side (log-document-action.ts), so it's removed from view here
   // right away instead of waiting for the next full reload.
-  function downloadSelected() {
-    if (!confirmReasonDeleteBatch(selectedTasks)) return
-    const ids = new Set(selectedTasks.map(t => t.id))
-    // No browser event exists for "the save dialog was actually completed
-    // vs cancelled" on a triggered download — rather than a confirm() the
-    // user has to answer honestly every time, this removes the task on
-    // click (matching Mail's "sent = done" feel) and leaves Processed
-    // History's per-entry "Restore to Picked Tasks" (admin) as the correct
-    // way back in if a download never actually finished.
-    for (const t of selectedTasks) {
+  async function downloadTasks(list: any[]) {
+    if (!confirmReasonDeleteBatch(list)) return
+    const ids = new Set(list.map(t => t.id))
+    const boat = list.filter(isBoatNoteTask)
+    if (!boat.length) {
+      // No browser event exists for "the save dialog was actually completed
+      // vs cancelled" on a triggered download — rather than a confirm() the
+      // user has to answer honestly every time, this removes the task on
+      // click (matching Mail's "sent = done" feel) and leaves Processed
+      // History's per-entry "Restore to Picked Tasks" (admin) as the correct
+      // way back in if a download never actually finished.
+      for (const t of list) {
+        if (!t.document_uploads?.drive_url) continue
+        window.open(toDriveDownloadUrl(t.document_uploads.drive_url), '_blank')
+        logAction(t.document_uploads.id, 'download')
+        if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
+      }
+      setTasks(prev => prev.filter(t => !ids.has(t.id)))
+      setSelected({})
+      return
+    }
+
+    const merged = await mergeBoatNoteTasks(boat)
+    if (!merged) return   // error already shown — nothing downloaded, tasks stay
+    const others = list.filter(t => !isBoatNoteTask(t) && t.document_uploads?.drive_url)
+    for (const f of merged) { downloadViaFrame(toDriveDownloadUrl(f.driveLink)); await new Promise(r => setTimeout(r, 700)) }
+    for (const t of others) { downloadViaFrame(toDriveDownloadUrl(t.document_uploads.drive_url)); await new Promise(r => setTimeout(r, 700)) }
+    for (const t of list) {
       if (!t.document_uploads?.drive_url) continue
-      window.open(toDriveDownloadUrl(t.document_uploads.drive_url), '_blank')
       logAction(t.document_uploads.id, 'download')
       if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
     }
     setTasks(prev => prev.filter(t => !ids.has(t.id)))
     setSelected({})
+    // Give the downloads a moment to start before asking about the temp files.
+    setTimeout(() => cleanupTempFiles(merged), 2500)
   }
 
-  function mailSelected() {
-    if (!confirmReasonDeleteBatch(selectedTasks)) return
-    const eligible = selectedTasks.filter(t => t.document_uploads?.drive_url)
+  async function mailTasks(list: any[]) {
+    if (!confirmReasonDeleteBatch(list)) return
+    const eligible = list.filter(t => t.document_uploads?.drive_url)
     if (!eligible.length) return
-    const attachments = eligible.map(t => ({ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }))
+    const boat = eligible.filter(isBoatNoteTask)
+    const others = eligible.filter(t => !isBoatNoteTask(t))
+    let merged: TempMergedFile[] = []
+    if (boat.length) {
+      const m = await mergeBoatNoteTasks(boat)
+      if (!m) return   // error already shown — nothing mailed, tasks stay
+      merged = m
+    }
+    const attachments = [
+      ...merged.map(f => ({ filename: f.fileName, url: f.driveLink })),
+      ...others.map(t => ({ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url })),
+    ]
     const taskIds = eligible.map(t => t.id)
     const docIds = eligible.map(t => ({ id: t.document_uploads.id, ephemeral: isEphemeralReason(t.document_uploads) }))
+    setTempFiles(merged.length ? merged : null)
     setEmailAttachments(attachments)
     setPendingMailActions({ taskIds, docIds })
-    setEmailReason({ reason: eligible[0].document_uploads.reason ?? null, note: eligible[0].document_uploads.reason_note ?? null })
+    setEmailReason(boat.length
+      ? { reason: TEMP_MERGE_SUBJECT, note: null }
+      : { reason: eligible[0].document_uploads.reason ?? null, note: eligible[0].document_uploads.reason_note ?? null })
     setSelected({})
   }
+
+  const downloadSelected = () => downloadTasks(selectedTasks)
+  const mailSelected = () => mailTasks(selectedTasks)
 
   async function deleteTasks(ids: string[]) {
     if (!ids.length) return
@@ -854,10 +990,11 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
         <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><UserCheck size={16} className="text-green-600"/>My Picked Tasks</h2>
         {selectedTasks.length > 0 && (
           <div className="flex items-center gap-1.5">
-            <button onClick={downloadSelected} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs">
+            {merging && <span className="flex items-center gap-1 text-[11px] text-gray-400"><Loader size={11} className="animate-spin"/> Merging…</span>}
+            <button onClick={downloadSelected} disabled={merging} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs disabled:opacity-50">
               <Download size={12}/> ({selectedTasks.length})
             </button>
-            <button onClick={mailSelected} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs">
+            <button onClick={mailSelected} disabled={merging} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs disabled:opacity-50">
               <Mail size={12}/> ({selectedTasks.length})
             </button>
             <button onClick={returnSelected} disabled={bulkBusy}
@@ -899,21 +1036,23 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 {t.document_uploads?.drive_url && (
                   <>
-                    <button onClick={() => {
+                    <button disabled={merging} onClick={() => {
+                      if (isBoatNoteTask(t)) { downloadTasks([t]); return }
                       if (!confirmReasonDelete(t.document_uploads)) return
                       window.open(toDriveDownloadUrl(t.document_uploads.drive_url), '_blank')
                       logAction(t.document_uploads.id, 'download')
                       if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
                       setTasks(prev => prev.filter(x => x.id !== t.id))
-                    }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                    }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
                       <Download size={12}/>
                     </button>
-                    <button onClick={() => {
+                    <button disabled={merging} onClick={() => {
+                      if (isBoatNoteTask(t)) { mailTasks([t]); return }
                       if (!confirmReasonDelete(t.document_uploads)) return
                       setEmailAttachments([{ filename: t.document_uploads.file_name, url: t.document_uploads.drive_url }])
                       setPendingMailActions({ taskIds: [t.id], docIds: [{ id: t.document_uploads.id, ephemeral: isEphemeralReason(t.document_uploads) }] })
                       setEmailReason({ reason: t.document_uploads.reason ?? null, note: t.document_uploads.reason_note ?? null })
-                    }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                    }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
                       <Mail size={12}/>
                     </button>
                   </>
@@ -937,7 +1076,12 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
           attachments={emailAttachments}
           documentReason={emailReason?.reason}
           documentReasonNote={emailReason?.note}
-          onClose={() => { setEmailAttachments(null); setPendingMailActions(null); setEmailReason(null) }}
+          onClose={() => {
+            // Closed without sending: the temporary merged files were never
+            // used, so drop them (a later Mail simply rebuilds them).
+            if (tempFiles) deleteTempFiles(tempFiles)
+            setTempFiles(null); setEmailAttachments(null); setPendingMailActions(null); setEmailReason(null)
+          }}
           onSent={() => {
             if (pendingMailActions) {
               const idSet = new Set(pendingMailActions.taskIds)
@@ -947,6 +1091,11 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
               }
               setTasks(prev => prev.filter(t => !idSet.has(t.id)))
               setPendingMailActions(null)
+            }
+            if (tempFiles) {
+              const files = tempFiles
+              setTempFiles(null)
+              setTimeout(() => cleanupTempFiles(files), 400)
             }
           }}
         />
