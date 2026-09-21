@@ -20,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.json(result)
   } catch (e: any) {
     if (e.code === 'SHEET_SELECTION_REQUIRED') {
-      return res.status(409).json({ error: e.message, needsSheetSelection: true, sheets: e.sheets || [] })
+      return res.status(409).json({ error: e.message, needsSheetSelection: true, needFill: e.needFill !== false, needPrint: e.needPrint !== false, sheets: e.sheets || [] })
     }
     console.error('[doc-generate]', e)
     res.status(500).json({ error: e.message })

@@ -24,68 +24,59 @@ function isPartiesCopySlug(slug: string): boolean {
 }
 
 // ── Sheet Routing (set up on Templates → Google Sheet → "Sheet Routing") ──
-// The server normally resolves the Fill/Print tab itself from the CUSDEC's
-// TIN VAT. Two cases it can't: Manual Entry (no CUSDEC, so no TIN VAT) and
-// any hiccup on its side — both used to drop straight into the "pick a
-// sheet" prompt even though the routing had already been saved. Here the
-// saved routing is read on the client too, using the same rule the server
-// uses (an "All Shippers" route always wins, otherwise the route holding
-// this shipper's TIN VAT), so the prompt only appears when there truly is
-// no saved route that covers this document.
-interface SavedSheetRoute { route_type: 'fill' | 'print'; sheet_gid: string; tin_vat_list: string[] }
-const ALL_SHIPPERS_ROUTE = '__all__'
-interface RoutedGids { fill: string; print: string }
+// The SERVER is the single place that decides which Fill/Print tab a
+// document uses (lib/docGenerate.ts). A route matched by the CUSDEC's TIN VAT
+// (or an "All Shippers" route) is used silently — no popup. Only when it
+// can't resolve a tab does it answer 409 { needsSheetSelection, needFill,
+// needPrint, sheets }, and the client shows SheetPickerModal.
+//
+// Whatever is picked in that popup applies to THAT ONE generate only: it is
+// passed as an argument to the retry, never kept in state that later
+// generates would re-send, and it is cleared the moment the generate ends.
+export type SheetChoice = { fill?: string; print?: string }
 
-async function fetchSheetRoutes(documentType: string): Promise<SavedSheetRoute[]> {
-  if (!documentType) return []
-  try {
-    const h = await authHeader()
-    const tr = await fetch('/api/doc-templates', { headers: h })
-    if (!tr.ok) return []
-    const td = await tr.json()
-    const tpl = (td.templates || []).find((t: any) => t.document_type === documentType)
-    if (!tpl?.id) return []
-    const rr = await fetch(`/api/template-sheet-routes?template_id=${tpl.id}`, { headers: h })
-    if (!rr.ok) return []
-    const rd = await rr.json()
-    return (rd.routes || []) as SavedSheetRoute[]
-  } catch { return [] }
-}
-
-function routedGids(routes: SavedSheetRoute[], tinVat?: string): RoutedGids {
-  const pick = (type: 'fill' | 'print') => {
-    const list = routes.filter(r => r.route_type === type)
-    const all = list.find(r => (r.tin_vat_list || []).includes(ALL_SHIPPERS_ROUTE))
-    if (all) return all.sheet_gid
-    if (!tinVat) return ''
-    return list.find(r => (r.tin_vat_list || []).includes(tinVat))?.sheet_gid || ''
-  }
-  return { fill: pick('fill'), print: pick('print') }
-}
-
-function useSheetRoutes(documentType: string): SavedSheetRoute[] {
-  const [routes, setRoutes] = useState<SavedSheetRoute[]>([])
-  useEffect(() => {
-    let cancelled = false
-    setRoutes([])
-    fetchSheetRoutes(documentType).then(r => { if (!cancelled) setRoutes(r) })
-    return () => { cancelled = true }
-  }, [documentType])
-  return routes
-}
-
-// POST to a generate endpoint; if the server answers "pick a sheet" but the
-// saved routing already covers this shipper (or everyone), retry once with
-// those sheets instead of bothering the user.
-async function postGenerate(url: string, headers: Record<string, string>, body: Record<string, unknown>, routed: RoutedGids) {
-  const send = (b: Record<string, unknown>) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(b) })
-  let res = await send(body)
-  let d = await res.json()
-  if (!res.ok && d.needsSheetSelection && !body.fill_sheet_gid && !body.print_sheet_gid && routed.fill && routed.print) {
-    res = await send({ ...body, fill_sheet_gid: routed.fill, print_sheet_gid: routed.print })
-    d = await res.json()
-  }
+async function postGenerate(url: string, headers: Record<string, string>, body: Record<string, unknown>) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+  const d = await res.json().catch(() => ({} as any))
   return { res, d }
+}
+
+function applySheetChoice(body: Record<string, unknown>, choice?: SheetChoice) {
+  if (choice?.fill) body.fill_sheet_gid = choice.fill
+  if (choice?.print) body.print_sheet_gid = choice.print
+}
+
+// One instance per generate flow (Boat Note, Party's Copy Pro, each custom doc).
+function useSheetPick() {
+  const [open, setOpen] = useState(false)
+  const [message, setMessage] = useState('')
+  const [sheets, setSheets] = useState<{ title: string; sheetId: number }[]>([])
+  const [needFill, setNeedFill] = useState(true)
+  const [needPrint, setNeedPrint] = useState(true)
+  const [fillGid, setFillGid] = useState('')
+  const [printGid, setPrintGid] = useState('')
+  // d = the 409 body from the server
+  function show(d: any) {
+    setMessage(d?.error || ''); setSheets(d?.sheets || [])
+    setNeedFill(d?.needFill !== false); setNeedPrint(d?.needPrint !== false)
+    setFillGid(''); setPrintGid(''); setOpen(true)
+  }
+  function close() { setOpen(false); setFillGid(''); setPrintGid('') }
+  const choice: SheetChoice = { fill: needFill ? fillGid : undefined, print: needPrint ? printGid : undefined }
+  return { open, message, sheets, needFill, needPrint, fillGid, printGid, setFillGid, setPrintGid, show, close, choice }
+}
+
+function SheetPick({ pick, onConfirm, busy }: { pick: ReturnType<typeof useSheetPick>; onConfirm: (choice: SheetChoice) => void; busy: boolean }) {
+  if (!pick.open) return null
+  return (
+    <SheetPickerModal
+      message={pick.message} sheets={pick.sheets}
+      needFill={pick.needFill} needPrint={pick.needPrint}
+      fillGid={pick.fillGid} printGid={pick.printGid}
+      onFillChange={pick.setFillGid} onPrintChange={pick.setPrintGid}
+      onConfirm={() => onConfirm(pick.choice)} onClose={pick.close} busy={busy}
+    />
+  )
 }
 
 // Drive upload only — nothing is written to the database. Used by the Send
@@ -238,19 +229,9 @@ function BoatNoteContent() {
   const [sendModalBnOpen, setSendModalBnOpen] = useState(false)
   const [bnHistoryRefreshKey, setBnHistoryRefreshKey] = useState(0)
 
-  // Shown only when Sheet Routing can't resolve a Fill/Print sheet on its
-  // own (no route matches this shipper's TIN VAT, their routed tab was
-  // deleted, or — Manual Entry — there's no CUSDEC/TIN VAT to route by at
-  // all) — the server hands back the live tab list so the user picks
-  // instead of the generate silently landing on the wrong tab.
-  const [bnSheets, setBnSheets] = useState<{ title: string; sheetId: number }[]>([])
-  const [bnFillSheetGid, setBnFillSheetGid] = useState('')
-  const [bnPrintSheetGid, setBnPrintSheetGid] = useState('')
-  const [bnSheetPickNeeded, setBnSheetPickNeeded] = useState(false)
-  const [bnSheetPickMessage, setBnSheetPickMessage] = useState('')
-  // Routing already saved on Templates — used so the prompt above only shows
-  // when no saved route actually covers this shipper.
-  const bnRoutes = useSheetRoutes('boat_note')
+  // Fill/Print sheet popup — shown only when the server can't resolve a tab
+  // from Sheet Routing; its pick is for one generate only (see useSheetPick).
+  const bnPick = useSheetPick()
 
   // ── Boat Note: Manual Entry sub-tab (no CUSDEC — type the template
   // fields by hand, generate the same Google Sheets template PDF, then
@@ -286,32 +267,25 @@ function BoatNoteContent() {
     loadBnTemplateFields()
   }, [])
 
-  async function generateManualBn() {
-    if (bnSheetPickNeeded && (!bnFillSheetGid || !bnPrintSheetGid)) return
+  async function generateManualBn(choice?: SheetChoice) {
     setBnManualGenerating(true); setStatus(''); setBnPdf(null); setSavedBnUrl(''); setBoatNotes([]); setCusdecNo('')
     try {
       const manual: Record<string, string> = {}
       Object.entries(bnFormValues).forEach(([label, rows]) => { manual[label] = rows.join('\n') })
       const h = await authHeader()
       const body: Record<string, unknown> = { document_type: 'boat_note', manual_values: manual }
-      if (bnFillSheetGid) body.fill_sheet_gid = bnFillSheetGid
-      if (bnPrintSheetGid) body.print_sheet_gid = bnPrintSheetGid
-      // Manual Entry has no TIN VAT — only an "All Shippers" route can apply.
-      const { res, d } = await postGenerate('/api/doc-generate', h, body, routedGids(bnRoutes))
+      applySheetChoice(body, choice)
+      // Manual Entry has no TIN VAT — only an "All Shippers" route can apply;
+      // otherwise the server asks (409) and the popup appears.
+      const { res, d } = await postGenerate('/api/doc-generate', h, body)
       if (!res.ok) {
-        if (d.needsSheetSelection) {
-          setBnSheets(d.sheets || [])
-          setBnSheetPickNeeded(true)
-          setBnSheetPickMessage(d.error)
-          setStatus('')
-          return
-        }
+        if (d.needsSheetSelection) { bnPick.show(d); setStatus(''); return }
         throw new Error(d.error || 'Generate failed')
       }
-      setBnSheetPickNeeded(false)
+      bnPick.close()
       setBnPdf({ base64: d.base64, fileName: d.fileName })
       setStatus('✓ PDF ready — download or send below')
-    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+    } catch (e: any) { bnPick.close(); setStatus(`✗ ${e.message}`) }
     finally { setBnManualGenerating(false) }
   }
 
@@ -449,7 +423,7 @@ function BoatNoteContent() {
 
     }
 
-    setGen(true); setBoatNotes([]); setBnPdf(null); setSavedBnUrl(''); setBnSheetPickNeeded(false)
+    setGen(true); setBoatNotes([]); setBnPdf(null); setSavedBnUrl(''); bnPick.close()
     try {
       const h = await authHeader()
       const r = await fetch('/api/generate-boat-note', {
@@ -466,31 +440,33 @@ function BoatNoteContent() {
     finally { setGen(false) }
   }
 
-  // Split out of generate() so the Fill/Print sheet picker (shown only
-  // when Sheet Routing can't resolve a route for this shipper) can retry
-  // just the PDF step, without re-running generate-boat-note again.
-  async function generateBnPdf(cusdecNoVal: string, containerCount: number) {
+  // Split out of generate() so the Fill/Print sheet popup (shown only when
+  // Sheet Routing can't resolve a tab for this shipper) can retry just the
+  // PDF step, without re-running generate-boat-note again. `choice` is the
+  // popup's pick for THIS call only.
+  async function generateBnPdf(cusdecNoVal: string, containerCount: number, choice?: SheetChoice) {
     const h = await authHeader()
     const body: Record<string, unknown> = { document_type: 'boat_note', cusdec_id: selCusdec, cdn_ids: selCdns }
-    if (bnFillSheetGid) body.fill_sheet_gid = bnFillSheetGid
-    if (bnPrintSheetGid) body.print_sheet_gid = bnPrintSheetGid
-    const bnTin = (cusdecs.find(c => c.id === selCusdec) as any)?.tin_vat as string | undefined
-    const { res: pdfRes, d: pdfD } = await postGenerate('/api/doc-generate', h, body, routedGids(bnRoutes, bnTin))
+    applySheetChoice(body, choice)
+    const { res: pdfRes, d: pdfD } = await postGenerate('/api/doc-generate', h, body)
     if (!pdfRes.ok) {
-      if (pdfD.needsSheetSelection) {
-        setBnSheets(pdfD.sheets || [])
-        setBnSheetPickNeeded(true)
-        setBnSheetPickMessage(pdfD.error)
-        setStatus('')
-        return
-      }
+      if (pdfD.needsSheetSelection) { bnPick.show(pdfD); setStatus(''); return }
       throw new Error(pdfD.error || 'Template PDF generate failed')
     }
-    setBnSheetPickNeeded(false)
+    bnPick.close()
     const cusdecDigits = cusdecNoVal.replace(/[^0-9]/g, '')
     const fileName = `B${cusdecDigits || cusdecNoVal || 'UNKNOWN'}.pdf`
     setBnPdf({ base64: pdfD.base64, fileName })
     setStatus(`✓ ${containerCount} container(s) — PDF ready`)
+  }
+
+  // Popup "Generate" for a CUSDEC-based Boat Note (Manual Entry retries via
+  // generateManualBn instead).
+  async function retryBnPdf(choice: SheetChoice) {
+    setGen(true)
+    try { await generateBnPdf(cusdecNo, boatNotes.length, choice) }
+    catch (e: any) { bnPick.close(); setStatus(`✗ ${e.message}`) }
+    finally { setGen(false) }
   }
 
   async function generateExcelTemplate() {
@@ -798,11 +774,11 @@ function BoatNoteContent() {
         <p className="text-gray-500 text-sm mb-3 -mt-2">SHIPPING NOTE / BOAT NOTE – Exp 3a format · Select CUSDEC → CDNs → Generate → Download / Email</p>
 
         <div className="flex gap-1.5 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
-          <button onClick={() => { setBnEntryMode('cusdec'); setBnPdf(null); setBoatNotes([]); setStatus(''); setSavedBnUrl(''); setBnSheetPickNeeded(false); setBnFillSheetGid(''); setBnPrintSheetGid('') }}
+          <button onClick={() => { setBnEntryMode('cusdec'); setBnPdf(null); setBoatNotes([]); setStatus(''); setSavedBnUrl(''); bnPick.close() }}
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${bnEntryMode === 'cusdec' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
             From CUSDEC
           </button>
-          <button onClick={() => { setBnEntryMode('manual'); setBnPdf(null); setBoatNotes([]); setStatus(''); setSavedBnUrl(''); setBnSheetPickNeeded(false); setBnFillSheetGid(''); setBnPrintSheetGid('') }}
+          <button onClick={() => { setBnEntryMode('manual'); setBnPdf(null); setBoatNotes([]); setStatus(''); setSavedBnUrl(''); bnPick.close() }}
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${bnEntryMode === 'manual' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
             Manual Entry
           </button>
@@ -871,7 +847,7 @@ function BoatNoteContent() {
                     </div>
                   )
                 })}
-                <button onClick={generateManualBn} disabled={bnManualGenerating}
+                <button onClick={() => generateManualBn()} disabled={bnManualGenerating}
                   className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
                   style={{ background: '#3b82f6' }}>
                   {bnManualGenerating ? <Loader size={14} className="animate-spin"/> : <Anchor size={14}/>}
@@ -901,7 +877,7 @@ function BoatNoteContent() {
               <div className="space-y-1 max-h-72 overflow-y-auto">
                 {visibleCusdecs.map(c => (
                   <button key={c.id}
-                    onClick={() => { setSelCusdec(c.id); setSelCdns([]); setBoatNotes([]); setBnSheetPickNeeded(false); setBnFillSheetGid(''); setBnPrintSheetGid('') }}
+                    onClick={() => { setSelCusdec(c.id); setSelCdns([]); setBoatNotes([]); bnPick.close() }}
                     className={`w-full text-left p-2.5 rounded-lg border text-xs transition-all ${
                       selCusdec === c.id ? 'bg-blue-50 border-blue-300 shadow-sm' : 'border-gray-100 hover:bg-gray-50'
                     } ${isCompleted(c) ? '!border-l-4 !border-l-green-500' : ''}`}>
@@ -1055,19 +1031,11 @@ function BoatNoteContent() {
           <span className="font-semibold">PDF Format:</span> SHIPPING NOTE / BOAT NOTE – Exp 3a · Landscape A4 · All fields from Excel b2 sheet (Shipper, Consignee, Voyage, Vessel, Port of Loading/Discharge, Container, CDN No., Gross Weight, Cube, SLPA, Company, Declarant)
         </div>
 
-        {bnSheetPickNeeded && (
-          <SheetPickerModal
-            message={bnSheetPickMessage}
-            sheets={bnSheets}
-            fillGid={bnFillSheetGid}
-            printGid={bnPrintSheetGid}
-            onFillChange={setBnFillSheetGid}
-            onPrintChange={setBnPrintSheetGid}
-            onConfirm={() => bnEntryMode === 'cusdec' ? generateBnPdf(cusdecNo, boatNotes.length) : generateManualBn()}
-            onClose={() => setBnSheetPickNeeded(false)}
-            busy={generating || bnManualGenerating}
-          />
-        )}
+        <SheetPick
+          pick={bnPick}
+          onConfirm={choice => bnEntryMode === 'cusdec' ? retryBnPdf(choice) : generateManualBn(choice)}
+          busy={generating || bnManualGenerating}
+        />
 
         </>
         )}
@@ -1440,21 +1408,14 @@ function PartiesCopyPanel() {
   const [savedPartyUrl, setSavedPartyUrl] = useState('')
   const [partyHistoryRefreshKey, setPartyHistoryRefreshKey] = useState(0)
 
-  // Shown only if Sheet Routing can't resolve a Fill/Print sheet for this
-  // shipper (no route matches their TIN VAT, or the routed tab was
-  // deleted) — the server sends back the live tab list so the user can
-  // pick instead of the generate silently guessing wrong.
-  const [proSheets, setProSheets] = useState<{ title: string; sheetId: number }[]>([])
-  const [proFillGid, setProFillGid] = useState('')
-  const [proPrintGid, setProPrintGid] = useState('')
-  const [proSheetPickNeeded, setProSheetPickNeeded] = useState(false)
-  const [proSheetPickMessage, setProSheetPickMessage] = useState('')
+  // Fill/Print sheet popup — shown only if the server can't resolve a tab
+  // from Sheet Routing; its pick is for one generate only (see useSheetPick).
+  const proPick = useSheetPick()
 
   // A Google Sheets template saved under a "Party's Copy"-ish document_type
   // (see isPartiesCopySlug) — Generate always produces this template's PDF;
   // there's no built-in jsPDF fallback layout anymore.
   const [tplDocType, setTplDocType] = useState('')
-  const proRoutes = useSheetRoutes(tplDocType)
 
   function load() {
     authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=500', { headers: h })).then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
@@ -1499,30 +1460,22 @@ function PartiesCopyPanel() {
   // "Generate Pro" — the real Party's Copy: the original CUSDEC PDF
   // (cusdec.pdf_url) followed by the filled-in template page(s), merged
   // into one PDF, CUSDEC pages first.
-  async function generatePro() {
+  async function generatePro(choice?: SheetChoice) {
     if (!selected || !eligible || !tplDocType) return
-    if (proSheetPickNeeded && (!proFillGid || !proPrintGid)) return
     setProGenerating(true); setStatus(''); setProPdf(null); setSavedPartyUrl('')
     try {
       const h = await authHeader()
       const body: Record<string, unknown> = { document_type: tplDocType, cusdec_id: selected.id }
-      if (proFillGid) body.fill_sheet_gid = proFillGid
-      if (proPrintGid) body.print_sheet_gid = proPrintGid
-      const { res, d } = await postGenerate('/api/generate-parties-copy-pro', h, body, routedGids(proRoutes, (selected as any)?.tin_vat))
+      applySheetChoice(body, choice)
+      const { res, d } = await postGenerate('/api/generate-parties-copy-pro', h, body)
       if (!res.ok) {
-        if (d.needsSheetSelection) {
-          setProSheets(d.sheets || [])
-          setProSheetPickNeeded(true)
-          setProSheetPickMessage(d.error)
-          setStatus('')
-          return
-        }
+        if (d.needsSheetSelection) { proPick.show(d); setStatus(''); return }
         throw new Error(d.error || 'Generate failed')
       }
-      setProSheetPickNeeded(false)
+      proPick.close()
       setProPdf({ base64: d.base64, fileName: d.fileName })
       setStatus('✓ Ready — download or send below')
-    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+    } catch (e: any) { proPick.close(); setStatus(`✗ ${e.message}`) }
     finally { setProGenerating(false) }
   }
 
@@ -1599,7 +1552,7 @@ function PartiesCopyPanel() {
             const cap = Number(c.cap || 0)
             const ok = cap > 0 && cap === cCount && !c.export_release_passed
             return (
-              <button key={c.id} onClick={() => { setSelectedId(c.id); setStatus(''); setProSheetPickNeeded(false); setProFillGid(''); setProPrintGid('') }}
+              <button key={c.id} onClick={() => { setSelectedId(c.id); setStatus(''); proPick.close() }}
                 className={`w-full text-left p-2.5 rounded-lg border text-xs ${selectedId === c.id ? 'bg-purple-50 border-purple-300' : 'border-gray-100 hover:bg-gray-50'}`}>
                 <p className="font-bold text-gray-800">E {c.number}</p>
                 <p className="text-gray-600 truncate">{c.exporter?.slice(0, 36)}</p>
@@ -1664,7 +1617,7 @@ function PartiesCopyPanel() {
                 </p>
               )}
 
-              <button onClick={generatePro} disabled={!eligible || proGenerating || !tplDocType}
+              <button onClick={() => generatePro()} disabled={!eligible || proGenerating || !tplDocType}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40"
                 style={{ background: '#1B3A5C' }}>
                 {proGenerating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
@@ -1672,19 +1625,7 @@ function PartiesCopyPanel() {
               </button>
               <p className="text-[11px] text-gray-400 mt-2">Merges the original CUSDEC PDF with the template output (CUSDEC pages first).</p>
 
-              {proSheetPickNeeded && (
-                <SheetPickerModal
-                  message={proSheetPickMessage}
-                  sheets={proSheets}
-                  fillGid={proFillGid}
-                  printGid={proPrintGid}
-                  onFillChange={setProFillGid}
-                  onPrintChange={setProPrintGid}
-                  onConfirm={generatePro}
-                  onClose={() => setProSheetPickNeeded(false)}
-                  busy={proGenerating}
-                />
-              )}
+              <SheetPick pick={proPick} onConfirm={choice => generatePro(choice)} busy={proGenerating} />
 
               {proPdf && (
                 <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
@@ -1921,20 +1862,11 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   // the Notify lock, same rules as Boat Note/Party's Copy.
   const [savedLink, setSavedLink] = useState('')
 
-  // Manual Entry has no CUSDEC to route Fill/Print sheet by TIN VAT — ask
-  // directly instead, for any template that's Google-Sheet-based.
-  const [manualSheets, setManualSheets] = useState<{ title: string; sheetId: number }[]>([])
-  const [fillSheetGid, setFillSheetGid] = useState('')
-  const [printSheetGid, setPrintSheetGid] = useState('')
-
-  // Database mode normally routes Fill/Print sheet by the CUSDEC's TIN VAT
-  // automatically — this only turns on if that routing can't resolve a
-  // sheet for the selected shipper (no route configured for them, or their
-  // routed tab was deleted), so the same Fill/Print picker as Manual Entry
-  // is reused rather than silently guessing a sheet.
-  const [cusdecNeedsSheetPick, setCusdecNeedsSheetPick] = useState(false)
-  const [sheetPickMessage, setSheetPickMessage] = useState('')
-  const sheetRoutes = useSheetRoutes(documentType)
+  // Fill/Print sheet popup — shown only when the server can't resolve a tab
+  // from Sheet Routing (no route for this shipper, routed tab deleted, or
+  // Manual Entry with no All-Shippers route). Its pick is for one generate
+  // only (see useSheetPick).
+  const pick = useSheetPick()
 
   useEffect(() => {
     async function load() {
@@ -1952,12 +1884,6 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         const init: Record<string, string[]> = {}
         fields.forEach((f: { field_label: string }) => { init[f.field_label] = [''] })
         setFormValues(init)
-
-        if ((tpl.template_format || 'google_sheet') === 'google_sheet' && tpl.template_url) {
-          const sr = await fetch('/api/excel-template-sheets?sheet_url=' + encodeURIComponent(tpl.template_url), { headers: h })
-          const sd = await sr.json()
-          setManualSheets(sd.sheets || [])
-        }
       } catch (e: any) {
         setTplLoadError(e.message || 'Failed to load template')
       }
@@ -1973,13 +1899,11 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
 
   useEffect(() => {
     setSavedLink('')
-    setCusdecNeedsSheetPick(false)
-    setFillSheetGid('')
-    setPrintSheetGid('')
+    pick.close()
     if (entryMode !== 'cusdec' || !selectedCusdecId) return
     authHeader().then(h => fetch(`/api/document-link?cusdec_id=${selectedCusdecId}&document_type=${encodeURIComponent(documentType)}`, { headers: h }))
       .then(r => r.json()).then(d => setSavedLink(d.link?.drive_url || '')).catch(() => {})
-  }, [entryMode, selectedCusdecId, documentType])
+  }, [entryMode, selectedCusdecId, documentType]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredCusdecs = cusdecs.filter(c =>
     !cusdecSearch || c.number?.toLowerCase().includes(cusdecSearch.toLowerCase()) || c.exporter?.toLowerCase().includes(cusdecSearch.toLowerCase())
@@ -2020,19 +1944,11 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const curIsBlue = !!selectedCusdec?.export_release_passed
   const curIsGreen = !!selectedCusdec && !curIsBlue && capNum > 0 && cdnCount >= capNum && selectedCdns.every(c => c.boat_note_passed)
 
-  // Fill/Print already chosen on the template (Sheet Routing) → don't ask
-  // again. Manual Entry can only be covered by an "All Shippers" route (no
-  // TIN VAT to match); Database mode is matched by the CUSDEC's TIN VAT.
-  const routed = routedGids(sheetRoutes, entryMode === 'cusdec' ? (selectedCusdec as any)?.tin_vat : undefined)
-  const routingCoversThis = !!(routed.fill && routed.print)
-  const manualSheetChoiceRequired = entryMode === 'manual' && manualSheets.length > 0 && !routingCoversThis
-  const sheetPickerVisible = manualSheetChoiceRequired || (entryMode === 'cusdec' && cusdecNeedsSheetPick)
-  const manualSheetChoiceMissing = sheetPickerVisible && (!fillSheetGid || !printSheetGid)
   const cdnPickMissing = entryMode === 'cusdec' && needsCdnPick && selectedCdns.length > 0 && !selectedCdnId
 
-  async function generate() {
+  async function generate(choice?: SheetChoice) {
     if (entryMode === 'cusdec' && !selectedCusdecId) return
-    if (manualSheetChoiceMissing || cdnPickMissing) return
+    if (cdnPickMissing) return
     setGenerating(true); setStatus(''); setPdf(null)
     try {
       const h = await authHeader()
@@ -2048,28 +1964,17 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         body.cusdec_id = selectedCusdecId
         if (selectedCdnId) body.cdn_ids = [selectedCdnId]
       }
-      if (fillSheetGid) body.fill_sheet_gid = fillSheetGid
-      if (printSheetGid) body.print_sheet_gid = printSheetGid
-      if (entryMode === 'manual' && routingCoversThis && !fillSheetGid && !printSheetGid) {
-        body.fill_sheet_gid = routed.fill
-        body.print_sheet_gid = routed.print
-      }
-      const { res, d } = await postGenerate('/api/doc-generate', h, body, routed)
+      applySheetChoice(body, choice)
+      const { res, d } = await postGenerate('/api/doc-generate', h, body)
       if (!res.ok) {
-        if (d.needsSheetSelection) {
-          setManualSheets(d.sheets || [])
-          setCusdecNeedsSheetPick(true)
-          setSheetPickMessage(d.error)
-          setStatus('')
-          return
-        }
+        if (d.needsSheetSelection) { pick.show(d); setStatus(''); return }
         throw new Error(d.error || 'Generate failed')
       }
-      setCusdecNeedsSheetPick(false)
+      pick.close()
       setPdf({ base64: d.base64, fileName: d.fileName, mimeType: d.mimeType, content: d.content })
       setCopied(false)
       setStatus('✓ Ready — download or send below')
-    } catch (e: any) { setStatus(`✗ ${e.message}`) }
+    } catch (e: any) { pick.close(); setStatus(`✗ ${e.message}`) }
     finally { setGenerating(false) }
   }
 
@@ -2174,48 +2079,7 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
         </div>
       )}
 
-      {cusdecNeedsSheetPick && (
-        <SheetPickerModal
-          message={sheetPickMessage}
-          sheets={manualSheets}
-          fillGid={fillSheetGid}
-          printGid={printSheetGid}
-          onFillChange={setFillSheetGid}
-          onPrintChange={setPrintSheetGid}
-          onConfirm={generate}
-          onClose={() => setCusdecNeedsSheetPick(false)}
-          busy={generating}
-        />
-      )}
-
-      {entryMode === 'manual' && manualSheets.length > 0 && routingCoversThis && (
-        <p className="text-[11px] text-gray-400 max-w-xl">
-          Sheets come from this template's Sheet Routing (All Shippers) — Fill: <span className="font-medium text-gray-600">{manualSheets.find(x => String(x.sheetId) === routed.fill)?.title || routed.fill}</span>, Print: <span className="font-medium text-gray-600">{manualSheets.find(x => String(x.sheetId) === routed.print)?.title || routed.print}</span>.
-        </p>
-      )}
-
-      {manualSheetChoiceRequired && (
-        <div className="card max-w-xl">
-          <h2 className="font-semibold text-gray-900 text-sm mb-3">Fill Sheet &amp; Print Sheet</h2>
-          <p className="text-xs text-gray-400 mb-3">No CUSDEC to auto-route by — pick which sheet tab to fill and which to print.</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Fill Sheet</label>
-              <select value={fillSheetGid} onChange={e => setFillSheetGid(e.target.value)} className="input text-xs w-full">
-                <option value="">— select —</option>
-                {manualSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Print Sheet</label>
-              <select value={printSheetGid} onChange={e => setPrintSheetGid(e.target.value)} className="input text-xs w-full">
-                <option value="">— select —</option>
-                {manualSheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
-              </select>
-            </div>
-          </div>
-        </div>
-      )}
+      <SheetPick pick={pick} onConfirm={choice => generate(choice)} busy={generating} />
 
       {(entryMode === 'manual' || (entryMode === 'cusdec' && selectedCusdecId && !cdnPickMissing)) && (() => {
         const isGrid = templateFormat === 'google_sheet'
@@ -2265,13 +2129,12 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
               )
             })}
             <div className={isGrid ? 'sm:col-span-2 lg:col-span-3' : ''}>
-              <button onClick={generate} disabled={generating || manualSheetChoiceMissing || (entryMode === 'cusdec' && (!selectedCusdecId || cdnPickMissing))}
+              <button onClick={() => generate()} disabled={generating || (entryMode === 'cusdec' && (!selectedCusdecId || cdnPickMissing))}
                 className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm text-white font-medium disabled:opacity-40 mt-1"
                 style={{ background: '#3b82f6' }}>
                 {generating ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}
                 Generate {label}
               </button>
-              {manualSheetChoiceMissing && <p className="text-[11px] text-amber-600 mt-1">Pick Fill Sheet and Print Sheet above first.</p>}
             </div>
           </div>
         )}

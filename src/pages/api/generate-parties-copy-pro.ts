@@ -44,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.json({ fileName: `P${digits}.pdf`, base64: Buffer.from(out).toString('base64') })
   } catch (e: any) {
     if (e.code === 'SHEET_SELECTION_REQUIRED') {
-      return res.status(409).json({ error: e.message, needsSheetSelection: true, sheets: e.sheets || [] })
+      return res.status(409).json({ error: e.message, needsSheetSelection: true, needFill: e.needFill !== false, needPrint: e.needPrint !== false, sheets: e.sheets || [] })
     }
     console.error('[generate-parties-copy-pro]', e)
     res.status(500).json({ error: e.message })

@@ -5,8 +5,12 @@ import { Loader, FileDown, AlertTriangle, X } from 'lucide-react'
 // tab was deleted) — see SHEET_SELECTION_REQUIRED in docGenerate.ts. Used by
 // every generate() call site that can hit this (Boat Note, Party's Copy,
 // CustomDocPanel) instead of each maintaining its own inline picker card.
-export default function SheetPickerModal({ message, sheets, fillGid, printGid, onFillChange, onPrintChange, onConfirm, onClose, busy }: {
+export default function SheetPickerModal({ message, sheets, needFill = true, needPrint = true, fillGid, printGid, onFillChange, onPrintChange, onConfirm, onClose, busy }: {
   message: string
+  // Which side(s) the server couldn't route — only those are asked for; the
+  // other side already resolved from Sheet Routing.
+  needFill?: boolean
+  needPrint?: boolean
   sheets: { title: string; sheetId: number }[]
   fillGid: string
   printGid: string
@@ -27,24 +31,25 @@ export default function SheetPickerModal({ message, sheets, fillGid, printGid, o
           <p className="text-xs text-amber-700 flex items-start gap-1.5 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
             <AlertTriangle size={13} className="flex-shrink-0 mt-0.5"/>{message}
           </p>
-          <div>
+          {needFill && <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Fill Sheet</label>
             <select value={fillGid} onChange={e => onFillChange(e.target.value)} className="input text-sm w-full">
               <option value="">— select —</option>
               {sheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
             </select>
-          </div>
-          <div>
+          </div>}
+          {needPrint && <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Print Sheet</label>
             <select value={printGid} onChange={e => onPrintChange(e.target.value)} className="input text-sm w-full">
               <option value="">— select —</option>
               {sheets.map(s => <option key={s.sheetId} value={s.sheetId}>{s.title}</option>)}
             </select>
-          </div>
+          </div>}
+          <p className="text-[11px] text-gray-400">This choice is used for this generate only — it is not saved.</p>
         </div>
         <div className="flex gap-3 p-5 border-t">
           <button onClick={onClose} disabled={busy} className="btn-secondary flex-1 disabled:opacity-50">Cancel</button>
-          <button onClick={onConfirm} disabled={busy || !fillGid || !printGid} className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-40">
+          <button onClick={onConfirm} disabled={busy || (needFill && !fillGid) || (needPrint && !printGid)} className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-40">
             {busy ? <Loader size={14} className="animate-spin"/> : <FileDown size={14}/>}Generate
           </button>
         </div>

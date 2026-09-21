@@ -167,18 +167,19 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     // route by, so the caller's explicit fill_sheet_gid/print_sheet_gid
     // (picked by hand) plays the same role instead.
     const { data: sheetRoutes } = await sb.from('template_sheet_routes').select('*').eq('template_id', tpl.id)
-    const tinVat = cusdecRow?.tin_vat as string | undefined
-    // '__all__' in a route's tin_vat_list (set via Templates' "All Shippers"
-    // checkbox — see templates.tsx's SheetRouteEditor) matches every CUSDEC,
-    // including ones with no tin_vat at all — checked first since it should
-    // win regardless of whether a specific-TIN-VAT route also exists.
-    const matchesRoute = (r: { tin_vat_list?: string[] }) => r.tin_vat_list?.includes('__all__') || (!!tinVat && r.tin_vat_list?.includes(tinVat))
-    const matchedFillRoute = fill_sheet_gid
-      ? { sheet_gid: fill_sheet_gid }
-      : sheetRoutes?.find(r => r.route_type === 'fill' && matchesRoute(r))
-    const matchedPrintRoute = print_sheet_gid
-      ? { sheet_gid: print_sheet_gid }
-      : sheetRoutes?.find(r => r.route_type === 'print' && matchesRoute(r))
+    const tinVat = (cusdecRow?.tin_vat as string | undefined) || undefined
+    // TIN VAT compared trimmed + case-insensitive so stray whitespace/casing
+    // between the CUSDEC row and the saved route can never break a match.
+    const normTin = (v?: string | null) => String(v ?? '').trim().toUpperCase()
+    // '__all__' in a route's tin_vat_list (Templates' "All Shippers" checkbox
+    // — see templates.tsx's SheetRouteEditor) matches every CUSDEC, including
+    // ones with no tin_vat at all, and is checked first so it wins over any
+    // specific-TIN-VAT route.
+    const findRoute = (type: 'fill' | 'print') => {
+      const list = (sheetRoutes || []).filter(r => r.route_type === type)
+      return list.find(r => (r.tin_vat_list || []).includes('__all__'))
+        || (tinVat ? list.find(r => (r.tin_vat_list || []).some((t: string) => normTin(t) === normTin(tinVat))) : undefined)
+    }
 
     // Resolve the live sheet list from the ORIGINAL spreadsheet before
     // copying — a cheap read that lets us fail fast (with the current list
@@ -187,39 +188,46 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
     // Drive copy unchanged, so this list stays valid for the copy too.
     const liveSheets = await getSheetsList(spreadsheetId)
     const firstSheetTitle = liveSheets[0]?.title || 'Sheet1'
+    const tabTitle = (gid: string) => liveSheets.find(s => String(s.sheetId) === String(gid))?.title
 
-    const routedFillSheet = matchedFillRoute
-      ? liveSheets.find(s => String(s.sheetId) === String(matchedFillRoute.sheet_gid))?.title
-      : undefined
-    const routedPrintSheet = matchedPrintRoute
-      ? liveSheets.find(s => String(s.sheetId) === String(matchedPrintRoute.sheet_gid))?.title
-      : undefined
+    // An explicit gid (chosen in the caller's one-time "pick a sheet" popup)
+    // wins for THAT call only; otherwise the matched route decides. Either
+    // way the tab must still exist.
+    if (fill_sheet_gid && !tabTitle(fill_sheet_gid)) throw new Error('The selected Fill Sheet no longer exists in the spreadsheet — pick again.')
+    if (print_sheet_gid && !tabTitle(print_sheet_gid)) throw new Error('The selected Print Sheet no longer exists in the spreadsheet — pick again.')
+
+    const fillRoute = fill_sheet_gid ? { sheet_gid: fill_sheet_gid } : findRoute('fill')
+    const printRoute = print_sheet_gid ? { sheet_gid: print_sheet_gid } : findRoute('print')
+    const routedFillSheet = fillRoute ? tabTitle(fillRoute.sheet_gid) : undefined
+    const routedPrintSheet = printRoute ? tabTitle(printRoute.sheet_gid) : undefined
 
     // Sheet Routing is the ONLY source of truth for which tab to fill/print
-    // once any route exists for this template — there's no more falling
-    // back to the old per-mapping/per-template sheet-name fields (those
-    // stopped being editable once Sheet Routing shipped, so they just sit
-    // frozen at whatever was typed in long ago and silently point at a
-    // renamed/deleted tab). If routing is in use on a side but this
-    // shipper isn't covered by any route (or their route's tab no longer
-    // exists), fail explicitly and hand back the live tab list so the
-    // caller can ask the user to pick one — instead of guessing.
-    const fillRoutingInUse = sheetRoutes?.some(r => r.route_type === 'fill')
-    const printRoutingInUse = sheetRoutes?.some(r => r.route_type === 'print')
-    if (!fill_sheet_gid && fillRoutingInUse && !routedFillSheet) {
-      const err: any = new Error(tinVat
-        ? `No Fill Sheet route matches this shipper's TIN VAT (${tinVat}). Add a route for them in Templates, or pick a Fill Sheet manually.`
-        : `No Fill Sheet route could be matched (no TIN VAT on this record). Pick a Fill Sheet manually.`)
+    // once any route exists for this template — there's no falling back to
+    // the old per-mapping/per-template sheet-name fields (frozen since Sheet
+    // Routing shipped, so they silently point at a renamed/deleted tab). If
+    // routing is in use on a side but this shipper isn't covered (or their
+    // route's tab no longer exists), fail explicitly — ONCE, for both sides
+    // together, so the caller shows a single popup — and hand back the live
+    // tab list plus which side(s) still need a pick. A pick made there applies
+    // to that one generate only; nothing is saved.
+    const fillRoutingInUse = !!sheetRoutes?.some(r => r.route_type === 'fill')
+    const printRoutingInUse = !!sheetRoutes?.some(r => r.route_type === 'print')
+    const needFill = fillRoutingInUse && !routedFillSheet
+    const needPrint = printRoutingInUse && !routedPrintSheet
+    if (needFill || needPrint) {
+      const why = (label: 'Fill' | 'Print', hadRoute: boolean) => hadRoute
+        ? `The routed ${label} Sheet tab no longer exists.`
+        : tinVat
+          ? `No ${label} Sheet route matches this shipper's TIN VAT (${tinVat}).`
+          : `No ${label} Sheet route could be matched (no TIN VAT on this record).`
+      const parts: string[] = []
+      if (needFill) parts.push(why('Fill', !!fillRoute))
+      if (needPrint) parts.push(why('Print', !!printRoute))
+      const err: any = new Error(`${parts.join(' ')} Pick the sheet below (used for this one generate only), or add a route in Templates.`)
       err.code = 'SHEET_SELECTION_REQUIRED'
       err.sheets = liveSheets
-      throw err
-    }
-    if (!print_sheet_gid && printRoutingInUse && !routedPrintSheet) {
-      const err: any = new Error(tinVat
-        ? `No Print Sheet route matches this shipper's TIN VAT (${tinVat}). Add a route for them in Templates, or pick a Print Sheet manually.`
-        : `No Print Sheet route could be matched (no TIN VAT on this record). Pick a Print Sheet manually.`)
-      err.code = 'SHEET_SELECTION_REQUIRED'
-      err.sheets = liveSheets
+      err.needFill = needFill
+      err.needPrint = needPrint
       throw err
     }
 

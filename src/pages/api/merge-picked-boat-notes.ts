@@ -18,7 +18,9 @@ const supabaseAdmin = createClient(
 // file name — B55296.pdf -> the CUSDEC whose number is "E 55296"), then
 // builds up to THREE merged files for the whole selection, however many B
 // documents were picked:
-//   • CUSDEC set    — CUSDEC 1 + its Party's Copy, CUSDEC 2 + its Party's Copy…
+//   • CUSDEC set    — each CUSDEC's Party's Copy, one after another (the
+//                     Party's Copy already has its CUSDEC merged into it, so
+//                     the CUSDEC PDF itself is NOT added again)
 //   • Boat Note set — every picked B... PDF, in one file
 //   • CDN set       — every CDN PDF that belongs to those CUSDECs, in one file
 // The merged files are uploaded to Drive as TEMPORARY files, the same way
@@ -26,8 +28,10 @@ const supabaseAdmin = createClient(
 // links. The dashboard removes them afterwards through the existing
 // /api/delete-temp-merge-file endpoint. Nothing is written to any table.
 //
-// Strict on purpose: if a Party's Copy (or the CUSDEC PDF) is missing, the
-// whole request fails with a clear message and nothing is created.
+// Strict on purpose: if a Party's Copy is missing, the whole request fails
+// with a clear message and nothing is created.
+// Saved file names are just "<date> CUSDEC Set" / "<date> Boat Note Set" /
+// "<date> CDN Set" — nothing else in the name.
 
 const digitsOf = (s?: string | null) => (s || '').replace(/\D/g, '')
 const numberFromFileName = (name: string) => (name || '').replace(/\.pdf$/i, '').match(/\d+/)?.[0] || ''
@@ -103,9 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!seen.has(c.id)) { seen.add(c.id); cusdecs.push(c) }
     }
 
-    // Required pieces — error out instead of silently mailing an incomplete set.
-    const noCusdecPdf = cusdecs.find(c => !c.pdf_url)
-    if (noCusdecPdf) return res.status(400).json({ error: `CUSDEC ${noCusdecPdf.number} has no saved CUSDEC PDF` })
+    // Required piece — error out instead of silently mailing an incomplete set.
     const noParty = cusdecs.find(c => !c.party_copy_url)
     if (noParty) return res.status(400).json({ error: `Party's Copy is not ready for CUSDEC ${noParty.number} — create/save it first` })
 
@@ -116,21 +118,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const cdnUrls = (cdnRows || []).filter((r: any) => keys.has(`${r.code}|||${r.cusdec_number}`)).map((r: any) => r.pdf_url).filter(Boolean) as string[]
 
     // ── Merge ──────────────────────────────────────────────────────────
-    const cusdecUrls: string[] = []
-    for (const c of cusdecs) cusdecUrls.push(c.pdf_url, c.party_copy_url)
-    const cusdecBytes = await mergeUrls(cusdecUrls, 'CUSDEC / Party\'s Copy', true, warnings)
+    const cusdecBytes = await mergeUrls(cusdecs.map(c => c.party_copy_url), 'Party\'s Copy', true, warnings)
     const boatBytes = await mergeUrls(docs.map(d => d.drive_url), 'Boat Note', true, warnings)
     const cdnBytes = cdnUrls.length ? await mergeUrls(cdnUrls, 'CDN', false, warnings) : null
     if (!cdnBytes) warnings.push('No CDN PDFs were found for these CUSDECs — CDN set skipped')
 
     // ── Temporary Drive upload ────────────────────────────────────────
-    const dateStr = new Date().toISOString().slice(0, 10)
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    // Local (Sri Lanka) calendar date, YYYY-MM-DD — not UTC, so a morning
+    // upload doesn't get yesterday's date.
+    const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Colombo' })
     const files: { fileName: string; driveLink: string; driveId: string; docType: string }[] = []
     const toUpload: { fileName: string; bytes: Buffer | null; docType: string }[] = [
-      { fileName: `CUSDEC Set ${dateStr} ${stamp}.pdf`, bytes: cusdecBytes, docType: 'merged_pdf' },
-      { fileName: `Boat Note Set ${dateStr} ${stamp}.pdf`, bytes: boatBytes, docType: 'merged_pdf' },
-      { fileName: `CDN Set ${dateStr} ${stamp}.pdf`, bytes: cdnBytes, docType: 'merged_pdf' },
+      { fileName: `${dateStr} CUSDEC Set.pdf`, bytes: cusdecBytes, docType: 'merged_pdf' },
+      { fileName: `${dateStr} Boat Note Set.pdf`, bytes: boatBytes, docType: 'merged_pdf' },
+      { fileName: `${dateStr} CDN Set.pdf`, bytes: cdnBytes, docType: 'merged_pdf' },
     ]
     for (const f of toUpload) {
       if (!f.bytes) continue
