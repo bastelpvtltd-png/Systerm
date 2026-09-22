@@ -125,10 +125,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // log-document-action.ts). See boat_note_locks migration.
       if (Array.isArray(lock_cusdec_ids) && lock_cusdec_ids.length) {
         try {
-          await supabaseAdmin.from('boat_note_locks').insert(
+          const { error: lockErr } = await supabaseAdmin.from('boat_note_locks').insert(
             lock_cusdec_ids.map((cid: string) => ({ cusdec_id: cid, document_id: data.id, locked_by_name: uploadedByName }))
           )
-        } catch { /* non-fatal — locks are supplemental, not a hard guarantee */ }
+          // Supabase-js does not throw on a query error — it returns
+          // { error } — so without this check an insert failure (bad
+          // column, RLS, FK) was silently swallowed and no lock was ever
+          // created, with nothing in the logs to show why.
+          if (lockErr) console.error('[document-uploads] boat_note_locks insert failed:', lockErr.message, lockErr)
+        } catch (e: any) { console.error('[document-uploads] boat_note_locks insert threw:', e.message) }
       }
 
       // "Final Document" is its own approval queue (final_document_tasks),

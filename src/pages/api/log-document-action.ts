@@ -71,13 +71,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const { data: locks } = await supabaseAdmin.from('boat_note_locks').select('cusdec_id').eq('document_id', document_id)
           if (locks?.length) {
             const cusdecIds = locks.map(l => l.cusdec_id)
-            await supabaseAdmin.from('doc_approvals').insert(
+            const { error: apErr } = await supabaseAdmin.from('doc_approvals').insert(
               cusdecIds.map(cid => ({
                 document_id, cusdec_id: cid, doc_type: doc.doc_type || 'boat_note', reason: doc.reason,
                 uploaded_by: authed.userId, uploaded_by_name: userName, stage: 'boat_note',
               }))
             )
-            await supabaseAdmin.from('boat_note_locks').delete().in('cusdec_id', cusdecIds)
+            // Supabase-js doesn't throw on a query error, so this used to
+            // go straight to deleting the locks even when the insert above
+            // silently failed — the CUSDEC's lock was gone for good with no
+            // approval ever created, and no way to retry. Now the lock is
+            // only released once the approval row is confirmed created;
+            // on failure it's logged and the lock stays so the next
+            // Mail/Download attempt on this document can retry it.
+            if (apErr) {
+              console.error('[log-document-action] boat_note doc_approvals insert failed, keeping locks for retry:', apErr.message, apErr)
+            } else {
+              await supabaseAdmin.from('boat_note_locks').delete().in('cusdec_id', cusdecIds)
+            }
           }
         }
       } catch { /* non-fatal — doc_approvals is supplemental */ }
