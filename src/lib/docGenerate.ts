@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { google } from 'googleapis'
 import { spreadsheetIdFromUrl, batchWriteValues, exportSheetAsPdf, getSheetsList } from '@/lib/googleSheets'
 import { buildAsycudaXml, resolveXmlValues, defaultXmlMappings } from '@/lib/asycudaXml'
+import { normalizeGrossMass } from '@/lib/grossMassFormat'
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
@@ -13,9 +14,23 @@ const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 function resolveColumnValue(row: Record<string, any> | null | undefined, columnName: string): string {
   if (!row) return ''
   const m = columnName.match(/^([a-zA-Z0-9_]+)\[(\d+)\]$/)
-  if (!m) return row[columnName] ?? ''
-  const parts = String(row[m[1]] ?? '').trim().split(/\s+/)
-  return parts[Number(m[2])] ?? ''
+  const raw = m ? String(row[m[1]] ?? '').trim().split(/\s+/)[Number(m[2])] ?? '' : (row[columnName] ?? '')
+  return applyWeightNormalization(m ? m[1] : columnName, raw)
+}
+
+// CDN/CUSDEC gross_mass (and net_mass) come out of PDF extraction in
+// inconsistent formats — "20 190.00", "20,190.00", "20.190.00", "20190",
+// "20190 00", "20190,00" — which must all land in the sheet as "20,190.00".
+// Only weight columns go through this; every other mapped field is passed
+// through unchanged.
+const WEIGHT_COLUMNS = new Set(['gross_mass', 'net_mass'])
+function applyWeightNormalization(baseColumnName: string, value: any): string {
+  if (!WEIGHT_COLUMNS.has(baseColumnName)) return value ?? ''
+  const { formatted, ok } = normalizeGrossMass(value)
+  // If it couldn't be brought under the 35,000kg ceiling, fall back to the
+  // raw value rather than writing something silently wrong — same
+  // conservative behavior as normalizeGrossMass's own `ok` flag.
+  return ok ? formatted : (value ?? '')
 }
 
 // A Google Sheet mapping's empty_fallback (Templates → "If Empty, Write")
@@ -281,7 +296,8 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
           } else {
             const sourceRows = m.data_source === 'manual' ? [] : m.data_source === 'cdn' ? cdnRows : cusdecRow ? [cusdecRow] : []
             sourceRows.slice(0, endRow - startRow + 1).forEach((row, i) => {
-              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: withFallback(row[m.column_name] ?? '', m.empty_fallback) })
+              const cellValue = applyWeightNormalization(m.column_name, row[m.column_name] ?? '')
+              updates.push({ range: `${sheetPrefix}${col}${startRow + i}`, value: withFallback(cellValue, m.empty_fallback) })
             })
           }
         }
@@ -291,8 +307,8 @@ export async function generateDocumentPdf(input: GenerateDocumentInput): Promise
       let value = ''
       if (hasOverride(m.field_label, manual_values)) value = (manual_values as Record<string, string>)[m.field_label]
       else if (m.data_source === 'manual') value = (manual_values || {})[m.field_label] ?? ''
-      else if (m.data_source === 'cusdec') value = cusdecRow ? (cusdecRow[m.column_name] ?? '') : ''
-      else if (m.data_source === 'cdn') value = cdnRows[0] ? (cdnRows[0][m.column_name] ?? '') : ''
+      else if (m.data_source === 'cusdec') value = cusdecRow ? applyWeightNormalization(m.column_name, cusdecRow[m.column_name] ?? '') : ''
+      else if (m.data_source === 'cdn') value = cdnRows[0] ? applyWeightNormalization(m.column_name, cdnRows[0][m.column_name] ?? '') : ''
       updates.push({ range: `${sheetPrefix}${m.target_cell_or_range.toUpperCase()}`, value: withFallback(value, m.empty_fallback) })
     }
 

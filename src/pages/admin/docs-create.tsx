@@ -7,6 +7,7 @@ import SheetPickerModal from '@/components/admin/SheetPickerModal'
 import EmailPdfModal from '@/components/admin/EmailPdfModal'
 import { emptyXmlValues, buildAsycudaXml, XML_FIELD_DEFS, defaultXmlMappings, type XmlValues, type XmlMappingRow } from '@/lib/asycudaXml'
 import { ALWAYS_TAB_TYPES, DEDICATED_TAB_TYPES } from '@/lib/docTypes'
+import { normalizeGrossMass } from '@/lib/grossMassFormat'
 
 // Custom document types (from Templates → "+ Add New Document Type") get a
 // dynamically-added tab id of the form `custom:${document_type}` — string
@@ -140,14 +141,20 @@ const emptyBoatNote = (): BoatNote => ({
 })
 
 // Mirrors docGenerate.ts's resolveColumnValue — same "col[n]" composite-value
-// split support — so Database mode's field preview shows exactly what
-// generation would resolve, before any edits.
+// split support AND the same gross_mass/net_mass normalization — so
+// Database mode's field preview shows exactly what generation would
+// resolve, before any edits.
+const WEIGHT_COLUMNS = new Set(['gross_mass', 'net_mass'])
 function resolveClientValue(row: Record<string, any> | null | undefined, columnName: string): string {
   if (!row || !columnName) return ''
   const m = columnName.match(/^([a-zA-Z0-9_]+)\[(\d+)\]$/)
-  if (!m) return row[columnName] ?? ''
-  const parts = String(row[m[1]] ?? '').trim().split(/\s+/)
-  return parts[Number(m[2])] ?? ''
+  const base = m ? m[1] : columnName
+  const raw = m ? (String(row[m[1]] ?? '').trim().split(/\s+/)[Number(m[2])] ?? '') : (row[columnName] ?? '')
+  if (WEIGHT_COLUMNS.has(base)) {
+    const { formatted, ok } = normalizeGrossMass(raw)
+    return ok ? formatted : raw
+  }
+  return raw
 }
 
 function fileToBase64(file: File): Promise<string> {
