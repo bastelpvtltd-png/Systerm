@@ -19,31 +19,40 @@ export interface NotifyMatchParams {
   file_name?: string
   doc_type?: string
   cusdec_id?: string
-  // single_per_cusdec (Docs Create: Boat Note, Party's Copy, Invoice...) —
-  // matched by (cusdec_id, doc_type), since a regenerated file can have a
-  // different name than the one originally saved.
-  // Otherwise (Upload Docs' duplicate-replace) — matched by file_name only,
-  // since one CUSDEC can own many CDNs/barcodes there and (cusdec_id,
-  // doc_type) would not be unique.
+  // Docs Create (Boat Note, Party's Copy, Invoice...) is one-per-CUSDEC —
+  // pass this so the PRIMARY match is (cusdec_id, doc_type), since a
+  // regenerated file can have a different name than the one originally
+  // saved. Every caller still gets the file_name fallback underneath it
+  // (see findExistingDocumentUpload) — this only decides which match is
+  // tried FIRST, and whether the file_name fallback is also scoped to
+  // doc_type (needed there since Docs Create reuses generic names).
   single_per_cusdec?: boolean
 }
 
 export async function findExistingDocumentUpload(
   supabaseAdmin: SupabaseClient,
   { file_name, doc_type, cusdec_id, single_per_cusdec }: NotifyMatchParams
-): Promise<{ id: string } | null> {
+): Promise<{ id: string; reason: string | null; reason_note: string | null } | null> {
   if (single_per_cusdec && cusdec_id && doc_type) {
     const { data } = await supabaseAdmin
       .from('document_uploads')
-      .select('id')
+      .select('id, reason, reason_note')
       .eq('cusdec_id', cusdec_id).eq('doc_type', doc_type)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
     if (data) return data
   }
+  // Always fall back to a file_name match — regardless of whether the
+  // caller flagged this as a resave/single_per_cusdec send. Processed
+  // History (document_uploads) must never end up with two rows for the
+  // exact same file just because the page that sent it didn't happen to
+  // recognise this particular resend as a duplicate (e.g. Upload Docs'
+  // own structured-table duplicate check missing it for some reason) — if
+  // a row with this file_name already exists, THIS send is an update to
+  // that same row, full stop.
   if (file_name) {
-    let q = supabaseAdmin.from('document_uploads').select('id').eq('file_name', file_name)
+    let q = supabaseAdmin.from('document_uploads').select('id, reason, reason_note').eq('file_name', file_name)
     if (single_per_cusdec && doc_type) q = q.eq('doc_type', doc_type)
     const { data } = await q.order('created_at', { ascending: false }).limit(1).maybeSingle()
     if (data) return data

@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '@/lib/serverAuth'
-import { wasAlreadyNotified } from '@/lib/notifyHistory'
+import { findExistingDocumentUpload, wasAlreadyNotified } from '@/lib/notifyHistory'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -43,54 +43,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // The SAME document going through Send again must never become a second
       // row (it showed up twice in Processed History, looking like two
-      // different documents). Two ways it is recognised:
+      // different documents). Matched via the SAME shared lookup used by
+      // check-notify-history.ts's frontend pre-check (findExistingDocumentUpload):
       //  • single_per_cusdec — sent by Docs Create, where a document type is
-      //    one-per-CUSDEC (Boat Note, Party's Copy, Invoice...). Matched by
-      //    (cusdec_id, doc_type) whether or not the page thought it was a
-      //    re-save, and even when the regenerated file has a different name.
-      //  • resaved — Upload Docs' duplicate "Replace". A CUSDEC can own many
-      //    CDNs/barcodes there, so (cusdec_id, doc_type) is NOT unique; matched
-      //    by file_name only, as before.
+      //    one-per-CUSDEC (Boat Note, Party's Copy, Invoice...). Matched FIRST
+      //    by (cusdec_id, doc_type), even when the regenerated file has a
+      //    different name.
+      //  • Every send — as a fallback (or primary, for Upload Docs), matched
+      //    by file_name against document_uploads. This runs regardless of
+      //    whether the caller flagged the send as a resave: relying on that
+      //    flag was the actual bug — a resend that the page's own duplicate
+      //    check failed to catch (for whatever reason) used to slip through
+      //    as a "new" row instead of updating the existing one, even though
+      //    Processed History already had a row with that exact file_name.
       // Either way the existing row is updated in place: exactly one row per
       // document, however many times it is sent.
       let data: any = null
-      let existing: { id: string; reason: string | null; reason_note: string | null } | null = null
-      if (single_per_cusdec && cusdec_id && doc_type) {
-        const { data: byCusdec } = await supabaseAdmin
-          .from('document_uploads')
-          .select('id, reason, reason_note')
-          .eq('cusdec_id', cusdec_id).eq('doc_type', doc_type)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-        existing = byCusdec
-      }
-      if (!existing && (resaved || single_per_cusdec)) {
-        // Docs Create rows saved before cusdec_id was being recorded have no
-        // cusdec_id to match on, but their file name is stable (e.g. B55296.pdf
-        // is always the Boat Note of CUSDEC 55296) — so fall back to the name,
-        // scoped to the same doc_type for Docs Create sends.
-        let nameQuery = supabaseAdmin
-          .from('document_uploads')
-          .select('id, reason, reason_note')
-          .eq('file_name', file_name)
-        if (single_per_cusdec && doc_type) nameQuery = nameQuery.eq('doc_type', doc_type)
-        const { data: byName } = await nameQuery
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-        existing = byName
-      }
+      const existing = await findExistingDocumentUpload(supabaseAdmin, { file_name, doc_type, cusdec_id, single_per_cusdec })
       // A re-send of a document already on record is a replace, not a new
       // document — it's logged as "re-saved" below regardless. But that on
-      // its own must NOT decide Notify: a row already existing (or resaved
-      // being true) only means it was Saved before, not that anyone was
-      // ever Notified about it. Processed History's own raw log
-      // (pick_history_log) is the real source of truth for "was this
-      // actually notified before" — so skip Notify only when that log
-      // already has a 'notify' event for the SAME existing row. A resave
-      // that was only ever Saved (no prior Notify) still notifies here if
-      // the person ticked it, same as a brand-new document would.
+      // its own must NOT decide Notify: a row already existing only means
+      // it was Saved before, not that anyone was ever Notified about it.
+      // Processed History's own raw log (pick_history_log) is the real
+      // source of truth for "was this actually notified before" — so skip
+      // Notify only when that log already has a 'notify' event for the SAME
+      // existing row. A resave that was only ever Saved (no prior Notify)
+      // still notifies here if the person ticked it, same as a brand-new
+      // document would.
       const isResave = !!(resaved || existing)
       let alreadyNotifiedBefore = false
       if (existing) {
