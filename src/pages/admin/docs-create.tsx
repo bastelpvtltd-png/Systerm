@@ -118,6 +118,33 @@ function Field({ label, edited, children }: { label: string; edited?: boolean; c
   )
 }
 
+// Real "was this exact document already Notified?" check, read from
+// Processed History's own raw log (pick_history_log via the dedicated
+// /api/check-notify-history endpoint) — NOT guessed from "it already has a
+// saved Drive link", which is what notifyDisabled used to be based on and
+// was wrong whenever a document had been Saved (or resaved) without ever
+// actually being Notified. Re-runs whenever the identifying params change;
+// resolves to false (Notify stays enabled) while unknown/in flight or if
+// the check itself fails, so a slow network never blocks a real Notify —
+// the server-side check in document-uploads.ts is still the authoritative
+// gate either way.
+function useNotifyAlreadySent(params: { file_name?: string; doc_type?: string; cusdec_id?: string; single_per_cusdec?: boolean } | null) {
+  const [alreadyNotified, setAlreadyNotified] = useState(false)
+  useEffect(() => {
+    if (!params || (!params.file_name && !(params.cusdec_id && params.doc_type))) { setAlreadyNotified(false); return }
+    let cancelled = false
+    authHeader().then(h => fetch('/api/check-notify-history', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
+      body: JSON.stringify(params),
+    }))
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setAlreadyNotified(!!d.alreadyNotified) })
+      .catch(() => { if (!cancelled) setAlreadyNotified(false) })
+    return () => { cancelled = true }
+  }, [params?.file_name, params?.doc_type, params?.cusdec_id, params?.single_per_cusdec])
+  return alreadyNotified
+}
+
 // Company constants from Excel b2 sheet
 const COMPANY = {
   name:       'PRIYANTHI AGENCY',
@@ -749,6 +776,12 @@ function BoatNoteContent() {
   const curIsBlue   = !!cur?.export_release_passed
   const curIsGreen  = cur ? isCompleted(cur) && !curIsBlue : false
   const statusColor = status.startsWith('✓') ? 'text-green-600' : status.startsWith('⚠') ? 'text-amber-600' : 'text-red-600'
+  // Real Processed History check — replaces the old "already has a saved
+  // link => never Notify again" assumption (curHasBnUrl/savedBnUrl), which
+  // was wrong for a Boat Note that was Saved but never actually Notified.
+  const bnAlreadyNotified = useNotifyAlreadySent(
+    bnEntryMode === 'cusdec' && selCusdec ? { cusdec_id: selCusdec, doc_type: 'boat_note', single_per_cusdec: true } : null
+  )
 
   return (
       <div className="p-6">
@@ -1013,8 +1046,8 @@ function BoatNoteContent() {
                     onSave={onSaveBnModal}
                     onGetDriveLinks={onGetDriveLinksBnModal}
                     onGetMailFiles={onGetMailFilesBn}
-                    notifyDisabled={bnEntryMode === 'cusdec' && (curHasBnUrl || !!savedBnUrl)}
-                    notifyDisabledReason="Already saved — Notify isn't available for a replace."
+                    notifyDisabled={bnEntryMode === 'cusdec' && bnAlreadyNotified}
+                    notifyDisabledReason="Already notified — Notify isn't available for a replace."
                     onClose={() => setSendModalBnOpen(false)}
                     onDone={() => { setSendModalBnOpen(false); loadCusdecs(true); setBnHistoryRefreshKey(k => k + 1) }}
                   />
@@ -1463,6 +1496,12 @@ function PartiesCopyPanel() {
   const curIsBlue = !!selected?.export_release_passed
   const curIsGreen = !!selected && !curIsBlue && capNum > 0 && cdnCount >= capNum && selectedCdns.every(c => c.boat_note_passed)
   const curHasPartyUrl = !!(savedPartyUrl || selected?.party_copy_url)
+  // Real Processed History check — replaces the old "already has a saved
+  // link => never Notify again" assumption (curHasPartyUrl), which was
+  // wrong for a Party's Copy that was Saved but never actually Notified.
+  const partyAlreadyNotified = useNotifyAlreadySent(
+    selected?.id ? { cusdec_id: selected.id, doc_type: 'party_copy', single_per_cusdec: true } : null
+  )
 
   // "Generate Pro" — the real Party's Copy: the original CUSDEC PDF
   // (cusdec.pdf_url) followed by the filled-in template page(s), merged
@@ -1667,9 +1706,9 @@ function PartiesCopyPanel() {
                   onGetMailFiles={onGetMailFilesPro}
                   onClose={() => setSendModalOpen(false)}
                   onDone={() => { setSendModalOpen(false); setPartyHistoryRefreshKey(k => k + 1) }}
-                  notifyDisabled={curIsGreen || curIsBlue || curHasPartyUrl}
+                  notifyDisabled={curIsGreen || curIsBlue || partyAlreadyNotified}
                   notifyDisabledReason={
-                    curHasPartyUrl ? "Already saved — Notify isn't available for a replace." :
+                    partyAlreadyNotified ? "Already notified — Notify isn't available for a replace." :
                     (curIsGreen || curIsBlue) ? 'Notify is not available once this CUSDEC is Green/Blue.' : undefined
                   }
                 />
@@ -1950,6 +1989,12 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
   const cdnCount = selectedCdns.length
   const curIsBlue = !!selectedCusdec?.export_release_passed
   const curIsGreen = !!selectedCusdec && !curIsBlue && capNum > 0 && cdnCount >= capNum && selectedCdns.every(c => c.boat_note_passed)
+  // Real Processed History check — replaces the old "already has a saved
+  // link => never Notify again" assumption (savedLink), which was wrong
+  // for a document that was Saved but never actually Notified.
+  const mainAlreadyNotified = useNotifyAlreadySent(
+    entryMode === 'cusdec' && selectedCusdecId ? { cusdec_id: selectedCusdecId, doc_type: documentType, single_per_cusdec: true } : null
+  )
 
   const cdnPickMissing = entryMode === 'cusdec' && needsCdnPick && selectedCdns.length > 0 && !selectedCdnId
 
@@ -2199,10 +2244,10 @@ function CustomDocPanel({ documentType, label }: { documentType: string; label: 
           onGetMailFiles={onGetMailFilesModal}
           onClose={() => setSendModalOpen(false)}
           onDone={() => { setSendModalOpen(false); setHistoryRefreshKey(k => k + 1) }}
-          notifyDisabled={entryMode === 'cusdec' && (curIsGreen || curIsBlue || !!savedLink)}
+          notifyDisabled={entryMode === 'cusdec' && (curIsGreen || curIsBlue || mainAlreadyNotified)}
           notifyDisabledReason={
             entryMode !== 'cusdec' ? undefined :
-            savedLink ? "Already saved — Notify isn't available for a replace." :
+            mainAlreadyNotified ? "Already notified — Notify isn't available for a replace." :
             (curIsGreen || curIsBlue) ? 'Notify is not available once this CUSDEC is Green/Blue.' : undefined
           }
         />

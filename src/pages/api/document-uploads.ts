@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '@/lib/serverAuth'
+import { wasAlreadyNotified } from '@/lib/notifyHistory'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -81,10 +82,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         existing = byName
       }
       // A re-send of a document already on record is a replace, not a new
-      // document: it never notifies (same rule as Upload Docs' duplicate
-      // Replace) and is logged as "re-saved" instead.
+      // document — it's logged as "re-saved" below regardless. But that on
+      // its own must NOT decide Notify: a row already existing (or resaved
+      // being true) only means it was Saved before, not that anyone was
+      // ever Notified about it. Processed History's own raw log
+      // (pick_history_log) is the real source of truth for "was this
+      // actually notified before" — so skip Notify only when that log
+      // already has a 'notify' event for the SAME existing row. A resave
+      // that was only ever Saved (no prior Notify) still notifies here if
+      // the person ticked it, same as a brand-new document would.
       const isResave = !!(resaved || existing)
-      const doNotify = !!notify && !isResave
+      let alreadyNotifiedBefore = false
+      if (existing) {
+        const hist = await wasAlreadyNotified(supabaseAdmin, existing.id)
+        alreadyNotifiedBefore = hist.alreadyNotified
+      }
+      const doNotify = !!notify && !alreadyNotifiedBefore
       if (existing) {
         // Keep the reason the document was FIRST filed with — the resend's
         // reason must not overwrite it, so Processed History keeps showing the

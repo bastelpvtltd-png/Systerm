@@ -781,18 +781,35 @@ function DocumentsUploadContent() {
     // The save itself continues in the background exactly as before; the
     // list row reflects the outcome once it lands.
     setSelectedId(prev => prev === item.id ? null : prev)
+    // Replacing the existing row is an update to something already known
+    // about — but that alone doesn't mean Notify should be skipped. It only
+    // should be skipped if this exact document was actually Notified
+    // before; if it was only ever Saved (Notify never ticked on an earlier
+    // Send), a duplicate-replace should still notify if the person asked
+    // for it now. Processed History's own raw log (pick_history_log) is
+    // the real answer here, not just "this is a replace" — check it via
+    // the dedicated endpoint before deciding.
+    let alreadyNotified = true // safe default if the check itself fails
+    try {
+      const res = await fetch('/api/check-notify-history', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ file_name: item.fileName }),
+      })
+      const d = await res.json()
+      if (res.ok) alreadyNotified = !!d.alreadyNotified
+    } catch { /* fall back to the safe default above — no Notify */ }
     // Flag it BEFORE the save runs, not after: the send group registers this
-    // file the instant its Save lands, and it has to already know this is a
-    // duplicate-replace (no Notify, logged as "re-saved") by then.
-    updateItem(item.id, { skipNotifyOnDone: true })
+    // file the instant its Save lands, and it has to already know whether
+    // this is a duplicate-replace that should skip Notify (already
+    // Notified before) or one that should still notify (never was).
+    updateItem(item.id, { skipNotifyOnDone: alreadyNotified })
     const r = await persistItem(item, 'replace', matchId)
     if (!r.ok) updateItem(item.id, { skipNotifyOnDone: false })
     settleBatchItem(item.id)
-    // Replacing the existing row is an update to something already known
-    // about, not a new document appearing — Notify never fires for it, even
-    // if Notify was ticked on the original Send. Mail still goes out if it
+    // Notify fires only if this document was never actually Notified
+    // before AND the person still wants it now. Mail still goes out if it
     // was ticked, since the person still wants their copy of the file.
-    await finishSingleItemAction(item, r, { notify: false, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '', resaved: true }, !!choices)
+    await finishSingleItemAction(item, r, { notify: !alreadyNotified && !!choices?.notify, mail: !!choices?.mail, reason: choices?.reason || '', reasonNote: choices?.reasonNote || '', resaved: true }, !!choices)
   }
 
   function updateMatchDraft(matchId: string, key: string, value: string) {
