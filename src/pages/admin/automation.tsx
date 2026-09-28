@@ -1125,47 +1125,75 @@ interface VesselRow { id: string; terminal: string; vessel: string; voyage: stri
 type VesselSortKey = keyof VesselRow
 type SortDir = 'asc' | 'desc'
 
-function sortVessel(rows: VesselRow[], key: VesselSortKey, dir: SortDir) {
-  return [...rows].sort((a, b) => {
-    const av = (a[key] || '').toString().toLowerCase()
-    const bv = (b[key] || '').toString().toLowerCase()
-    return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
-  })
+const VESSEL_PAGE_SIZE = 100
+
+// Shared page controls for the server-paged tables (Vessel Triggers, Trico Yard).
+function Pager({ page, pageSize, total, onChange }: { page: number; pageSize: number; total: number; onChange: (p: number) => void }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  if (total === 0) return null
+  const from = (page - 1) * pageSize + 1
+  const to = Math.min(page * pageSize, total)
+  const btn = 'px-2.5 py-1 rounded-md text-xs border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent'
+  return (
+    <div className="flex items-center justify-between gap-2 mt-3 flex-wrap text-xs text-gray-500">
+      <span>Showing {from}–{to} of {total}</span>
+      <div className="flex items-center gap-1.5">
+        <button onClick={() => onChange(1)} disabled={page <= 1} className={btn}>« First</button>
+        <button onClick={() => onChange(page - 1)} disabled={page <= 1} className={btn}>‹ Prev</button>
+        <span className="px-2">Page {page} / {totalPages}</span>
+        <button onClick={() => onChange(page + 1)} disabled={page >= totalPages} className={btn}>Next ›</button>
+        <button onClick={() => onChange(totalPages)} disabled={page >= totalPages} className={btn}>Last »</button>
+      </div>
+    </div>
+  )
 }
 
 function VesselTriggerPanel() {
   const [items, setItems] = useState<VesselRow[]>([])
-  const [loading, setLoading] = useState(false)
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<VesselSortKey>('etb')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [syncing, setSyncing] = useState(false)
   const [status, setStatus] = useState('')
-  // The mount-only poll interval below closes over `load` as it was at mount
-  // time — without this ref it would keep re-fetching with search='' forever
-  // once the interval is set up, silently wiping out an active search result
-  // every 15s. The ref always has the current value; `search` itself still
-  // drives the input as normal.
-  const searchRef = useRef(search)
-  useEffect(() => { searchRef.current = search }, [search])
+  // Only the newest request is allowed to update the table — fast typing can
+  // otherwise let an older, slower response overwrite the newer result.
+  const reqId = useRef(0)
 
   async function load(silent = false) {
+    const id = ++reqId.current
     if (!silent) setLoading(true)
     try {
-      const params = new URLSearchParams()
-      if (searchRef.current) params.set('search', searchRef.current)
+      const params = new URLSearchParams({ page: String(page), pageSize: String(VESSEL_PAGE_SIZE), sortKey, sortDir })
+      if (search.trim()) params.set('search', search.trim())
       const res = await fetch(`/api/vessel-triggers?${params.toString()}`, { headers: await authHeader() })
       const d = await res.json()
-      if (res.ok) setItems(d.items || [])
-    } finally { if (!silent) setLoading(false) }
+      if (id !== reqId.current) return
+      if (res.ok) {
+        setItems(d.items || [])
+        setTotal(d.total || 0)
+        // rows got removed / search narrowed → don't sit on an empty page
+        const lastPage = Math.max(1, Math.ceil((d.total || 0) / VESSEL_PAGE_SIZE))
+        if (page > lastPage) setPage(lastPage)
+      }
+    } finally { if (id === reqId.current) setLoading(false) }
   }
+
+  // Search filters as you type (debounced) across the WHOLE table, not just
+  // the visible page. Page / sort changes reload straight away.
   useEffect(() => {
-    load()
-    // Live — reflects a sync that just ran (manual or the hourly cron ping)
-    // without a manual refresh.
+    const t = setTimeout(() => load(items.length > 0), search ? 300 : 0)
+    return () => clearTimeout(t)
+  }, [search, page, sortKey, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live — reflects a sync that just ran (manual or the hourly cron ping)
+  // without a manual refresh; keeps the current search / page / sort.
+  useEffect(() => {
     const t = setInterval(() => load(true), 15000)
     return () => clearInterval(t)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search, page, sortKey, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function triggerNow() {
     setSyncing(true); setStatus('')
@@ -1174,12 +1202,18 @@ function VesselTriggerPanel() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setStatus(`✓ Synced — ${d.fetched} fetched, ${d.inserted} new, ${d.updated} updated, ${d.unchanged} unchanged`)
-      load()
+      load(true)
     } catch (e: any) {
       setStatus(`✗ ${e.message}`)
     } finally {
       setSyncing(false)
     }
+  }
+
+  function onSort(k: VesselSortKey) {
+    if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(k); setSortDir('asc') }
+    setPage(1)
   }
 
   return (
@@ -1192,43 +1226,47 @@ function VesselTriggerPanel() {
       </div>
       <div className="mb-3"><SchedulerControl panel="vessel_trigger" label="Sync"/></div>
       {status && <p className={`text-xs mb-3 font-medium ${status.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{status}</p>}
-      <div className="flex items-center gap-2 mb-3">
-        <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && load()}
-          placeholder="Search vessel, voyage, or terminal..." className="input"/>
-        <button onClick={() => load()} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white flex-shrink-0" style={{ background: '#1B3A5C' }}>
-          <Search size={12}/> Search
-        </button>
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <div className="relative flex-1 min-w-[16rem] max-w-md">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e => { setSearch(e.target.value); setPage(1) }}
+            placeholder="Search vessel, voyage, or terminal..." className="input pl-7 w-full"/>
+        </div>
+        <span className="text-[11px] text-gray-500">{total} vessel{total === 1 ? '' : 's'}{search.trim() ? ' matching' : ''}</span>
       </div>
       {loading ? (
         <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
       ) : items.length === 0 ? (
-        <p className="text-xs text-gray-400 text-center py-6">No vessel schedule data yet — click Trigger Now to sync</p>
+        <p className="text-xs text-gray-400 text-center py-6">{search.trim() ? 'No vessels match your search' : 'No vessel schedule data yet — click Trigger Now to sync'}</p>
       ) : (
-        <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-gray-50 sticky top-0"><tr>
-              {([['terminal','Terminal'],['vessel','Vessel'],['voyage','Voyage'],['opening_time','Opening'],['closing_time','Closing'],['etb','ETB'],['last_update','Last Updated']] as [VesselSortKey, string][]).map(([k, label]) => (
-                <th key={k} onClick={() => { if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortKey(k); setSortDir('asc') } }}
-                  className="text-left px-2 py-1.5 text-gray-500 font-medium cursor-pointer select-none hover:text-gray-800 whitespace-nowrap">
-                  {label}{sortKey === k ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
-                </th>
-              ))}
-            </tr></thead>
-            <tbody>
-              {sortVessel(items, sortKey, sortDir).map(r => (
-                <tr key={r.id} className="border-t border-gray-50">
-                  <td className="px-2 py-1.5 text-gray-800">{r.terminal}</td>
-                  <td className="px-2 py-1.5 text-gray-800 font-medium">{r.vessel}</td>
-                  <td className="px-2 py-1.5 text-gray-600">{r.voyage}</td>
-                  <td className="px-2 py-1.5 text-gray-600">{r.opening_time}</td>
-                  <td className="px-2 py-1.5 text-gray-600">{r.closing_time}</td>
-                  <td className="px-2 py-1.5 text-gray-600">{r.etb}</td>
-                  <td className="px-2 py-1.5 text-gray-400">{r.last_update}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 sticky top-0"><tr>
+                {([['terminal','Terminal'],['vessel','Vessel'],['voyage','Voyage'],['opening_time','Opening'],['closing_time','Closing'],['etb','ETB'],['last_update','Last Updated']] as [VesselSortKey, string][]).map(([k, label]) => (
+                  <th key={k} onClick={() => onSort(k)}
+                    className="text-left px-2 py-1.5 text-gray-500 font-medium cursor-pointer select-none hover:text-gray-800 whitespace-nowrap">
+                    {label}{sortKey === k ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                  </th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {items.map(r => (
+                  <tr key={r.id} className="border-t border-gray-50">
+                    <td className="px-2 py-1.5 text-gray-800">{r.terminal}</td>
+                    <td className="px-2 py-1.5 text-gray-800 font-medium">{r.vessel}</td>
+                    <td className="px-2 py-1.5 text-gray-600">{r.voyage}</td>
+                    <td className="px-2 py-1.5 text-gray-600">{r.opening_time}</td>
+                    <td className="px-2 py-1.5 text-gray-600">{r.closing_time}</td>
+                    <td className="px-2 py-1.5 text-gray-600">{r.etb}</td>
+                    <td className="px-2 py-1.5 text-gray-400">{r.last_update}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={page} pageSize={VESSEL_PAGE_SIZE} total={total} onChange={setPage}/>
+        </>
       )}
     </div>
   )
@@ -2019,39 +2057,51 @@ function fmtColombo(iso: string | null | undefined) {
   try { return new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Colombo', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }) } catch { return iso }
 }
 
+const YARD_PAGE_SIZE = 1000
+
 function TricoYardPanel() {
   const [items, setItems] = useState<YardContainer[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [latestUpdate, setLatestUpdate] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [search, setSearch] = useState('')
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
+  // Only the newest request may update the table (fast typing safety).
+  const reqId = useRef(0)
 
-  // Search is passed straight into load() (and debounced) so it always uses
-  // the value just typed — the old version read a ref that was still one
-  // keystroke behind, so results lagged what was in the box.
-  async function load(silent = false, q = search) {
+  async function load(silent = false) {
+    const id = ++reqId.current
     if (!silent) setLoading(true)
     try {
-      const res = await fetch(`/api/trico-yard-data?search=${encodeURIComponent(q)}`, { headers: await authHeader() })
-      if (res.ok) {
-        const d = await res.json()
-        setItems(d.items || [])
-      }
-    } finally { setLoading(false) }
+      const params = new URLSearchParams({ page: String(page), pageSize: String(YARD_PAGE_SIZE) })
+      if (search.trim()) params.set('search', search.trim())
+      const res = await fetch(`/api/trico-yard-data?${params.toString()}`, { headers: await authHeader() })
+      if (!res.ok) return
+      const d = await res.json()
+      if (id !== reqId.current) return
+      setItems(d.items || [])
+      setTotal(d.total || 0)
+      setLatestUpdate(d.latestUpdate || null)
+      const lastPage = Math.max(1, Math.ceil((d.total || 0) / YARD_PAGE_SIZE))
+      if (page > lastPage) setPage(lastPage)
+    } finally { if (id === reqId.current) setLoading(false) }
   }
 
-  // Reload whenever the search text changes (debounced); the 15s auto-refresh
-  // below is re-created with the current search so it never wipes a filter.
+  // Search filters as you type (debounced) across ALL containers, not just the
+  // visible page. Page changes reload straight away.
   useEffect(() => {
-    const t = setTimeout(() => load(true, search), 300)
+    const t = setTimeout(() => load(items.length > 0), search ? 300 : 0)
     return () => clearTimeout(t)
-  }, [search]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search, page]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto refresh every 15s, keeping the current search / page.
   useEffect(() => {
-    const t = setInterval(() => load(true, search), 15000)
+    const t = setInterval(() => load(true), 15000)
     return () => clearInterval(t)
-  }, [search]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search, page]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function triggerNow() {
     setSyncing(true); setStatusMsg('')
@@ -2061,20 +2111,13 @@ function TricoYardPanel() {
       if (!res.ok) throw new Error(d.error || 'Failed to sync')
       setLastSyncedAt(new Date().toISOString())
       setStatusMsg(`✓ Synced — ${d.message || 'Updated successfully'}`)
-      load(true, search)
+      load(true)
     } catch (e: any) {
       setStatusMsg(`✗ ${e.message}`)
     } finally {
       setSyncing(false)
     }
   }
-
-  // Newest updated_at across the loaded rows = when the yard data was last
-  // refreshed in the database (works for the cron as well as manual syncs).
-  const latestUpdate = items.reduce<string | null>((max, r) => {
-    if (!r.updated_at) return max
-    return !max || new Date(r.updated_at) > new Date(max) ? r.updated_at : max
-  }, null)
 
   return (
     <div className="card max-w-5xl">
@@ -2090,8 +2133,12 @@ function TricoYardPanel() {
       {statusMsg && <p className={`text-xs mb-3 font-medium ${statusMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{statusMsg}</p>}
 
       <div className="flex items-center gap-3 mb-3 flex-wrap">
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container, CUSDEC, CDN, vehicle or shipper..." className="input max-w-sm"/>
-        <span className="text-[11px] text-gray-500">{items.length} container{items.length === 1 ? '' : 's'}</span>
+        <div className="relative flex-1 min-w-[16rem] max-w-sm">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e => { setSearch(e.target.value); setPage(1) }}
+            placeholder="Search container, CUSDEC, CDN, vehicle or shipper..." className="input pl-7 w-full"/>
+        </div>
+        <span className="text-[11px] text-gray-500">{total} container{total === 1 ? '' : 's'}{search.trim() ? ' matching' : ''}</span>
         <span className="text-[11px] text-green-700 bg-green-50 border border-green-200 rounded-md px-2 py-0.5 flex items-center gap-1">
           <Clock size={10}/>Data updated: {fmtColombo(latestUpdate)}
         </span>
@@ -2101,42 +2148,45 @@ function TricoYardPanel() {
       {loading ? (
         <div className="flex justify-center py-8"><Loader size={18} className="animate-spin text-gray-400"/></div>
       ) : items.length === 0 ? (
-        <p className="text-xs text-gray-400 text-center py-6">No data yet — click Sync Now</p>
+        <p className="text-xs text-gray-400 text-center py-6">{search.trim() ? 'No containers match your search' : 'No data yet — click Sync Now'}</p>
       ) : (
-        <div className="overflow-x-auto max-h-[75vh] overflow-y-auto rounded-lg border border-gray-100">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-gray-50 sticky top-0 shadow-sm">
-              <tr>
-                <th className="px-3 py-2 font-medium text-gray-500">Veh. No</th>
-                <th className="px-3 py-2 font-medium text-gray-500">Container</th>
-                <th className="px-3 py-2 font-medium text-gray-500">CUSDEC</th>
-                <th className="px-3 py-2 font-medium text-gray-500">CDN</th>
-                <th className="px-3 py-2 font-medium text-gray-500">Shipper</th>
-                <th className="px-3 py-2 font-medium text-gray-500">Time In</th>
-                <th className="px-3 py-2 font-medium text-gray-500">Duration</th>
-                <th className="px-3 py-2 font-medium text-gray-500">Status</th>
-                <th className="px-3 py-2 font-medium text-gray-500 whitespace-nowrap">Updated</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {items.map(r => (
-                <tr key={r.id} className="hover:bg-gray-50">
-                  <td className="px-3 py-2 text-gray-600">{r.veh_no}</td>
-                  <td className="px-3 py-2 font-bold text-gray-800">{r.container_no}</td>
-                  <td className="px-3 py-2 text-blue-600 font-medium">{r.cusdec_no}</td>
-                  <td className="px-3 py-2 text-gray-600">{r.cdn}</td>
-                  <td className="px-3 py-2 text-gray-600 truncate max-w-[150px]">{r.shipper}</td>
-                  <td className="px-3 py-2 text-gray-600">{r.time_in}</td>
-                  <td className="px-3 py-2 text-gray-600">{r.duration}</td>
-                  <td className="px-3 py-2">
-                    {r.status && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold text-white ${r.status === 'E' ? 'bg-blue-500' : 'bg-green-500'}`}>{r.status}</span>}
-                  </td>
-                  <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{fmtColombo(r.updated_at)}</td>
+        <>
+          <div className="overflow-x-auto max-h-[75vh] overflow-y-auto rounded-lg border border-gray-100">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-gray-50 sticky top-0 shadow-sm">
+                <tr>
+                  <th className="px-3 py-2 font-medium text-gray-500">Veh. No</th>
+                  <th className="px-3 py-2 font-medium text-gray-500">Container</th>
+                  <th className="px-3 py-2 font-medium text-gray-500">CUSDEC</th>
+                  <th className="px-3 py-2 font-medium text-gray-500">CDN</th>
+                  <th className="px-3 py-2 font-medium text-gray-500">Shipper</th>
+                  <th className="px-3 py-2 font-medium text-gray-500">Time In</th>
+                  <th className="px-3 py-2 font-medium text-gray-500">Duration</th>
+                  <th className="px-3 py-2 font-medium text-gray-500">Status</th>
+                  <th className="px-3 py-2 font-medium text-gray-500 whitespace-nowrap">Updated</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {items.map(r => (
+                  <tr key={r.id} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-600">{r.veh_no}</td>
+                    <td className="px-3 py-2 font-bold text-gray-800">{r.container_no}</td>
+                    <td className="px-3 py-2 text-blue-600 font-medium">{r.cusdec_no}</td>
+                    <td className="px-3 py-2 text-gray-600">{r.cdn}</td>
+                    <td className="px-3 py-2 text-gray-600 truncate max-w-[150px]">{r.shipper}</td>
+                    <td className="px-3 py-2 text-gray-600">{r.time_in}</td>
+                    <td className="px-3 py-2 text-gray-600">{r.duration}</td>
+                    <td className="px-3 py-2">
+                      {r.status && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold text-white ${r.status === 'E' ? 'bg-blue-500' : 'bg-green-500'}`}>{r.status}</span>}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{fmtColombo(r.updated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={page} pageSize={YARD_PAGE_SIZE} total={total} onChange={setPage}/>
+        </>
       )}
     </div>
   )

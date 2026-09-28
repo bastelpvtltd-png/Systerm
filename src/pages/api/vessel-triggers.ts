@@ -7,13 +7,12 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const PAGE_SIZE = 1000   // Supabase's max rows per request
-const MAX_ROWS = 50000   // safety cap so a runaway table can't hang the request
+const SORTABLE = ['terminal', 'vessel', 'voyage', 'opening_time', 'closing_time', 'etb', 'last_update']
 
-// Lists the synced vessel schedule (vessel_triggers, kept up to date by
-// vesselTrigger.ts via manual trigger or the scheduled cron).
-// Returns EVERY row in the table (paged in 1000s) — the old version had a
-// .limit(500) that cut off newer rows, and searched only within those 500.
+// Server-side paging + search + sort over the WHOLE vessel_triggers table.
+//   ?page=1&pageSize=100&search=...&sortKey=etb&sortDir=asc
+// Returns { items, total, page, pageSize } — `total` is the number of rows
+// matching the search across every page, so the UI can show "Page X of Y".
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
   const authed = await requireAuth(req)
@@ -21,28 +20,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     // strip characters that would break the PostgREST .or() filter syntax
     const search = String(req.query.search || '').replace(/[,()%*]/g, ' ').trim()
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1)
+    const pageSize = Math.min(1000, Math.max(1, parseInt(String(req.query.pageSize || '100'), 10) || 100))
+    const sortKey = SORTABLE.includes(String(req.query.sortKey)) ? String(req.query.sortKey) : 'etb'
+    const ascending = String(req.query.sortDir) !== 'desc'
 
-    const items: any[] = []
-    for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-      let query = supabaseAdmin
-        .from('vessel_triggers')
-        .select('*')
-        // id as a tiebreaker keeps paging stable (no skipped/duplicated rows)
-        .order('etb', { ascending: false })
-        .order('id', { ascending: true })
-        .range(from, from + PAGE_SIZE - 1)
+    const from = (page - 1) * pageSize
+    let query = supabaseAdmin
+      .from('vessel_triggers')
+      .select('*', { count: 'exact' })
+      .order(sortKey, { ascending })
+      .order('id', { ascending: true }) // tiebreaker → stable paging
+      .range(from, from + pageSize - 1)
 
-      if (search) {
-        query = query.or(`vessel.ilike.%${search}%,voyage.ilike.%${search}%,terminal.ilike.%${search}%`)
-      }
-
-      const { data, error } = await query
-      if (error) throw error
-      items.push(...(data || []))
-      if (!data || data.length < PAGE_SIZE) break
+    if (search) {
+      query = query.or(`vessel.ilike.%${search}%,voyage.ilike.%${search}%,terminal.ilike.%${search}%`)
     }
 
-    res.json({ items, total: items.length })
+    const { data, error, count } = await query
+    if (error) throw error
+    res.json({ items: data || [], total: count ?? (data || []).length, page, pageSize })
   } catch (err: any) {
     console.error('[vessel-triggers] error:', err)
     res.status(500).json({ error: err.message })
