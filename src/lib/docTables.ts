@@ -296,6 +296,16 @@ export async function cascadeDeleteCdn(cdnRow: any): Promise<void> {
     if (b.pdf_url) await deleteDriveFileByUrl(b.pdf_url).catch((e: any) => console.error('[cascadeDeleteCdn] Drive delete failed:', e.message))
     await supabaseAdmin.from('barcode').delete().eq('id', b.id)
   }
+  // boat_notes has no dedicated container_no column — it's inside the jsonb
+  // `details` blob (same key cascadeDeleteCusdec matches on below). A CDN
+  // "owns" the boat note filed for the same container, same as it owns the
+  // container's barcode — removing the CDN without it just leaves an
+  // orphaned boat note row (and PDF) with no container left to find it by.
+  const { data: boatNotes } = await supabaseAdmin.from('boat_notes').select('*').eq('details->>container_no', cdnRow.container_no)
+  for (const bn of (boatNotes || [])) {
+    if (bn.pdf_url) await deleteDriveFileByUrl(bn.pdf_url).catch((e: any) => console.error('[cascadeDeleteCdn] Drive delete failed:', e.message))
+    await supabaseAdmin.from('boat_notes').delete().eq('id', bn.id)
+  }
 }
 
 export async function cascadeDeleteCusdec(cusdecRow: any): Promise<void> {

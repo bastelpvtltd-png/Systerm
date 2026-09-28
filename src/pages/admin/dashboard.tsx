@@ -5,7 +5,7 @@ import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdf
 import {
   Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
   Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square, Trash2, FileCheck,
-  DollarSign, Check, Lock,
+  DollarSign, Check, Lock, Printer,
 } from 'lucide-react'
 
 // A stored Drive URL is the "view" link (drive.google.com/file/d/<id>/view)
@@ -791,7 +791,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     load()
   }
 
-  function logAction(documentId: string, action: 'mail' | 'download') {
+  function logAction(documentId: string, action: 'mail' | 'download' | 'print') {
     authHeader().then(h => fetch('/api/log-document-action', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...h },
       body: JSON.stringify({ document_id: documentId, action }),
@@ -941,6 +941,43 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     setTimeout(() => cleanupTempFiles(merged), 2500)
   }
 
+  // Print — same "finishes the task" weight as Mail/Download (counts, logs,
+  // removes it from this list, deletes a reason-tagged temp doc), but opens
+  // the PDF's own Drive view link in a new tab instead of forcing a
+  // download — a normal browser shows that in its built-in PDF viewer with
+  // a Print button on the toolbar; on a phone it hands off to whatever PDF
+  // app is installed, which is as far as a "Print" action can reasonably
+  // reach on that platform.
+  async function printTasks(list: any[]) {
+    if (!confirmReasonDeleteBatch(list)) return
+    const ids = new Set(list.map(t => t.id))
+    const boat = list.filter(isBoatNoteTask)
+    if (!boat.length) {
+      for (const t of list) {
+        if (!t.document_uploads?.drive_url) continue
+        window.open(t.document_uploads.drive_url, '_blank')
+        logAction(t.document_uploads.id, 'print')
+        if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
+      }
+      setTasks(prev => prev.filter(t => !ids.has(t.id)))
+      setSelected({})
+      return
+    }
+    const merged = await mergeBoatNoteTasks(boat)
+    if (!merged) return
+    const others = list.filter(t => !isBoatNoteTask(t) && t.document_uploads?.drive_url)
+    for (const f of merged) { window.open(f.driveLink, '_blank') }
+    for (const t of others) { window.open(t.document_uploads.drive_url, '_blank') }
+    for (const t of list) {
+      if (!t.document_uploads?.drive_url) continue
+      logAction(t.document_uploads.id, 'print')
+      if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
+    }
+    setTasks(prev => prev.filter(t => !ids.has(t.id)))
+    setSelected({})
+    setTimeout(() => cleanupTempFiles(merged), 2500)
+  }
+
   async function mailTasks(list: any[]) {
     if (!confirmReasonDeleteBatch(list)) return
     const eligible = list.filter(t => t.document_uploads?.drive_url)
@@ -970,6 +1007,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
 
   const downloadSelected = () => downloadTasks(selectedTasks)
   const mailSelected = () => mailTasks(selectedTasks)
+  const printSelected = () => printTasks(selectedTasks)
 
   async function deleteTasks(ids: string[]) {
     if (!ids.length) return
@@ -996,6 +1034,9 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
             </button>
             <button onClick={mailSelected} disabled={merging} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs disabled:opacity-50">
               <Mail size={12}/> ({selectedTasks.length})
+            </button>
+            <button onClick={printSelected} disabled={merging} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs disabled:opacity-50" title="Print">
+              <Printer size={12}/> ({selectedTasks.length})
             </button>
             <button onClick={returnSelected} disabled={bulkBusy}
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
@@ -1054,6 +1095,16 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                       setEmailReason({ reason: t.document_uploads.reason ?? null, note: t.document_uploads.reason_note ?? null })
                     }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
                       <Mail size={12}/>
+                    </button>
+                    <button disabled={merging} onClick={() => {
+                      if (isBoatNoteTask(t)) { printTasks([t]); return }
+                      if (!confirmReasonDelete(t.document_uploads)) return
+                      window.open(t.document_uploads.drive_url, '_blank')
+                      logAction(t.document_uploads.id, 'print')
+                      if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
+                      setTasks(prev => prev.filter(x => x.id !== t.id))
+                    }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50" title="Print">
+                      <Printer size={12}/>
                     </button>
                   </>
                 )}
@@ -1434,6 +1485,59 @@ function PickHistoryPanel() {
     load(false, page)
   }
 
+  // Reverse — one step back through Notify → Pick → Mail/Download →
+  // Approved, whichever one this document is currently at. The server
+  // (reverse-document.ts) figures out which step that is; here it's just
+  // "click, it moves back one, reload". Locked/reserved items and anything
+  // already at Active Log come back as an error, shown as-is.
+  const [reversingId, setReversingId] = useState<string | null>(null)
+  async function reverseOneStep(documentId: string) {
+    if (!confirm('Reverse this document one step (undoing the most recent Notify/Pick/Mail/Download/Approve stage)?')) return
+    setReversingId(documentId)
+    try {
+      const res = await fetch('/api/reverse-document', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ document_id: documentId, mode: 'step' }),
+      })
+      const d = await res.json()
+      if (!res.ok) { alert(d.error || 'Reverse failed'); return }
+      load(false, page)
+    } finally {
+      setReversingId(null)
+    }
+  }
+
+  // Full Delete — separate from the plain "Delete" above (which only ever
+  // clears the log line, on purpose). This one actually removes the Drive
+  // file + the structured-table row, cascading the same way the Database
+  // page does (CUSDEC → its CDNs → their barcode/boat note) — the server
+  // first reports back everything that would go, so the confirm here can
+  // list it, and only deletes for real once confirmed.
+  const [fullDeleting, setFullDeleting] = useState<string | null>(null)
+  async function fullDelete(documentId: string) {
+    setFullDeleting(documentId)
+    try {
+      const preview = await fetch('/api/reverse-document', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ document_id: documentId, mode: 'full-delete' }),
+      })
+      const p = await preview.json()
+      if (!preview.ok) { alert(p.error || 'Could not check what this would affect'); return }
+      const list = (p.files || []).join('\n- ')
+      const ok = confirm(`This will permanently remove ${p.count} file${p.count === 1 ? '' : 's'} from Drive and the database:\n- ${list}\n\nThis goes to the Recycle Bin first (an admin can restore it from there), but is otherwise final. Continue?`)
+      if (!ok) return
+      const res = await fetch('/api/reverse-document', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ document_id: documentId, mode: 'full-delete', confirmed: true }),
+      })
+      const d = await res.json()
+      if (!res.ok) { alert(d.error || 'Delete failed'); return }
+      setItems(prev => prev.filter(i => i.document_id !== documentId))
+    } finally {
+      setFullDeleting(null)
+    }
+  }
+
   function toggle(id: string) { setSelected(prev => ({ ...prev, [id]: !prev[id] })) }
   const selectedIds = Object.keys(selected).filter(id => selected[id])
   const allSelected = items.length > 0 && selectedIds.length === items.length
@@ -1532,8 +1636,20 @@ function PickHistoryPanel() {
                         </button>
                       )}
                       {canDelete && (
-                        <button onClick={() => remove(row.document_id)} className="text-red-400 hover:text-red-600" title="Delete">
+                        <button onClick={() => reverseOneStep(row.document_id)} disabled={reversingId === row.document_id}
+                          className="text-amber-500 hover:text-amber-700 disabled:opacity-40" title="Reverse one step (undo the latest Notify/Pick/Mail/Download/Approve)">
+                          {reversingId === row.document_id ? <Loader size={12} className="animate-spin"/> : <Undo2 size={13}/>}
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button onClick={() => remove(row.document_id)} className="text-red-400 hover:text-red-600" title="Delete (history log only — file and data untouched)">
                           <Trash2 size={12}/>
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button onClick={() => fullDelete(row.document_id)} disabled={fullDeleting === row.document_id}
+                          className="text-red-700 hover:text-red-900 disabled:opacity-40" title="Full Delete — removes the Drive file + database row too (and anything under the same CUSDEC/CDN)">
+                          {fullDeleting === row.document_id ? <Loader size={12} className="animate-spin"/> : <Trash2 size={13} strokeWidth={2.75}/>}
                         </button>
                       )}
                     </div>

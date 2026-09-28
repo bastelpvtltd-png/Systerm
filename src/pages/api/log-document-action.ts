@@ -27,14 +27,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const authed = await requireAuth(req)
     if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
-    const { document_id, action } = req.body as { document_id: string; action: 'mail' | 'download' | 'look' }
-    if (!document_id || !['mail', 'download', 'look'].includes(action)) return res.status(400).json({ error: 'document_id and a valid action required' })
+    const { document_id, action } = req.body as { document_id: string; action: 'mail' | 'download' | 'look' | 'print' }
+    if (!document_id || !['mail', 'download', 'look', 'print'].includes(action)) return res.status(400).json({ error: 'document_id and a valid action required' })
 
     const { data: prof } = await supabaseAdmin.from('profiles').select('username, full_name').eq('id', authed.userId).maybeSingle()
     const userName = prof?.full_name || prof?.username || ''
     await supabaseAdmin.from('pick_history_log').insert({ document_id, user_id: authed.userId, user_name: userName, action })
 
-    if (action === 'mail' || action === 'download') {
+    // Print counts exactly like Mail/Download — it's a real way of finishing
+    // a picked task, not a no-commitment preview like Look Only is.
+    if (action === 'mail' || action === 'download' || action === 'print') {
       await supabaseAdmin.from('user_tasks')
         .update({ status: 'completed' })
         .eq('document_id', document_id).eq('user_id', authed.userId).eq('status', 'active')

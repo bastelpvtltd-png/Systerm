@@ -1,0 +1,187 @@
+C:\USERS\USER\DESKTOP\EXPORT-SYSTEM\SRC
+├───components
+│   ├───admin
+│   │       AdminLayout.tsx
+│   │       EmailPdfModal.tsx
+│   │       SendModal.tsx
+│   │       SheetPickerModal.tsx
+│   │
+│   └───shipper
+│           ShipperLayout.tsx
+│
+├───lib
+│       asycudaXml.ts
+│       autoCreateDocs.ts
+│       automationChecks.ts
+│       boatNotePdf.ts
+│       boxExtract.ts
+│       credentialsCrypto.ts
+│       docGenerate.ts
+│       docTables.ts
+│       docTypes.ts
+│       driveDownload.ts
+│       driveFolders.ts
+│       excelTemplateFill.ts
+│       excelToPdf.ts
+│       extractors.ts
+│       extractPdf.ts
+│       flexibleDate.ts
+│       googleSheets.ts
+│       gridExtract.ts
+│       grossMassFormat.ts
+│       mupdfDoc.ts
+│       notifyHistory.ts
+│       ocr.ts
+│       parseCusdecXml.ts
+│       serverAuth.ts
+│       slTime.ts
+│       supabase.ts
+│       textClean.ts
+│       useBoatNoteCreator.ts
+│       vesselTrigger.ts
+│
+├───pages
+│   │   index.tsx
+│   │   profile.tsx
+│   │   terms.tsx
+│   │   _app.tsx
+│   │
+│   ├───admin
+│   │       automation.tsx
+│   │       dashboard.tsx
+│   │       database.tsx
+│   │       docs-create.tsx
+│   │       financials.tsx
+│   │       google-reauth.tsx
+│   │       my-tasks.tsx
+│   │       reports.tsx
+│   │       settings.tsx
+│   │       shipment-entry.tsx
+│   │       shipment-overview.tsx
+│   │       templates.tsx
+│   │       upload-docs.tsx
+│   │       users.tsx
+│   │
+│   ├───api
+│   │   │   admin-clear-user-data.ts
+│   │   │   admin-data.ts
+│   │   │   app-settings.ts
+│   │   │   attach-shipment-pdf.ts
+│   │   │   auto-create-boat-notes.ts
+│   │   │   auto-create-parties-copies.ts
+│   │   │   automation-credentials.ts
+│   │   │   automation-rpa.ts
+│   │   │   automation-runs.ts
+│   │   │   balance-reports.ts
+│   │   │   bill-uploads.ts
+│   │   │   boat-note-check.ts
+│   │   │   cdn-approval.ts
+│   │   │   check-document-match.ts
+│   │   │   check-notify-history.ts
+│   │   │   copy-field-boxes.ts
+│   │   │   create-user.ts
+│   │   │   cron-check-pending.ts
+│   │   │   cron-monthly-reports.ts
+│   │   │   cusdec-documents.ts
+│   │   │   cusdec-search.ts
+│   │   │   cusdec-xml.ts
+│   │   │   dashboard-notifications.ts
+│   │   │   dashboard-summary.ts
+│   │   │   database-export.ts
+│   │   │   delete-document.ts
+│   │   │   delete-drive-file.ts
+│   │   │   delete-field.ts
+│   │   │   delete-generation.ts
+│   │   │   delete-reason-document.ts
+│   │   │   delete-row.ts
+│   │   │   delete-temp-merge-file.ts
+│   │   │   delete-user.ts
+│   │   │   doc-approvals.ts
+│   │   │   doc-generate.ts
+│   │   │   doc-templates.ts
+│   │   │   document-conflicts.ts
+│   │   │   document-link.ts
+│   │   │   document-templates.ts
+│   │   │   document-uploads.ts
+│   │   │   email-history.ts
+│   │   │   email-settings.ts
+│   │   │   ensure-column.ts
+│   │   │   excel-template-sheets.ts
+│   │   │   export-release-check.ts
+│   │   │   extract-box.ts
+│   │   │   extract-pdf-text.ts
+│   │   │   extract-pdf.ts
+│   │   │   fetch-drive-text.ts
+│   │   │   final-document-tasks.ts
+│   │   │   generate-balance-report.ts
+│   │   │   generate-boat-note.ts
+│   │   │   generate-from-template.ts
+│   │   │   generate-parties-copy-pro.ts
+│   │   │   generated-boat-notes.ts
+│   │   │   google-auth-callback.ts
+│   │   │   google-auth-init.ts
+│   │   │   import-excel.ts
+│   │   │   list-documents.ts
+│   │   │   list-drive-files.ts
+│   │   │   list-records.ts
+│   │   │   log-document-action.ts
+│   │   │   manual-match-shipment.ts
+│   │   │   merge-boat-notes.ts
+│   │   │   merge-pdfs.ts
+│   │   │   merge-pending-docs.ts
+│   │   │   merge-picked-boat-notes.ts
+│   │   │   messages.ts
+│   │   │   other-work-types.ts
+│   │   │   other-work.ts
+│   │   │   parse-cusdec-xml.ts
+│   │   │   pdf-serve.ts
+│   │   │   pdf-temp.ts
+│   │   │   pick-history.ts
+│   │   │   pick-shipment.ts
+│   │   │   pick-task.ts
+│   │   │   recycle-bin.ts
+│   │   │   release-shipment.ts
+│   │   │   render-drive-page.ts
+│   │   │   render-page.ts
+│   │   │   salary-payments.ts
+│   │   │   save-boat-note.ts
+│   │   │   save-document.ts
+│   │   │   save-field-boxes.ts
+│   │   │   save-field-rules.ts
+│   │   │   save-parties-copy.ts
+│   │   │   save-to-table.ts
+│   │   │   saved-recipients.ts
+│   │   │   send-email.ts
+│   │   │   shipment-overview-options.ts
+│   │   │   shipment-overview.ts
+│   │   │   shipper-data.ts
+│   │   │   shipper-profile.ts
+│   │   │   storage-stats.ts
+│   │   │   system-notes.ts
+│   │   │   table-columns.ts
+│   │   │   temp-shipment-options.ts
+│   │   │   temp-shipments.ts
+│   │   │   template-sheet-routes.ts
+│   │   │   template-types.ts
+│   │   │   trico-yard-data.ts
+│   │   │   trico-yard-sync.ts
+│   │   │   trigger-timestamps.ts
+│   │   │   upload-profile-picture.ts
+│   │   │   upload-to-drive.ts
+│   │   │   user-notifications.ts
+│   │   │   user-reports.ts
+│   │   │   user-tasks.ts
+│   │   │   vessel-trigger-sync.ts
+│   │   │   vessel-triggers.ts
+│   │   │   work-counts.ts
+│   │   │   work-rates.ts
+│   │   │
+│   │   └───auth
+│   │           google-callback.ts
+│   │           google-reauth.ts
+│   │
+│   └───shipper
+│           index.tsx
+│
+└───styles
+        globals.css
