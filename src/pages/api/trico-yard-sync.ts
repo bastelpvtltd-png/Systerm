@@ -211,52 +211,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     }
 
-    // Duplicate අයින් කිරීම (Container + Cusdec + CDN)
+    // One row per container (the table is keyed on container_no — that's what
+    // the upsert below conflicts on). If the same container shows up twice in
+    // one batch, Postgres rejects the whole upsert, so keep just the last one.
     const uniqueMap = new Map<string, YardRow>()
-    containers.forEach(c => {
-      const uniqueKey = `${c.container_no}-${c.cusdec_no}-${c.cdn}`
-      if (!uniqueMap.has(uniqueKey)) uniqueMap.set(uniqueKey, c)
-    })
+    containers.forEach(c => uniqueMap.set(c.container_no, c))
     const uniqueContainers = Array.from(uniqueMap.values())
 
-    // Skip rows that are ALREADY saved from a previous sync (same
-    // container_no + cusdec_no + cdn combo) so a re-run every 20 min doesn't
-    // keep re-touching records that haven't actually changed. Only genuinely
-    // new (or changed) combos get written.
-    const containerNos = uniqueContainers.map(c => c.container_no)
-    const { data: existingRows, error: fetchError } = await supabase
-      .from('trico_yard')
-      .select('container_no, cusdec_no, cdn')
-      .in('container_no', containerNos)
-
-    if (fetchError) throw fetchError
-
-    const existingKeys = new Set(
-      (existingRows || []).map((r: any) => `${r.container_no}-${r.cusdec_no}-${r.cdn}`)
-    )
-
-    const newOrChanged = uniqueContainers.filter(
-      c => !existingKeys.has(`${c.container_no}-${c.cusdec_no}-${c.cdn}`)
-    )
-
-    if (newOrChanged.length === 0) {
-      return res.status(200).json({
-        message: `No new containers — all ${uniqueContainers.length} already saved.`,
-        fetched: 0,
-        skipped: uniqueContainers.length,
-      })
+    // Upsert EVERY container on every sync (not just new ones). Before, rows
+    // already saved were skipped, so their status / duration / time_in went
+    // stale and updated_at never moved — the panel couldn't show when the
+    // data was last refreshed. Each row now gets this sync's timestamp.
+    const CHUNK = 500
+    for (let i = 0; i < uniqueContainers.length; i += CHUNK) {
+      const { error: upsertError } = await supabase
+        .from('trico_yard')
+        .upsert(uniqueContainers.slice(i, i + CHUNK), { onConflict: 'container_no' })
+      if (upsertError) throw upsertError
     }
 
-    const { error: upsertError } = await supabase
-      .from('trico_yard')
-      .upsert(newOrChanged, { onConflict: 'container_no' })
-
-    if (upsertError) throw upsertError
-
     return res.status(200).json({
-      message: `Synced ${newOrChanged.length} new/changed container(s), skipped ${uniqueContainers.length - newOrChanged.length} already-saved.`,
-      fetched: newOrChanged.length,
-      skipped: uniqueContainers.length - newOrChanged.length,
+      message: `${uniqueContainers.length} container(s) updated`,
+      fetched: uniqueContainers.length,
     })
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'Sync failed', loginDebug: error.debug })

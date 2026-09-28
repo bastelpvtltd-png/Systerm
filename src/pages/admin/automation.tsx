@@ -256,7 +256,7 @@ function DataUpdates() {
 // Shared by both check panels — plain-minutes interval editor + "last ran"
 // readout for the scheduled cron (cron-check-pending.ts), which is what
 // actually applies this interval; this control only reads/writes the number.
-function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger' | 'boat_note_create' | 'party_copy_create'; label: string }) {
+function SchedulerControl({ panel, label }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger' | 'boat_note_create' | 'party_copy_create' | 'trico_yard'; label: string }) {
   const [minutes, setMinutes] = useState<string>('')
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
   const [enabled, setEnabled] = useState(true)
@@ -2014,32 +2014,44 @@ function PdfEditorPanel() {
 
 interface YardContainer { id: string; veh_no: string; container_no: string; cusdec_no: string; cdn: string; shipper: string; time_in: string; duration: string; status: string; updated_at: string }
 
+function fmtColombo(iso: string | null | undefined) {
+  if (!iso) return '—'
+  try { return new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Colombo', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }) } catch { return iso }
+}
+
 function TricoYardPanel() {
   const [items, setItems] = useState<YardContainer[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [search, setSearch] = useState('')
-  const searchRef = useRef(search)
-  
-  useEffect(() => { searchRef.current = search }, [search])
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
 
-  async function load(silent = false) {
+  // Search is passed straight into load() (and debounced) so it always uses
+  // the value just typed — the old version read a ref that was still one
+  // keystroke behind, so results lagged what was in the box.
+  async function load(silent = false, q = search) {
     if (!silent) setLoading(true)
     try {
-      const res = await fetch(`/api/trico-yard-data?search=${searchRef.current}`, { headers: await authHeader() })
+      const res = await fetch(`/api/trico-yard-data?search=${encodeURIComponent(q)}`, { headers: await authHeader() })
       if (res.ok) {
         const d = await res.json()
         setItems(d.items || [])
       }
-    } finally { if (!silent) setLoading(false) }
+    } finally { setLoading(false) }
   }
 
+  // Reload whenever the search text changes (debounced); the 15s auto-refresh
+  // below is re-created with the current search so it never wipes a filter.
   useEffect(() => {
-    load()
-    const t = setInterval(() => load(true), 15000) // Auto refresh every 15s
+    const t = setTimeout(() => load(true, search), 300)
+    return () => clearTimeout(t)
+  }, [search]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const t = setInterval(() => load(true, search), 15000)
     return () => clearInterval(t)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function triggerNow() {
     setSyncing(true); setStatusMsg('')
@@ -2047,14 +2059,22 @@ function TricoYardPanel() {
       const res = await fetch('/api/trico-yard-sync', { method: 'POST', headers: await authHeader() })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Failed to sync')
+      setLastSyncedAt(new Date().toISOString())
       setStatusMsg(`✓ Synced — ${d.message || 'Updated successfully'}`)
-      load()
+      load(true, search)
     } catch (e: any) {
       setStatusMsg(`✗ ${e.message}`)
     } finally {
       setSyncing(false)
     }
   }
+
+  // Newest updated_at across the loaded rows = when the yard data was last
+  // refreshed in the database (works for the cron as well as manual syncs).
+  const latestUpdate = items.reduce<string | null>((max, r) => {
+    if (!r.updated_at) return max
+    return !max || new Date(r.updated_at) > new Date(max) ? r.updated_at : max
+  }, null)
 
   return (
     <div className="card max-w-5xl">
@@ -2064,14 +2084,18 @@ function TricoYardPanel() {
           {syncing ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}Sync Now
         </button>
       </div>
-      
-      {/* මෙය ඔබගේ පවතින SchedulerControl එක භාවිතා කරයි */}
+
       <div className="mb-3"><SchedulerControl panel="trico_yard" label="Sync Yard"/></div>
-      
+
       {statusMsg && <p className={`text-xs mb-3 font-medium ${statusMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{statusMsg}</p>}
-      
-      <div className="flex items-center gap-2 mb-3">
-        <input value={search} onChange={e => { setSearch(e.target.value); load(); }} placeholder="Search container or shipper..." className="input max-w-sm"/>
+
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container, CUSDEC, CDN, vehicle or shipper..." className="input max-w-sm"/>
+        <span className="text-[11px] text-gray-500">{items.length} container{items.length === 1 ? '' : 's'}</span>
+        <span className="text-[11px] text-green-700 bg-green-50 border border-green-200 rounded-md px-2 py-0.5 flex items-center gap-1">
+          <Clock size={10}/>Data updated: {fmtColombo(latestUpdate)}
+        </span>
+        {lastSyncedAt && <span className="text-[11px] text-gray-400">Manual sync: {fmtColombo(lastSyncedAt)}</span>}
       </div>
 
       {loading ? (
@@ -2079,7 +2103,7 @@ function TricoYardPanel() {
       ) : items.length === 0 ? (
         <p className="text-xs text-gray-400 text-center py-6">No data yet — click Sync Now</p>
       ) : (
-        <div className="overflow-x-auto max-h-[32rem] overflow-y-auto rounded-lg border border-gray-100">
+        <div className="overflow-x-auto max-h-[75vh] overflow-y-auto rounded-lg border border-gray-100">
           <table className="w-full text-xs text-left">
             <thead className="bg-gray-50 sticky top-0 shadow-sm">
               <tr>
@@ -2091,6 +2115,7 @@ function TricoYardPanel() {
                 <th className="px-3 py-2 font-medium text-gray-500">Time In</th>
                 <th className="px-3 py-2 font-medium text-gray-500">Duration</th>
                 <th className="px-3 py-2 font-medium text-gray-500">Status</th>
+                <th className="px-3 py-2 font-medium text-gray-500 whitespace-nowrap">Updated</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -2106,6 +2131,7 @@ function TricoYardPanel() {
                   <td className="px-3 py-2">
                     {r.status && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold text-white ${r.status === 'E' ? 'bg-blue-500' : 'bg-green-500'}`}>{r.status}</span>}
                   </td>
+                  <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{fmtColombo(r.updated_at)}</td>
                 </tr>
               ))}
             </tbody>
