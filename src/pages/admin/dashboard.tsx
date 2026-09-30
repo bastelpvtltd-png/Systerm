@@ -942,17 +942,19 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   }
 
   // Print — same "finishes the task" weight as Mail/Download (counts, logs,
-  // removes it from this list, deletes a reason-tagged temp doc), but the
-  // PDF opens straight in the browser's own PDF viewer (its toolbar has
-  // Print) instead of Drive's preview page. /api/print-pdf-link pulls the
-  // file(s) from Drive — merged into ONE PDF when several are selected, so
-  // it's a single tab and a single print job — and hands back a direct link.
+  // removes it from this list, deletes a reason-tagged temp doc), but each
+  // PDF opens in its OWN tab, straight in the browser's PDF viewer (its
+  // toolbar has Print), instead of Drive's preview page:
+  //   • a normal picked document          → its own tab
+  //   • a B... Boat Note Passed document  → its sets open as separate tabs:
+  //     CUSDEC Set (Party's Copy), Boat Note Set and CDN Set
+  // Nothing is combined into one PDF here, so each PDF = one tab = one print job.
   //
-  // The blank tab is opened synchronously inside the click (before any
-  // await) because browsers block window.open once it comes after an await;
-  // it is pointed at the PDF once the link is ready, or closed on failure.
-  // Nothing is logged/removed until the PDF has actually been prepared, so
-  // a failure leaves the task exactly where it was.
+  // Browsers only allow window.open inside the click itself (before any
+  // await), so one blank "Preparing…" tab per expected PDF is opened first
+  // and each is pointed at its PDF once ready, or closed if it failed.
+  // Nothing is logged/removed until at least one PDF really opened; a total
+  // failure leaves every task exactly where it was.
   function openPreparingTab(): Window | null {
     const w = window.open('', '_blank')
     if (w) {
@@ -961,11 +963,11 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     return w
   }
 
-  async function openPdfForPrint(driveUrls: string[], win: Window | null): Promise<boolean> {
+  async function openPdfForPrint(driveUrl: string, win: Window | null): Promise<boolean> {
     try {
       const res = await fetch('/api/print-pdf-link', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify({ drive_urls: driveUrls }),
+        body: JSON.stringify({ drive_urls: [driveUrl] }),
       })
       const d = await res.json()
       if (!res.ok || !d.url) throw new Error(d.error || 'Could not prepare the PDF for print')
@@ -974,27 +976,44 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
       return true
     } catch (e: any) {
       if (win && !win.closed) win.close()
-      alert(e.message)
+      console.error('[print] could not open a PDF:', e?.message || e)
       return false
     }
   }
 
   async function printTasks(list: any[]) {
     if (!confirmReasonDeleteBatch(list)) return
-    const win = openPreparingTab()
-    const ids = new Set(list.map(t => t.id))
     const boat = list.filter(isBoatNoteTask)
+    const others = list.filter(t => !isBoatNoteTask(t) && t.document_uploads?.drive_url)
+    // One tab per PDF that will open: picked Boat Note documents produce up to
+    // 3 PDFs between them (CUSDEC Set, Boat Note Set, CDN Set — see
+    // merge-picked-boat-notes), plus one per other document. Any tab that
+    // turns out not to be needed is closed again below.
+    const wins: (Window | null)[] = []
+    for (let i = 0; i < (boat.length ? 3 : 0) + others.length; i++) wins.push(openPreparingTab())
+    const closeAll = () => wins.forEach(w => { if (w && !w.closed) w.close() })
+    if (wins.length > 1 && wins.some(w => !w)) alert('Your browser blocked some of the new tabs. Allow pop-ups for this site to print several PDFs at once.')
+
+    const ids = new Set(list.map(t => t.id))
     let merged: TempMergedFile[] = []
     if (boat.length) {
       const m = await mergeBoatNoteTasks(boat)
-      if (!m) { if (win && !win.closed) win.close(); return }   // error already shown — nothing opened, tasks stay
+      if (!m) { closeAll(); return }   // error already shown — nothing opened, tasks stay
       merged = m
     }
-    const others = list.filter(t => !isBoatNoteTask(t) && t.document_uploads?.drive_url)
     const urls = [...merged.map(f => f.driveLink), ...others.map(t => t.document_uploads.drive_url)]
-    if (!urls.length) { if (win && !win.closed) win.close(); return }
-    const ok = await openPdfForPrint(urls, win)
-    if (!ok) { if (merged.length) deleteTempFiles(merged); return }
+    if (!urls.length) { closeAll(); return }
+    // Tabs that were opened but won't be needed (fewer merged files than Boat Notes).
+    wins.slice(urls.length).forEach(w => { if (w && !w.closed) w.close() })
+
+    const results = await Promise.all(urls.map((u, i) => openPdfForPrint(u, wins[i] ?? null)))
+    const okCount = results.filter(Boolean).length
+    if (okCount === 0) {
+      alert('Could not prepare the PDF for print. Nothing was removed from your picked tasks.')
+      if (merged.length) deleteTempFiles(merged)
+      return
+    }
+    if (okCount < urls.length) alert(`${urls.length - okCount} of ${urls.length} PDFs could not be opened.`)
     for (const t of list) {
       if (!t.document_uploads?.drive_url) continue
       logAction(t.document_uploads.id, 'print')
@@ -1002,7 +1021,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     }
     setTasks(prev => prev.filter(t => !ids.has(t.id)))
     setSelected({})
-    // The PDF was already copied out of Drive by the server, so the temporary
+    // The PDFs were already copied out of Drive by the server, so the temporary
     // merged Drive files are safe to clean up straight away.
     if (merged.length) setTimeout(() => cleanupTempFiles(merged), 1500)
   }
