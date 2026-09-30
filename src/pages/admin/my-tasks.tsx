@@ -41,12 +41,27 @@ interface OtherWorkItem {
   amount: number; status: 'pending' | 'approved' | 'rejected'
   created_by: string | null; created_at: string; approved_at: string | null
 }
-type CostFilter = 'cdn' | 'cap' | null
+type CostFilter = 'cdn' | 'cap' | 'boat' | 'co' | 'pytho' | 'safta' | null
 
 // Fired after an approve/reject so Upload Count, Balance and the results list
 // refresh straight away instead of waiting for their next poll.
 const APPROVALS_CHANGED = 'doc-approvals-changed'
 const notifyApprovalsChanged = () => { try { window.dispatchEvent(new Event(APPROVALS_CHANGED)) } catch {} }
+
+// Every count type shown in Balance > Cost > Count Work. Class names are
+// spelled out in full (not built from strings) so Tailwind keeps them.
+const COST_TILE_STYLE: Record<Exclude<CostFilter, null>, {
+  label: string; title: string; incKey: 'cdn_inc' | 'cap_inc' | 'boat_note_inc' | 'co_inc' | 'pytho_inc' | 'safta_inc'
+  rateKey: 'cdn_rate' | 'cap_rate' | 'boat_note_rate' | 'co_rate' | 'pytho_rate' | 'safta_rate'
+  active: string; hover: string; num: string; sub: string; link: string; border: string; bg: string; text: string
+}> = {
+  cdn:   { label: 'CDN',      title: 'CDN — Container Moved',   incKey: 'cdn_inc',       rateKey: 'cdn_rate',       active: 'bg-green-100 border-green-400',   hover: 'hover:border-green-200',  num: 'text-green-700',  sub: 'text-green-400',  link: 'text-green-600',  border: '#bbf7d0', bg: '#f0fdf4', text: '#15803d' },
+  cap:   { label: 'CAP',      title: 'CAP — CUSDEC Passed',     incKey: 'cap_inc',       rateKey: 'cap_rate',       active: 'bg-purple-100 border-purple-400', hover: 'hover:border-purple-200', num: 'text-purple-700', sub: 'text-purple-400', link: 'text-purple-600', border: '#e9d5ff', bg: '#faf5ff', text: '#7e22ce' },
+  boat:  { label: 'Boat Cap', title: 'Boat Cap — Boat Note Passed', incKey: 'boat_note_inc', rateKey: 'boat_note_rate', active: 'bg-amber-100 border-amber-400',   hover: 'hover:border-amber-200',  num: 'text-amber-700',  sub: 'text-amber-400',  link: 'text-amber-600',  border: '#fde68a', bg: '#fffbeb', text: '#b45309' },
+  co:    { label: 'CO',       title: 'CO — Final Document',     incKey: 'co_inc',        rateKey: 'co_rate',        active: 'bg-blue-100 border-blue-400',     hover: 'hover:border-blue-200',   num: 'text-blue-700',   sub: 'text-blue-400',   link: 'text-blue-600',   border: '#bfdbfe', bg: '#eff6ff', text: '#1d4ed8' },
+  pytho: { label: 'Pytho',    title: 'Pytho — Final Document',  incKey: 'pytho_inc',     rateKey: 'pytho_rate',     active: 'bg-blue-100 border-blue-400',     hover: 'hover:border-blue-200',   num: 'text-blue-700',   sub: 'text-blue-400',   link: 'text-blue-600',   border: '#bfdbfe', bg: '#eff6ff', text: '#1d4ed8' },
+  safta: { label: 'SAFTA',    title: 'SAFTA — Final Document',  incKey: 'safta_inc',     rateKey: 'safta_rate',     active: 'bg-blue-100 border-blue-400',     hover: 'hover:border-blue-200',   num: 'text-blue-700',   sub: 'text-blue-400',   link: 'text-blue-600',   border: '#bfdbfe', bg: '#eff6ff', text: '#1d4ed8' },
+}
 
 function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId: string | null; isAdmin: boolean; showBalance: boolean; showPayments: boolean }) {
   // ── data ──────────────────────────────────────────────────────────────────
@@ -273,6 +288,17 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
   const myBoatNote = myUnreportedWork.reduce((s, r) => s + (r.boat_note_inc || 0), 0)
   // Boat Cap is rated per CUSDEC container (like CAP); the bracket is how many Boat Note documents that came from.
   const myBoatNoteDocs = myUnreportedWork.filter(r => (r.boat_note_inc || 0) > 0).length
+  // Every count type, in display order — the Balance > Cost breakdown shows all
+  // of them (not just CDN/CAP). `bracket` is the small "(n)" beside a count:
+  // CUSDECs for CAP, Boat Note documents for Boat Cap.
+  const costTiles: { key: Exclude<CostFilter, null>; count: number; bracket: number | null }[] = [
+    { key: 'cdn', count: myCdn, bracket: null },
+    { key: 'cap', count: myCap, bracket: myCapCusdecs },
+    { key: 'boat', count: myBoatNote, bracket: myBoatNoteDocs },
+    { key: 'co', count: myCo, bracket: null },
+    { key: 'pytho', count: myPytho, bracket: null },
+    { key: 'safta', count: mySafta, bracket: null },
+  ]
   const myCountWorkEarned = myCdn * rates.cdn_rate + myCap * rates.cap_rate
     + myPytho * (rates.pytho_rate || 0) + myCo * (rates.co_rate || 0) + mySafta * (rates.safta_rate || 0)
     + myBoatNote * (rates.boat_note_rate || 0)
@@ -377,66 +403,46 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
             {/* Count Work */}
             <div>
               <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wide mb-2">Count Work</p>
-              {myCdn === 0 && myCap === 0 ? (
+              {costTiles.every(t => t.count === 0) ? (
                 <p className="text-xs text-gray-400">No count work yet.</p>
               ) : (
                 <>
                   <div className="grid grid-cols-3 gap-2 mb-2">
-                    <button
-                      onClick={() => setCostFilter(f => f === 'cdn' ? null : 'cdn')}
-                      className={`rounded-lg p-2.5 text-center transition-all border-2 ${costFilter === 'cdn' ? 'bg-green-100 border-green-400' : 'bg-white border-transparent hover:border-green-200'}`}>
-                      <p className="text-xl font-bold text-green-700">{myCdn}</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">CDN</p>
-                      <p className="text-[9px] text-green-600">{costFilter === 'cdn' ? '▲ hide' : '▼ details'}</p>
-                    </button>
-                    <button
-                      onClick={() => setCostFilter(f => f === 'cap' ? null : 'cap')}
-                      className={`rounded-lg p-2.5 text-center transition-all border-2 ${costFilter === 'cap' ? 'bg-purple-100 border-purple-400' : 'bg-white border-transparent hover:border-purple-200'}`}>
-                      <p className="text-xl font-bold text-purple-700">{myCap} <span className="text-xs font-normal text-purple-400">({myCapCusdecs})</span></p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">CAP</p>
-                      <p className="text-[9px] text-purple-600">{costFilter === 'cap' ? '▲ hide' : '▼ details'}</p>
-                    </button>
-                    <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
-                      <p className="text-xl font-bold text-blue-700">{myBoatNote} <span className="text-xs font-normal text-blue-400">({myBoatNoteDocs})</span></p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">Boat Cap</p>
-                    </div>
-                    <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
-                      <p className="text-xl font-bold text-blue-700">{myCo}</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">CO</p>
-                    </div>
-                    <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
-                      <p className="text-xl font-bold text-blue-700">{myPytho}</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">Pytho</p>
-                    </div>
-                    <div className="rounded-lg p-2.5 text-center bg-white border-2 border-transparent">
-                      <p className="text-xl font-bold text-blue-700">{mySafta}</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">SAFTA</p>
-                    </div>
+                    {costTiles.map(t => {
+                      const st = COST_TILE_STYLE[t.key]
+                      return (
+                        <button key={t.key}
+                          onClick={() => setCostFilter(f => f === t.key ? null : t.key)}
+                          className={`rounded-lg p-2.5 text-center transition-all border-2 ${costFilter === t.key ? st.active : `bg-white border-transparent ${st.hover}`}`}>
+                          <p className={`text-xl font-bold ${st.num}`}>{t.count}{t.bracket !== null && <span className={`text-xs font-normal ${st.sub}`}> ({t.bracket})</span>}</p>
+                          <p className="text-[10px] text-gray-500 mt-0.5">{st.label}</p>
+                          <p className={`text-[9px] ${st.link}`}>{costFilter === t.key ? '▲ hide' : '▼ details'}</p>
+                        </button>
+                      )
+                    })}
                   </div>
                   {costFilter && (() => {
-                    const isCdn = costFilter === 'cdn'
+                    const st = COST_TILE_STYLE[costFilter]
                     // Unreported only, matching the count shown above it —
                     // listing every row ever made the detail disagree with
                     // its own headline number after the first report.
-                    const filtered = myUnreportedWork.filter(r => isCdn ? r.cdn_inc > 0 : r.cap_inc > 0)
+                    const filtered = myUnreportedWork.filter(r => ((r[st.incKey] as number | undefined) || 0) > 0)
                     return (
-                      <div className="mb-2 rounded-xl border overflow-hidden" style={{ borderColor: isCdn ? '#bbf7d0' : '#e9d5ff' }}>
-                        <div className="px-3 py-1.5" style={{ background: isCdn ? '#f0fdf4' : '#faf5ff' }}>
-                          <span className="text-[11px] font-semibold" style={{ color: isCdn ? '#15803d' : '#7e22ce' }}>
-                            {isCdn ? 'CDN — Container Moved' : 'CAP — CUSDEC Passed'}
-                          </span>
+                      <div className="mb-2 rounded-xl border overflow-hidden" style={{ borderColor: st.border }}>
+                        <div className="px-3 py-1.5" style={{ background: st.bg }}>
+                          <span className="text-[11px] font-semibold" style={{ color: st.text }}>{st.title}</span>
                         </div>
                         {filtered.length === 0 ? (
                           <p className="text-xs text-gray-400 px-3 py-2">No records</p>
                         ) : (
                           <div className="max-h-44 overflow-y-auto divide-y divide-gray-50 bg-white">
-                            {filtered.map((r, i) => (
+                            {filtered.map(r => (
                               <div key={r.id} className="flex items-center justify-between px-3 py-2 text-xs">
                                 <div className="flex-1 min-w-0">
                                   <p className="text-gray-800 truncate font-medium">{r.file_name || '—'}</p>
                                   <p className="text-gray-400">{new Date(r.created_at).toLocaleDateString('en-GB')} · {r.action}</p>
                                 </div>
-                                <span className="ml-2 flex-shrink-0 text-[11px] font-bold" style={{ color: isCdn ? '#16a34a' : '#9333ea' }}>#{i + 1}</span>
+                                <span className="ml-2 flex-shrink-0 text-[11px] font-bold" style={{ color: st.text }}>+{r[st.incKey]}</span>
                               </div>
                             ))}
                           </div>
@@ -444,9 +450,9 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                       </div>
                     )
                   })()}
-                  <div className="flex items-center justify-between text-xs text-gray-500">
-                    <span>CDN × Rs.{fmtLKR(rates.cdn_rate)} + CAP × Rs.{fmtLKR(rates.cap_rate)}</span>
-                    <span className="font-semibold text-gray-800">Rs. {fmtLKR(myCountWorkEarned)}</span>
+                  <div className="flex items-center justify-between text-xs text-gray-500 gap-3">
+                    <span>{costTiles.filter(t => t.count > 0).map(t => `${COST_TILE_STYLE[t.key].label} × Rs.${fmtLKR(Number(rates[COST_TILE_STYLE[t.key].rateKey]) || 0)}`).join(' + ')}</span>
+                    <span className="font-semibold text-gray-800 flex-shrink-0">Rs. {fmtLKR(myCountWorkEarned)}</span>
                   </div>
                 </>
               )}
@@ -618,8 +624,8 @@ function SalaryPayments({ userId, isAdmin, showBalance, showPayments }: { userId
                           <button onClick={() => setHistoryUser(historyUser === name ? null : name)}
                             className="text-gray-500 hover:text-gray-700 flex items-center gap-1">
                             CDN: <b className="text-green-700">{userWork.cdn}</b> · CAP: <b className="text-purple-700">{userWork.cap} ({userWork.capCusdecs})</b>
-                            {(userWork.pytho > 0 || userWork.co > 0 || userWork.safta > 0) && (
-                              <span className="text-blue-700"> · Pytho {userWork.pytho} · CO {userWork.co} · SAFTA {userWork.safta}</span>
+                            {(userWork.pytho > 0 || userWork.co > 0 || userWork.safta > 0 || userWork.boatNote > 0) && (
+                              <span className="text-blue-700"> · Boat Cap {userWork.boatNote} · Pytho {userWork.pytho} · CO {userWork.co} · SAFTA {userWork.safta}</span>
                             )}
                             <span className="text-gray-400 ml-0.5">▾</span>
                           </button>
