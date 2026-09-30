@@ -89,7 +89,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // key (same voyage number can appear against more than one vessel in the
     // schedule) — vessel is only there to disambiguate between candidates
     // sharing that voyage.
-    const normVoyage = (v: string) => (v || '').trim().toUpperCase()
+    // Voyage codes are compared without spaces/punctuation ("012 E" vs
+    // "012E"), otherwise a harmless formatting difference between the CDN
+    // and the scraped schedule means the container never matches.
+    const normVoyage = (v: string) => (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
     const normVessel = (v: string) => (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
     const vesselFuzzyMatch = (a: string, b: string): boolean => {
       const na = normVessel(a), nb = normVessel(b)
@@ -109,14 +112,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return candidates.find(t => vesselFuzzyMatch(vessel, t.vessel)) || null
     }
 
-    const now = new Date()
+    // The Vessel Trigger schedule is scraped as plain text, so closing_time
+    // can arrive as "2026-09-30 14:00", "30/09/2026 14:00", "30-09-2026
+    // 2:00 PM", "30 Sep 2026 14:00" etc. The old check was
+    // new Date(text.replace(' ', 'T')), which only understands the first
+    // shape — for anything else it produced an invalid date and the
+    // container was silently skipped, so nothing ever showed as "closing
+    // time passed". This reads all the common shapes and treats the value as
+    // Sri Lanka time (+05:30) no matter where the server runs.
+    const MONTHS: Record<string, number> = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 }
+    const parseSLDateTime = (raw: string): number | null => {
+      const s = String(raw || '').trim()
+      if (!s) return null
+      let y: number, mo: number, d: number
+      let rest = ''
+      let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(.*)$/)
+      if (m) { y = +m[1]; mo = +m[2] - 1; d = +m[3]; rest = m[4] }
+      else if ((m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(.*)$/))) { d = +m[1]; mo = +m[2] - 1; y = +m[3]; if (y < 100) y += 2000; rest = m[4] }
+      else if ((m = s.match(/^(\d{1,2})[\s-]+([A-Za-z]{3})[A-Za-z]*[\s,-]+(\d{2,4})(.*)$/))) {
+        const mi = MONTHS[m[2].toLowerCase()]; if (mi === undefined) return null
+        d = +m[1]; mo = mi; y = +m[3]; if (y < 100) y += 2000; rest = m[4]
+      } else return null
+      let hh = 0, mm = 0, ss = 0
+      const t = rest.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i)
+      if (t) {
+        hh = +t[1]; mm = +t[2]; ss = t[3] ? +t[3] : 0
+        const ap = (t[4] || '').toUpperCase()
+        if (ap === 'PM' && hh < 12) hh += 12
+        if (ap === 'AM' && hh === 12) hh = 0
+      }
+      if (mo < 0 || mo > 11 || d < 1 || d > 31 || hh > 23 || mm > 59) return null
+      // Date.UTC of the wall-clock value, minus the +05:30 offset = the real instant.
+      return Date.UTC(y, mo, d, hh, mm, ss) - (5 * 60 + 30) * 60_000
+    }
+
+    const nowMs = Date.now()
     const closingPassed: any[] = []
     for (const d of cdns || []) {
       if (d.boat_note_passed || d.export_release_passed) continue
       const match = findTrigger(d.vessel, d.voyage)
       if (!match?.closing_time) continue
-      const closingDate = new Date(String(match.closing_time).replace(' ', 'T'))
-      if (Number.isNaN(closingDate.getTime()) || now <= closingDate) continue
+      const closingMs = parseSLDateTime(match.closing_time)
+      if (closingMs === null || nowMs <= closingMs) continue
       closingPassed.push({ cdnId: d.id, containerNo: d.container_no, cusdecNumber: d.cusdec_number, vessel: d.vessel, voyage: d.voyage, closingTime: match.closing_time })
     }
 

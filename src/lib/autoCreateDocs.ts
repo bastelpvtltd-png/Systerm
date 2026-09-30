@@ -25,27 +25,64 @@ interface CusdecRow {
 }
 interface CdnRow { id: string; code: string; cusdec_number: string; boat_note_passed: boolean | null }
 
-// A successful auto-create used to only set cusdec.boat_note_url/
-// party_copy_url and a legacy uploaded_documents/generated_boat_notes row —
-// invisible to the Activity Log, Boat Note Pending's pick flow, and the
-// doc_approvals payroll gate entirely, unlike a manually-uploaded Boat Note
-// Passed document. Inserting into document_uploads + dashboard_notifications
-// + pick_history_log here makes an auto-created one behave exactly like a
-// manual one from this point on — pickable, mailable, and (once mailed and
-// approved) counted the same way.
-async function notifyAsManualUpload(cusdecId: string, docType: 'boat_note' | 'party_copy', fileName: string, driveLink: string) {
-  const { data: doc } = await sb.from('document_uploads').insert({
-    file_name: fileName, drive_url: driveLink, doc_type: docType,
-    is_saved_to_db: false, status: 'notified',
-    uploaded_by: null, uploaded_by_name: 'Automation',
+// Only the BOAT NOTE goes to the Activity Log (reason "Boat Note Passed") so
+// someone can pick it and Mail/Download/Print it, exactly like a manually
+// uploaded B... document. The Party's Copy does NOT go to the Activity Log —
+// it is only saved (cusdec.party_copy_url + Drive file) and gets merged in
+// later when the picked B... document is mailed/downloaded/printed.
+//
+// Two things were wrong here before:
+//  1. uploaded_by was NULL and every insert's error was ignored, so if the
+//     table refused a NULL user the row silently never appeared in the
+//     Activity Log. Now a NULL user is tried first and, if that is refused,
+//     it retries with an admin profile id — and any remaining failure is
+//     reported back instead of being swallowed.
+//  2. is_saved_to_db was false, which makes the dashboard treat the picked
+//     document as a temporary "Quick Upload" and DELETE its Drive file after
+//     Mail/Download/Print — that file is the CUSDEC's saved Boat Note, so it
+//     must be flagged as saved (same as a manual Send with Save ticked).
+async function adminUserId(): Promise<string | null> {
+  const { data } = await sb.from('profiles').select('id').eq('is_admin', true).limit(1).maybeSingle()
+  return data?.id ?? null
+}
+
+async function insertWithUserFallback(table: string, row: Record<string, any>, userCols: string[], wantRow = false): Promise<{ data: any; error: any }> {
+  const attempt = (uid: string | null) => {
+    const r: Record<string, any> = { ...row }
+    for (const c of userCols) r[c] = uid
+    const q = sb.from(table).insert(r)
+    return wantRow ? q.select().single() : q
+  }
+  let res: any = await attempt(null)
+  if (res.error) {
+    const uid = await adminUserId()
+    if (uid) res = await attempt(uid)
+  }
+  return { data: res.data ?? null, error: res.error ?? null }
+}
+
+// Returns an error message when the Activity Log entry could not be made, or
+// null on success.
+async function notifyBoatNoteToActivityLog(cusdecId: string, fileName: string, driveLink: string): Promise<string | null> {
+  const { data: doc, error } = await insertWithUserFallback('document_uploads', {
+    file_name: fileName, drive_url: driveLink, doc_type: 'boat_note',
+    is_saved_to_db: true, status: 'notified',
+    uploaded_by_name: 'Automation',
     reason: 'Boat Note Passed', cusdec_id: cusdecId,
-  }).select().single()
-  if (!doc) return
-  await sb.from('dashboard_notifications').insert({ document_id: doc.id, uploaded_by: null, uploaded_by_name: 'Automation' })
-  await sb.from('pick_history_log').insert({
-    document_id: doc.id, user_id: null, user_name: 'Automation', action: 'notify',
+  }, ['uploaded_by'], true)
+  if (error || !doc) return `Activity Log entry failed: ${error?.message || 'unknown error'}`
+
+  const { error: nErr } = await insertWithUserFallback('dashboard_notifications', {
+    document_id: doc.id, uploaded_by_name: 'Automation',
+  }, ['uploaded_by'])
+  if (nErr) return `Activity Log entry failed: ${nErr.message}`
+
+  // History trail is nice-to-have — the Activity Log entry above is what matters.
+  await insertWithUserFallback('pick_history_log', {
+    document_id: doc.id, user_name: 'Automation', action: 'notify',
     pdf_notify_user: 'Automation', notify_update_time: new Date().toISOString(),
-  })
+  }, ['user_id'])
+  return null
 }
 
 // "Boat Note Pending, not yet Blue/Green" — the same set docs-create.tsx's
@@ -109,8 +146,9 @@ export async function autoCreateBoatNotes(): Promise<AutoCreateSummary> {
           cusdec_id: c.id, cusdec_number: c.number, file_name: fileName, drive_url: driveLink,
           created_by_name: 'Automation (Boat Note Create)',
         })
-        await notifyAsManualUpload(c.id, 'boat_note', fileName, driveLink)
       } catch { /* supplemental history — non-fatal */ }
+      const notifyErr = await notifyBoatNoteToActivityLog(c.id, fileName, driveLink)
+      if (notifyErr) summary.errors.push({ cusdecNumber: c.number, error: `Boat Note created and saved, but ${notifyErr}` })
       summary.created++
     } catch (e: any) {
       if (e.code === 'SHEET_SELECTION_REQUIRED') {
@@ -165,7 +203,7 @@ export async function autoCreatePartyCopies(): Promise<AutoCreateSummary> {
         await sb.from('uploaded_documents').insert({
           doc_type: 'party_copy', file_name: fileName, file_url: '', drive_url: driveLink, updated_at: new Date().toISOString(),
         })
-        await notifyAsManualUpload(c.id, 'party_copy', fileName, driveLink)
+        // Party's Copy is only saved (database + Drive) — no Activity Log entry.
       } catch { /* supplemental history — non-fatal */ }
       summary.created++
     } catch (e: any) {

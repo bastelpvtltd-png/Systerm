@@ -942,32 +942,59 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
   }
 
   // Print — same "finishes the task" weight as Mail/Download (counts, logs,
-  // removes it from this list, deletes a reason-tagged temp doc), but opens
-  // the PDF's own Drive view link in a new tab instead of forcing a
-  // download — a normal browser shows that in its built-in PDF viewer with
-  // a Print button on the toolbar; on a phone it hands off to whatever PDF
-  // app is installed, which is as far as a "Print" action can reasonably
-  // reach on that platform.
+  // removes it from this list, deletes a reason-tagged temp doc), but the
+  // PDF opens straight in the browser's own PDF viewer (its toolbar has
+  // Print) instead of Drive's preview page. /api/print-pdf-link pulls the
+  // file(s) from Drive — merged into ONE PDF when several are selected, so
+  // it's a single tab and a single print job — and hands back a direct link.
+  //
+  // The blank tab is opened synchronously inside the click (before any
+  // await) because browsers block window.open once it comes after an await;
+  // it is pointed at the PDF once the link is ready, or closed on failure.
+  // Nothing is logged/removed until the PDF has actually been prepared, so
+  // a failure leaves the task exactly where it was.
+  function openPreparingTab(): Window | null {
+    const w = window.open('', '_blank')
+    if (w) {
+      try { w.document.write('<title>Preparing PDF…</title><p style="font-family:sans-serif;padding:24px;color:#555">Preparing PDF for print…</p>') } catch { /* ignore */ }
+    }
+    return w
+  }
+
+  async function openPdfForPrint(driveUrls: string[], win: Window | null): Promise<boolean> {
+    try {
+      const res = await fetch('/api/print-pdf-link', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ drive_urls: driveUrls }),
+      })
+      const d = await res.json()
+      if (!res.ok || !d.url) throw new Error(d.error || 'Could not prepare the PDF for print')
+      if (win && !win.closed) win.location.href = d.url
+      else window.open(d.url, '_blank')
+      return true
+    } catch (e: any) {
+      if (win && !win.closed) win.close()
+      alert(e.message)
+      return false
+    }
+  }
+
   async function printTasks(list: any[]) {
     if (!confirmReasonDeleteBatch(list)) return
+    const win = openPreparingTab()
     const ids = new Set(list.map(t => t.id))
     const boat = list.filter(isBoatNoteTask)
-    if (!boat.length) {
-      for (const t of list) {
-        if (!t.document_uploads?.drive_url) continue
-        window.open(t.document_uploads.drive_url, '_blank')
-        logAction(t.document_uploads.id, 'print')
-        if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
-      }
-      setTasks(prev => prev.filter(t => !ids.has(t.id)))
-      setSelected({})
-      return
+    let merged: TempMergedFile[] = []
+    if (boat.length) {
+      const m = await mergeBoatNoteTasks(boat)
+      if (!m) { if (win && !win.closed) win.close(); return }   // error already shown — nothing opened, tasks stay
+      merged = m
     }
-    const merged = await mergeBoatNoteTasks(boat)
-    if (!merged) return
     const others = list.filter(t => !isBoatNoteTask(t) && t.document_uploads?.drive_url)
-    for (const f of merged) { window.open(f.driveLink, '_blank') }
-    for (const t of others) { window.open(t.document_uploads.drive_url, '_blank') }
+    const urls = [...merged.map(f => f.driveLink), ...others.map(t => t.document_uploads.drive_url)]
+    if (!urls.length) { if (win && !win.closed) win.close(); return }
+    const ok = await openPdfForPrint(urls, win)
+    if (!ok) { if (merged.length) deleteTempFiles(merged); return }
     for (const t of list) {
       if (!t.document_uploads?.drive_url) continue
       logAction(t.document_uploads.id, 'print')
@@ -975,7 +1002,9 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
     }
     setTasks(prev => prev.filter(t => !ids.has(t.id)))
     setSelected({})
-    setTimeout(() => cleanupTempFiles(merged), 2500)
+    // The PDF was already copied out of Drive by the server, so the temporary
+    // merged Drive files are safe to clean up straight away.
+    if (merged.length) setTimeout(() => cleanupTempFiles(merged), 1500)
   }
 
   async function mailTasks(list: any[]) {
@@ -1096,14 +1125,7 @@ function MyPickedTasksPanel({ refreshKey }: { refreshKey: number }) {
                     }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
                       <Mail size={12}/>
                     </button>
-                    <button disabled={merging} onClick={() => {
-                      if (isBoatNoteTask(t)) { printTasks([t]); return }
-                      if (!confirmReasonDelete(t.document_uploads)) return
-                      window.open(t.document_uploads.drive_url, '_blank')
-                      logAction(t.document_uploads.id, 'print')
-                      if (isEphemeralReason(t.document_uploads)) deleteReasonDoc(t.document_uploads.id)
-                      setTasks(prev => prev.filter(x => x.id !== t.id))
-                    }} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50" title="Print">
+                    <button disabled={merging} onClick={() => printTasks([t])} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50" title="Print">
                       <Printer size={12}/>
                     </button>
                   </>

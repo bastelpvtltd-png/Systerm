@@ -71,6 +71,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // no lock left for it and correctly skip crediting a second/third
           // time for the same CUSDEC.
           const { data: locks } = await supabaseAdmin.from('boat_note_locks').select('cusdec_id').eq('document_id', document_id)
+
+          // A B... Boat Note document picked straight from the Activity Log
+          // (uploaded by hand, or created by the Automation tab) never went
+          // through the old merge-and-pick flow, so it has NO boat_note_locks
+          // row — and this whole branch used to do nothing for it, which is
+          // why Mail/Download/Print on a picked B... document never reached
+          // the Pick Approvals / Balance. For those, the CUSDEC is found the
+          // same way merge-picked-boat-notes.ts does (cusdec_id on the row,
+          // otherwise the number in the file name: B55296.pdf -> E 55296),
+          // and ONE approval is opened for it — the approval later credits
+          // that CUSDEC's own cap (container count) as Boat Cap.
+          let noLockCusdecId: string | null = null
+          const isBDoc = doc.doc_type === 'boat_note' || /^B\d/i.test(doc.file_name || '')
+          if (!locks?.length && isBDoc) {
+            noLockCusdecId = doc.cusdec_id || null
+            if (!noLockCusdecId) {
+              const num = (doc.file_name || '').replace(/\.pdf$/i, '').match(/\d+/)?.[0] || ''
+              if (num) {
+                const { data: found } = await supabaseAdmin.from('cusdec').select('id, number, created_at').ilike('number', `%${num}%`)
+                const matches = (found || []).filter((r: any) => String(r.number || '').replace(/\D/g, '') === num)
+                  .sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+                noLockCusdecId = matches[0]?.id || null
+              }
+            }
+            if (noLockCusdecId) {
+              // Same document Mailed then Printed etc. must not open a second approval.
+              const { data: already } = await supabaseAdmin.from('doc_approvals').select('id')
+                .eq('document_id', document_id).eq('stage', 'boat_note').eq('cusdec_id', noLockCusdecId)
+                .in('status', ['pending', 'approved']).limit(1).maybeSingle()
+              if (!already) {
+                const { error: apErr2 } = await supabaseAdmin.from('doc_approvals').insert({
+                  document_id, cusdec_id: noLockCusdecId, doc_type: doc.doc_type || 'boat_note', reason: doc.reason,
+                  uploaded_by: authed.userId, uploaded_by_name: userName, stage: 'boat_note',
+                })
+                if (apErr2) console.error('[log-document-action] boat_note doc_approvals insert failed (no lock):', apErr2.message, apErr2)
+              }
+            } else {
+              console.error('[log-document-action] could not find a CUSDEC for Boat Note document', document_id, doc.file_name)
+            }
+          }
+
           if (locks?.length) {
             const cusdecIds = locks.map(l => l.cusdec_id)
             const { error: apErr } = await supabaseAdmin.from('doc_approvals').insert(
