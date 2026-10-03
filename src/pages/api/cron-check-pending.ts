@@ -4,6 +4,7 @@ import { checkBoatNote, checkExportRelease, cleanCusdecNumber, isBoatNotePassed,
 import { yearOf } from '@/lib/flexibleDate'
 import { syncVesselTriggers } from '@/lib/vesselTrigger'
 import { autoCreateBoatNotes, autoCreatePartyCopies } from '@/lib/autoCreateDocs'
+import { runTricoCheck } from '@/lib/tricoCheckRun'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -173,6 +174,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } else {
     results.party_copy_create = { skipped: true, reason: 'not due yet' }
+  }
+
+  // Trico Checking — starts paused (enabled must be switched on in the panel).
+  // One sweep: every CDN still missing gate add/in/out is checked once, within a
+  // time budget; whatever doesn't fit is picked up on the next run.
+  const tricoRun = runByPanel['trico_check']
+  const dueTrico = tricoRun?.enabled === true && (!tricoRun?.last_run_at ||
+    (now.getTime() - new Date(tricoRun.last_run_at).getTime()) >= (tricoRun.interval_minutes || 60) * 60_000)
+
+  if (tricoRun?.enabled !== true) {
+    results.trico_check = { skipped: true, reason: 'paused' }
+  } else if (dueTrico) {
+    try {
+      const r = await runTricoCheck({ limit: 50, maxMs: 40_000, before: now.toISOString() })
+      results.trico_check = { checked: r.checked, updated: r.updated, remaining: r.remaining }
+      if (r.results.length) await supabaseAdmin.from('automation_runs').update({ last_run_at: now.toISOString() }).eq('panel', 'trico_check')
+    } catch (e: any) {
+      results.trico_check = { error: e.message }
+    }
+  } else {
+    results.trico_check = { skipped: true, reason: 'not due yet' }
   }
 
   res.json({ ok: true, ranAt: now.toISOString(), results })

@@ -7,6 +7,7 @@ import { extractBoxes } from '@/lib/boxExtract'
 import { applyTextRules, cleanContainerNo, cleanGrossMass } from '@/lib/textClean'
 import { DOC_TYPE_TABLE, getTableColumns } from '@/lib/docTables'
 import { requireAuth } from '@/lib/serverAuth'
+import { requireWorker } from '@/lib/workerAuth'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
@@ -374,7 +375,9 @@ async function buildFieldsFromSchema(resolvedType: string, regexData: Record<str
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
-  const authed = await requireAuth(req)
+  // The Barcode Enter worker's finalize step (worker/finalize-barcode.ts) also calls this to read
+  // the barcode PDF it just printed — it authenticates with WORKER_SECRET instead of a login.
+  const authed = requireWorker(req).ok ? ({ ok: true } as const) : await requireAuth(req)
   if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   try {
     const { base64, docType } = req.body

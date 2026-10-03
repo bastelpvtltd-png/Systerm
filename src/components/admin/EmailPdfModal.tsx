@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Mail, X, Loader, AlertTriangle } from 'lucide-react'
+import { Mail, X, Loader, AlertTriangle, BookUser, Trash2, Plus } from 'lucide-react'
 import { authHeader, supabase } from '@/lib/supabase'
 
 export interface EmailAttachment {
@@ -20,12 +20,18 @@ export interface EmailAttachment {
   checkedByDefault?: boolean
 }
 
+type RecipientKind = 'to' | 'cc' | 'bcc'
+interface SavedRecipient { id: string; email: string; kind: RecipientKind }
+const KIND_LABEL: Record<RecipientKind, string> = { to: 'To', cc: 'Cc', bcc: 'Bcc' }
+const splitAddresses = (s: string) => s.split(/[;,]/).map(e => e.trim()).filter(Boolean)
+
 // Shared "email this PDF" popup — used from Upload Docs (right after save,
 // and again later from the Uploaded/Preview list if the first send didn't
 // happen), and from Shipment Overview's document picker. Always sends via
 // the docs.bastel@gmail.com mailbox (useDocsAccount), and remembers both the
-// recipient (saved_recipients) and the last subject used (email_settings)
-// so neither has to be retyped next time. "To" accepts more than one address
+// recipients (user_saved_recipients — private per user, remembered as
+// To / Cc / Bcc) and the last subject used (email_settings) so neither has
+// to be retyped next time. "To" accepts more than one address
 // (comma-separated), plus CC/BCC.
 export default function EmailPdfModal({ attachments, defaultSubject, documentReason, documentReasonNote, onClose, onSent }: {
   attachments: EmailAttachment[]
@@ -35,7 +41,13 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
   onClose: () => void
   onSent?: () => void
 }) {
-  const [emails, setEmails] = useState<string[]>([])
+  // Saved mails are per user (see /api/saved-recipients) — only this user's own
+  // addresses ever show up here, each remembered with its To / Cc / Bcc slot.
+  const [saved, setSaved] = useState<SavedRecipient[]>([])
+  const [showSaved, setShowSaved] = useState(false)
+  const [newSavedEmail, setNewSavedEmail] = useState('')
+  const [newSavedKind, setNewSavedKind] = useState<RecipientKind>('to')
+  const [savedError, setSavedError] = useState('')
   const [to, setTo] = useState('')
   const [cc, setCc] = useState('')
   const [bcc, setBcc] = useState('')
@@ -52,7 +64,7 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
   const selectedAttachments = attachments.filter((_, i) => included[i])
 
   useEffect(() => {
-    authHeader().then(h => fetch('/api/saved-recipients', { headers: h })).then(r => r.json()).then(d => setEmails(d.emails || [])).catch(() => {})
+    loadSaved()
     if (!defaultSubject) {
       // Subject is "<sender name> - <document reason>" when the caller knows
       // why this document was sent (e.g. "CUSDEC Passed", picked from the
@@ -70,6 +82,48 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
     }
   }, [defaultSubject, documentReason, documentReasonNote])
 
+  async function loadSaved() {
+    try {
+      const r = await fetch('/api/saved-recipients', { headers: await authHeader() })
+      const d = await r.json()
+      setSaved(d.recipients || [])
+    } catch { /* suggestions are optional */ }
+  }
+
+  function fieldValue(kind: RecipientKind) { return kind === 'to' ? to : kind === 'cc' ? cc : bcc }
+  function setField(kind: RecipientKind, v: string) { (kind === 'to' ? setTo : kind === 'cc' ? setCc : setBcc)(v) }
+
+  // Adds saved address(es) into the matching field without duplicating one
+  // that is already typed there.
+  function addToField(kind: RecipientKind, emails: string[]) {
+    const current = splitAddresses(fieldValue(kind))
+    const have = new Set(current.map(e => e.toLowerCase()))
+    const merged = [...current, ...emails.filter(e => !have.has(e.toLowerCase()))]
+    setField(kind, merged.join(', '))
+    if (kind !== 'to') setShowCcBcc(true)
+  }
+
+  async function addSavedManually() {
+    const email = newSavedEmail.trim()
+    if (!email) return
+    setSavedError('')
+    try {
+      const r = await fetch('/api/saved-recipients', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify({ email, kind: newSavedKind }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      setNewSavedEmail('')
+      loadSaved()
+    } catch (e: any) { setSavedError(e.message) }
+  }
+
+  async function removeSaved(id: string) {
+    setSaved(prev => prev.filter(s => s.id !== id))
+    try { await fetch(`/api/saved-recipients?id=${id}`, { method: 'DELETE', headers: await authHeader() }) } catch { /* ignore */ }
+  }
+
   async function send() {
     const toAddr = to.trim()
     if (!toAddr || !subject.trim() || !selectedAttachments.length) return
@@ -81,11 +135,14 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
-      // Remember each individual address (comma-separated "To" support), not
-      // the whole combined string, so the datalist suggests them one at a time.
-      toAddr.split(',').map(e => e.trim()).filter(Boolean).forEach(email => {
-        authHeader().then(h => fetch('/api/saved-recipients', { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body: JSON.stringify({ email }) })).catch(() => {})
-      })
+      // Remember each address for THIS user, in the slot it was used in
+      // (To / Cc / Bcc) — saved automatically, one row per address.
+      const entries = ([['to', toAddr], ['cc', cc], ['bcc', bcc]] as [RecipientKind, string][])
+        .flatMap(([kind, value]) => splitAddresses(value).map(email => ({ email, kind })))
+      if (entries.length) {
+        authHeader().then(h => fetch('/api/saved-recipients', { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body: JSON.stringify({ entries }) }))
+          .then(() => loadSaved()).catch(() => {})
+      }
       authHeader().then(h => fetch('/api/email-settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body: JSON.stringify({ lastSubject: subject.trim() }) })).catch(() => {})
       setSent(true)
       onSent?.()
@@ -107,9 +164,51 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
             <>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">To <span className="text-gray-400 font-normal">(comma-separate for more than one)</span></label>
-                <input value={to} onChange={e => setTo(e.target.value)} list="saved-recipient-emails" placeholder="recipient@email.com, another@email.com"
+                <input value={to} onChange={e => setTo(e.target.value)} placeholder="recipient@email.com, another@email.com"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
-                <datalist id="saved-recipient-emails">{emails.map(e => <option key={e} value={e}/>)}</datalist>
+              </div>
+              <div>
+                <button type="button" onClick={() => setShowSaved(s => !s)} className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                  <BookUser size={12}/>Saved mails ({saved.length}) {showSaved ? '▲' : '▼'}
+                </button>
+                {showSaved && (
+                  <div className="mt-2 border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50">
+                    {(['to', 'cc', 'bcc'] as RecipientKind[]).map(kind => {
+                      const list = saved.filter(s => s.kind === kind)
+                      return (
+                        <div key={kind}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[11px] font-semibold text-gray-600">{KIND_LABEL[kind]}</span>
+                            {list.length > 1 && (
+                              <button type="button" onClick={() => addToField(kind, list.map(s => s.email))} className="text-[11px] text-blue-600 hover:underline">Use all</button>
+                            )}
+                          </div>
+                          {list.length === 0 ? (
+                            <p className="text-[11px] text-gray-400">Nothing saved for {KIND_LABEL[kind]} yet — addresses you send to are saved here automatically.</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5">
+                              {list.map(s => (
+                                <span key={s.id} className="inline-flex items-center gap-1 bg-white border border-gray-200 rounded-full pl-2.5 pr-1.5 py-0.5 text-xs">
+                                  <button type="button" onClick={() => addToField(kind, [s.email])} className="hover:text-blue-600">{s.email}</button>
+                                  <button type="button" onClick={() => removeSaved(s.id)} title="Remove from saved" className="text-gray-300 hover:text-red-500"><Trash2 size={11}/></button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                    <div className="flex gap-2 pt-2 border-t border-gray-200">
+                      <input value={newSavedEmail} onChange={e => setNewSavedEmail(e.target.value)} placeholder="Save an address..."
+                        className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-green-400"/>
+                      <select value={newSavedKind} onChange={e => setNewSavedKind(e.target.value as RecipientKind)} className="border border-gray-200 rounded-lg px-1 py-1 text-xs">
+                        <option value="to">To</option><option value="cc">Cc</option><option value="bcc">Bcc</option>
+                      </select>
+                      <button type="button" onClick={addSavedManually} disabled={!newSavedEmail.trim()} className="px-2 rounded-lg bg-gray-900 text-white text-xs disabled:opacity-40"><Plus size={13}/></button>
+                    </div>
+                    {savedError && <p className="text-[11px] text-red-600">{savedError}</p>}
+                  </div>
+                )}
               </div>
               {!showCcBcc ? (
                 <button onClick={() => setShowCcBcc(true)} className="text-xs text-blue-600 hover:underline">+ Cc / Bcc</button>
@@ -117,11 +216,11 @@ export default function EmailPdfModal({ attachments, defaultSubject, documentRea
                 <>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Cc</label>
-                    <input value={cc} onChange={e => setCc(e.target.value)} list="saved-recipient-emails" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+                    <input value={cc} onChange={e => setCc(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Bcc</label>
-                    <input value={bcc} onChange={e => setBcc(e.target.value)} list="saved-recipient-emails" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
+                    <input value={bcc} onChange={e => setBcc(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"/>
                   </div>
                 </>
               )}

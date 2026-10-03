@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import EmailPdfModal, { type EmailAttachment } from '@/components/admin/EmailPdfModal'
+import AutomationErrorsPanel from '@/components/admin/AutomationErrorsPanel'
 import {
   Ship, FileText, Package, Clock, AlertCircle, ChevronDown, Bell, Eye, UserCheck,
   Download, Mail, Undo2, Loader, History, Search, CheckSquare, Square, Trash2, FileCheck,
@@ -94,6 +95,7 @@ function DashboardContent() {
   const [finalDocsCount, setFinalDocsCount] = useState(0)
   const [notCompleteCount, setNotCompleteCount] = useState(0)
   const [notPaymentCount, setNotPaymentCount] = useState(0)
+  const [autoErrorCount, setAutoErrorCount] = useState(0)
   const [pickingShipmentId, setPickingShipmentId] = useState<string | null>(null)
   const [shipmentPickError, setShipmentPickError] = useState('')
 
@@ -222,6 +224,7 @@ function DashboardContent() {
     { key: 'section:dashboard.final-documents',  id: 'finalDocs', label: 'Pending Final Document', value: finalDocsCount, icon: FileCheck, color: '#22A87A' },
     { key: 'section:dashboard.not-complete-shipment', id: 'notComplete', label: 'Not Complete Shipment', value: notCompleteCount, icon: AlertCircle, color: '#f97316' },
     { key: 'section:dashboard.not-payment-complete',  id: 'notPayment',  label: 'Not Payment Complete Shipment', value: notPaymentCount, icon: DollarSign, color: '#eab308' },
+    { key: 'section:dashboard.automation-errors', id: 'autoErrors', label: 'Automate Errors', value: autoErrorCount, icon: AlertCircle, color: '#b91c1c' },
   ].filter(s => has(s.key))
 
   return (
@@ -509,6 +512,15 @@ function DashboardContent() {
         )}
         {expanded !== 'notPayment' && has('section:dashboard.not-payment-complete') && (
           <div className="hidden"><ShipmentCompletionPanel mode="payment" onCountChange={setNotPaymentCount}/></div>
+        )}
+
+        {expanded === 'autoErrors' && (
+          <div className="mb-4">
+            <AutomationErrorsPanel onCountChange={setAutoErrorCount}/>
+          </div>
+        )}
+        {expanded !== 'autoErrors' && has('section:dashboard.automation-errors') && (
+          <div className="hidden"><AutomationErrorsPanel onCountChange={setAutoErrorCount}/></div>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">

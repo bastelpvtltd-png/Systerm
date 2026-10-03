@@ -4,6 +4,7 @@ import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { yearOf } from '@/lib/flexibleDate'
 import EmailPdfModal from '@/components/admin/EmailPdfModal'
+import { BarcodeEnterPanel, TricoGatePassPanel, TricoCheckPanel } from '@/components/admin/AutomationPortalPanels'
 import {
   Zap, Barcode as BarcodeIcon, Truck, RefreshCw,
   ClipboardCheck, ShieldCheck, Loader, Search, Copy, Plus, Trash2,
@@ -13,7 +14,7 @@ import {
 } from 'lucide-react'
 
 type AutomationTab =
-  | 'barcode' | 'trico' | 'trico-yard' | 'data-updates'
+  | 'barcode' | 'trico-check' | 'trico' | 'trico-yard' | 'data-updates'
   | 'boat-note-create' | 'party-copy-create' | 'merge-pdf'
   | 'boat-note-check' | 'export-release' | 'vessel-trigger'
   | 'conflict-review' | 'cdn-approval' | 'notes' | 'pdf-editor' | 'monthly-reports'
@@ -27,6 +28,7 @@ interface CdnRec { id: string; code: string; cusdec_number: string; shipper: str
 
 const SUB_TABS: { key: AutomationTab; label: string; icon: any; permission: string }[] = [
   { key: 'barcode', label: 'Barcode Enter', icon: BarcodeIcon, permission: 'section:automation.barcode-enter' },
+  { key: 'trico-check', label: 'Trico Checking', icon: Truck, permission: 'section:automation.trico-checking' },
   { key: 'trico', label: 'Trico Gate Passes', icon: Truck, permission: 'section:automation.trico-gate-pass' },
   { key: 'data-updates', label: 'Data Updates', icon: RefreshCw, permission: 'section:automation.data-updates' },
   { key: 'boat-note-create', label: 'Boat Note Create', icon: Ship, permission: 'section:automation.boat-note-create' },
@@ -50,20 +52,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   )
-}
-
-// Shared "not connected yet" call for the RPA-dependent actions — see
-// src/pages/api/automation-rpa.ts for why these are stubbed rather than
-// guessed: getting a live gate-pass/customs submission wrong has real
-// consequences, so this needs a supervised build session against the real
-// site instead of best-guess selectors.
-async function notConnectedYet(action: string): Promise<string> {
-  const res = await fetch('/api/automation-rpa', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-    body: JSON.stringify({ action }),
-  })
-  const d = await res.json()
-  return d.error || 'Not connected yet'
 }
 
 function AutomationContent() {
@@ -97,8 +85,9 @@ function AutomationContent() {
         ))}
       </div>
 
-      {tab === 'barcode' && <RpaStub title="Barcode Enter" action="barcode-enter" description="Auto-fills the Barcode entry on the port system from a CDN's data, or lets you enter it manually."/>}
-      {tab === 'trico' && <TricoGatePasses/>}
+      {tab === 'barcode' && <BarcodeEnterPanel/>}
+      {tab === 'trico-check' && <TricoCheckPanel scheduler={<SchedulerControl panel="trico_check" label="Auto-check"/>}/>}
+      {tab === 'trico' && <TricoGatePassPanel/>}
       {tab === 'trico-yard' && <TricoYardPanel/>}
       {tab === 'data-updates' && <DataUpdates/>}
       {tab === 'boat-note-create' && <AutoCreatePanel panel="boat_note_create" apiPath="/api/auto-create-boat-notes" title="Boat Note Create" docLabel="Boat Note"/>}
@@ -171,73 +160,9 @@ function MonthlyReportsPanel() {
   )
 }
 
-// Credentials Settings itself now lives on the Settings page
-// (settings.tsx, section:settings.credentials) — this interface stays here
-// since TricoGatePasses below still reads saved credentials.
-interface Credential { id: string; identity_name: string; url: string; username: string | null; created_at: string }
-
-// ── 2.4 Barcode Enter (stub) & Trico Gate Passes ─────────────────────────
-function RpaStub({ title, action, description }: { title: string; action: string; description: string }) {
-  const [msg, setMsg] = useState('')
-  const [busy, setBusy] = useState(false)
-  async function run() {
-    setBusy(true)
-    setMsg(await notConnectedYet(action))
-    setBusy(false)
-  }
-  return (
-    <div className="card max-w-xl">
-      <h2 className="font-semibold text-gray-900 text-sm mb-2">{title}</h2>
-      <p className="text-xs text-gray-500 mb-4">{description}</p>
-      <button onClick={run} disabled={busy} className="btn-primary flex items-center gap-2">
-        {busy ? <Loader size={14} className="animate-spin"/> : <Zap size={14}/>}Run
-      </button>
-      {msg && <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{msg}</p>}
-    </div>
-  )
-}
-
-function TricoGatePasses() {
-  const [creds, setCreds] = useState<Credential[]>([])
-  const [username, setUsername] = useState('')
-  const [count, setCount] = useState('1')
-  const [msg, setMsg] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    authHeader().then(headers => fetch('/api/automation-credentials', { headers })).then(r => r.json()).then(d => setCreds((d.credentials || []).filter((c: Credential) => c.identity_name === 'Trico'))).catch(() => {})
-  }, [])
-
-  // Trico Gate Pass Trigger: ask which username + how many gate passes,
-  // exactly as the spec calls for — the actual RPA submission is stubbed
-  // (see automation-rpa.ts) pending a supervised build session.
-  async function trigger() {
-    if (!username) { setMsg('Pick a username first'); return }
-    setBusy(true)
-    setMsg(await notConnectedYet(`trico-gate-pass (user=${username}, count=${count})`))
-    setBusy(false)
-  }
-
-  return (
-    <div className="card max-w-xl">
-      <h2 className="font-semibold text-gray-900 text-sm mb-2">Trico Gate Pass Enter</h2>
-      <p className="text-xs text-gray-500 mb-4">Shortcut from CDN data, or fill manually below.</p>
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <Field label="Username">
-          <select value={username} onChange={e => setUsername(e.target.value)} className="input">
-            <option value="">Select...</option>
-            {creds.map(c => <option key={c.id} value={c.username || c.identity_name}>{c.username || c.identity_name}</option>)}
-          </select>
-        </Field>
-        <Field label="Number of Gate Passes"><input type="number" min="1" value={count} onChange={e => setCount(e.target.value)} className="input"/></Field>
-      </div>
-      <button onClick={trigger} disabled={busy} className="btn-primary flex items-center gap-2">
-        {busy ? <Loader size={14} className="animate-spin"/> : <Truck size={14}/>}Gate Pass Enter
-      </button>
-      {msg && <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13}/>{msg}</p>}
-    </div>
-  )
-}
+// Barcode Enter, Trico Checking and Trico Gate Passes live in
+// components/admin/AutomationPortalPanels.tsx (they run through the browser
+// worker queue — see worker/README.md).
 
 // ── Data Updates ───────────────────────────────────────────────────────────
 function DataUpdates() {
@@ -262,7 +187,7 @@ function DataUpdates() {
 // Shared by both check panels — plain-minutes interval editor + "last ran"
 // readout for the scheduled cron (cron-check-pending.ts), which is what
 // actually applies this interval; this control only reads/writes the number.
-function SchedulerControl({ panel, label, onTurnedOn }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger' | 'boat_note_create' | 'party_copy_create'; label: string; onTurnedOn?: () => void }) {
+function SchedulerControl({ panel, label, onTurnedOn }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger' | 'boat_note_create' | 'party_copy_create' | 'trico_check'; label: string; onTurnedOn?: () => void }) {
   const [minutes, setMinutes] = useState<string>('')
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
   const [enabled, setEnabled] = useState(true)
