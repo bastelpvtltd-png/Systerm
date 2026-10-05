@@ -3,32 +3,46 @@
 // (~3 s) and driven with playwright-core.
 import { chromium as pw, type Browser, type BrowserContext, type Page } from 'playwright-core'
 
-const PACK_URL = process.env.CHROMIUM_PACK_URL
-  || 'https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
-// @sparticuz/chromium-min decides which shared libraries Chromium needs by reading
-// AWS_EXECUTION_ENV, and only knows Node 20.x / 22.x (Amazon Linux 2023). On a newer Node
-// (e.g. 24.x) it picks the OLD Amazon Linux 2 libraries, so Chromium dies the moment it starts:
-// "browserType.launch: Target page, context or browser has been closed". Vercel is always
-// Amazon Linux 2023, so we tell the package so BEFORE it is loaded.
+// The Chromium "pack" MUST be the same version as the installed @sparticuz/chromium-min package
+// (a v131 pack under a newer package = Chromium dies on start: "Target page, context or browser
+// has been closed"). So the pack URL is built from the installed package version; set
+// CHROMIUM_PACK_URL on Vercel only to force a specific one.
+function packUrl(): string {
+  if (process.env.CHROMIUM_PACK_URL) return process.env.CHROMIUM_PACK_URL
+  let ver = '131.0.1'
+  try {
+    ver = JSON.parse(readFileSync(join(process.cwd(), 'node_modules/@sparticuz/chromium-min/package.json'), 'utf8')).version || ver
+  } catch { /* keep default */ }
+  const major = parseInt(ver.split('.')[0], 10)
+  return `https://github.com/Sparticuz/chromium/releases/download/v${ver}/chromium-v${ver}-pack${major >= 138 ? '.x64' : ''}.tar`
+}
+
+// Vercel runs Amazon Linux 2023, but older @sparticuz/chromium-min versions only recognise that via
+// AWS_EXECUTION_ENV (which is NOT set on Vercel, e.g. on Node 24) — then the system libraries
+// Chromium needs (libnss3 …) are never unpacked and Chromium dies instantly. Tell the package.
+// This must happen BEFORE the package is loaded (hence the dynamic import below).
 function forceAl2023Libs() {
-  const env = process.env.AWS_EXECUTION_ENV || ''
-  if (env.includes('AWS_Lambda_nodejs') && !/(20|22)\.x/.test(env)) process.env.AWS_EXECUTION_ENV = 'AWS_Lambda_nodejs22.x'
-  const js = process.env.AWS_LAMBDA_JS_RUNTIME || ''
-  if (js.includes('nodejs') && !/(20|22)\.x/.test(js)) process.env.AWS_LAMBDA_JS_RUNTIME = 'nodejs22.x'
+  if (!process.env.VERCEL && !process.env.AWS_EXECUTION_ENV && !process.env.AWS_LAMBDA_JS_RUNTIME) return   // local PC
+  if (!/(20|22|24)\.x/.test(process.env.AWS_EXECUTION_ENV || '')) process.env.AWS_EXECUTION_ENV = 'AWS_Lambda_nodejs22.x'
 }
 
 export async function launch(): Promise<Browser> {
   forceAl2023Libs()
   const chromium = (await import('@sparticuz/chromium-min')).default
+  const url = packUrl()
   try {
-    const executablePath = await chromium.executablePath(PACK_URL)
+    const executablePath = await chromium.executablePath(url)
     return await pw.launch({ executablePath, args: chromium.args, headless: true })
   } catch (e: any) {
-    // The real reason (missing library, no memory…) is in Playwright's "Browser logs" lines —
-    // keep them on ONE line so the error panel shows them instead of just the first line.
-    const logs = String(e?.message || e).split('\n').map(l => l.trim()).filter(Boolean).join(' | ').slice(0, 330)
-    throw new Error(`[node ${process.version}; env ${process.env.AWS_EXECUTION_ENV || '-'}] ${logs}`)
+    // Playwright puts the real reason in its "Browser logs" lines — keep the END of them (the
+    // last lines hold the actual error, e.g. "error while loading shared libraries: …").
+    const raw = String(e?.message || e).split('\n').map(l => l.trim()).filter(Boolean)
+    const head = raw[0]
+    const tail = raw.slice(-4).join(' | ')
+    throw new Error(`[node ${process.version}; pack ${url.split('/').slice(-2, -1)[0]}] ${head} || ${tail}`.slice(0, 700))
   }
 }
 
