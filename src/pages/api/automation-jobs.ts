@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { requireSection } from '@/lib/serverAuth'
 import { shipperName } from '@/lib/shipperName'
 import { loadShipperMap, mappedPortals } from '@/lib/portalCredentials'
+import { kickRunner, originOf } from '@/lib/automation/kick'
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
@@ -97,6 +98,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await sb.from('automation_jobs').update({ error_dismissed_at: new Date().toISOString() })
           .eq('kind', kind).eq('status', 'failed').is('error_dismissed_at', null).in('cdn_id', rows.map(r => r.cdn_id))
       }
+      // Start processing on the server right away (the page does not have to stay open).
+      if (rows.length && kind === 'barcode_enter') await kickRunner(originOf(req))
       return res.json({ queued: rows.length, skipped })
     }
 

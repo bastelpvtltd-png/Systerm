@@ -5,6 +5,7 @@ import { yearOf } from '@/lib/flexibleDate'
 import { syncVesselTriggers } from '@/lib/vesselTrigger'
 import { autoCreateBoatNotes, autoCreatePartyCopies } from '@/lib/autoCreateDocs'
 import { runTricoCheck } from '@/lib/tricoCheckRun'
+import { kickRunner, originOf } from '@/lib/automation/kick'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -41,6 +42,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { data: runs } = await supabaseAdmin.from('automation_runs').select('*')
   const runByPanel = Object.fromEntries((runs || []).map(r => [r.panel, r]))
   const results: Record<string, any> = {}
+
+  // Barcode Enter jobs still waiting (e.g. a run was interrupted) — restart the server-side runner.
+  try {
+    const { count } = await supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('kind', 'barcode_enter').eq('status', 'queued')
+    if (count) results.barcode_enter = { queued: count, kicked: await kickRunner(originOf(req)) }
+  } catch (e: any) { results.barcode_enter = { error: e.message } }
 
   const boatNoteRun = runByPanel['boat_note']
   const dueBoatNote = boatNoteRun?.enabled !== false && (!boatNoteRun?.last_run_at ||

@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireSection } from '@/lib/serverAuth'
 import { requireWorker } from '@/lib/workerAuth'
 import { runSlice } from '@/lib/automation/runner'
+import { kickRunner, originOf } from '@/lib/automation/kick'
 
 // One serverless run of the Barcode Enter automation (headless Chromium inside this function).
 // Called by the Automation page after "Run", and repeated by the page until nothing is left in the
@@ -20,6 +21,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const host = String(req.headers.host || '')
     const proto = String(req.headers['x-forwarded-proto'] || (/^(localhost|127\.0\.0\.1)/.test(host) ? 'http' : 'https')).split(',')[0]
     const result = await runSlice({ origin: `${proto}://${host}` })
+    // Work left over? Start the next slice from the server so nothing depends on an open browser tab.
+    if (!result.busy && result.processed > 0 && result.remaining > 0) await kickRunner(originOf(req))
     res.json(result)
   } catch (err: any) {
     console.error('[automation-run] error:', err)

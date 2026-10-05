@@ -51,7 +51,7 @@ function RunnerInfo({ driving }: { driving: boolean }) {
   return (
     <p className={`text-[11px] mb-3 flex items-center gap-1.5 ${driving ? 'text-blue-700' : 'text-gray-500'}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${driving ? 'bg-blue-500 animate-pulse' : 'bg-gray-300'}`}/>
-      {driving ? 'Running on the server — keep this page open until it finishes (it continues on its own, a few containers at a time).' : 'Runs on the server (no PC needed). Keep this page open while a run is in progress.'}
+      {driving ? 'Running on the server — you can close this page or turn the PC off; it carries on by itself, a few containers at a time. Progress shows here when you come back.' : 'Runs fully on the server (no PC, no open page needed): after you press Run it logs in to the portals and fills everything by itself.'}
     </p>
   )
 }
@@ -282,7 +282,7 @@ export function BarcodeEnterPanel() {
   const [showLogins, setShowLogins] = useState(false)
   return (
     <QueuePanel kind="barcode_enter" title="Barcode Enter" icon={<BarcodeIcon size={15}/>} needs={['navis', 'slpa']} runLabel="Run Barcode Enter" autoRun
-      description="CDNs with no barcode yet. Select the ones to run: the worker logs in to Navis once and enters all of them, then logs in to SLPA once and completes each one (consolidation, slip, print). The printed barcode PDF is saved into the system and notified (reason: Container Moved). A CDN that hits an error is skipped and shown in Dashboard → Automate Errors."
+      description="CDNs with no barcode yet. Select the ones to run: the server logs in to Navis once and enters all of them, then logs in to SLPA once and completes each one (consolidation, slip, print). The printed barcode PDF is saved into the system and notified (reason: Container Moved). A CDN that hits an error is skipped and shown in Dashboard → Automate Errors."
       extraHeader={isAdmin ? (
         <div className="mb-3">
           <button onClick={() => setShowLogins(s => !s)} className="text-xs text-blue-600 hover:underline flex items-center gap-1"><Users size={12}/>Shipper logins {showLogins ? '▲' : '▼'}</button>
