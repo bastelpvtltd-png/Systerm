@@ -8,7 +8,7 @@ assert.equal(driverId('H.P.C.I.PATHIRATHNA 198728601130'), '198728601130')
 assert.equal(driverId('H.P.C.M.K.SIRISENA 871232733v'), '871232733V')
 assert.equal(driverId('NO ID HERE'), '')
 // con type
-assert.equal(navisConType('45G1'), '40B0'); assert.equal(navisConType('40G1'), '40B0'); assert.equal(navisConType('20G1'), '20BO'); assert.equal(navisConType('22G1'), '')
+assert.equal(navisConType('45G1'), '45G1'); assert.equal(navisConType('40G1'), '45G1'); assert.equal(navisConType('20G1'), '22G1'); assert.equal(navisConType('22G1'), '')
 // gross mass — the real formats from the CDN rows
 assert.equal(navisGrossMass('23.580.00'), '23580'); assert.equal(navisGrossMass('24,550.00'), '24550'); assert.equal(navisGrossMass('22:450.00'), '22450')
 assert.equal(navisGrossMass(''), ''); assert.equal(navisGrossMass('999999'), '')      // > 35,000 kg -> refuse, never guess
@@ -40,7 +40,7 @@ assert.equal(pickByCode(['PRVT (PRIVATE TRUCKING COMPANY)'], 'PRVT'), 0); assert
 const cdn = { container_no: 'ONEU0068223', con_type: '45G1', gross_mass: '24,550.00', coc: 'ONE', voc: 'BTL', voyage: '26073N', vessel: 'ZHONG PENG YOU YI', discharge_port: 'TUTICORIN',
   driver_name: 'K.R.S.P.KUMARA 942143400V', lorry_no: 'LY-4889', trailer_no: 'LX-2266', seal_no: 'LKAB88118', code: 'CBEX1', cusdec_number: 'E 60147' }
 const p = prepareValues(cdn, { code: 'CBEX1', number: 'E 60147', date: '29/09/2026' })
-assert.deepEqual(p.navis, { containerNo: 'ONEU0068223', conType: '40B0', grossMass: '24550', coc: 'ONE', voc: 'BTL', vessel: 'ZHONG PENG YOU YI', voyage: '26073N', dischargePort: 'TUTICORIN', cusdecRef: 'CBEX1E601472026' })
+assert.deepEqual(p.navis, { containerNo: 'ONEU0068223', conType: '45G1', grossMass: '24550', coc: 'ONE', voc: 'BTL', vessel: 'ZHONG PENG YOU YI', voyage: '26073N', dischargePort: 'TUTICORIN', cusdecRef: 'CBEX1E601472026' })
 assert.deepEqual(p.slpa, { cusdecRef: 'CBEX1E601472026', containerNo: 'ONEU0068223', driverId: '942143400V', truckNo: 'LY-4889', trailerNo: 'LX-2266', sealNo: 'LKAB88118' })
 // a bad row is rejected BEFORE any portal is touched, naming the field
 for (const [patch, field] of [[{ driver_name: 'NO ID' }, 'Driver ID'], [{ gross_mass: '' }, 'Gross Mass'], [{ con_type: 'XX' }, 'Con Type'], [{ seal_no: '' }, 'Seal No']] as const) {

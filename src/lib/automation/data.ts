@@ -4,10 +4,10 @@
 import { normalizeGrossMass } from '../grossMassFormat'
 import { FieldError } from './errors'
 
-// ISO-ish container type written into Navis. 40/45 foot -> 40B0, 20 foot -> 20BO.
-// (Typed exactly as specified: "40B0" has a zero, "20BO" has the letter O.)
-export const NAVIS_CON_TYPE_40 = '40B0'
-export const NAVIS_CON_TYPE_20 = '20BO'
+// Container type written into Navis (these exist in its Con Type list; "40B0"/"20BO" do not).
+// 40/45 foot -> 45G1, 20 foot -> 22G1.
+export const NAVIS_CON_TYPE_40 = '45G1'
+export const NAVIS_CON_TYPE_20 = '22G1'
 
 const clean = (s: string) => String(s ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
 const norm = (s: string) => clean(s).toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -18,7 +18,7 @@ export function driverId(driverName: string | null | undefined): string {
   return m ? m[1].toUpperCase() : ''
 }
 
-/** "45G1" / "40G1" -> "40B0"; "20G1" -> "20BO"; anything else -> "". */
+/** "45G1" / "40G1" -> "45G1"; "20G1" -> "22G1"; anything else -> "". */
 export function navisConType(conType: string | null | undefined): string {
   const t = clean(conType || '').toUpperCase()
   if (/^(40|45)/.test(t)) return NAVIS_CON_TYPE_40
