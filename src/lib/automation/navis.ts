@@ -1,7 +1,7 @@
 import type { Browser, BrowserContext, Page } from 'playwright-core'
 import { newSession, sleep, snap } from './portal'
 import { FieldError, asFieldError } from './errors'
-import { fillText, pickCombo, input, visibleZkError, dumpInputs, type Sel } from './zk'
+import { fillText, pickCombo, input, visibleZkError, dumpInputs, softClick, type Sel } from './zk'
 import { pickByCode, pickPortOption, pickVesselOption, type NavisValues } from './data'
 import type { PortalLogin } from '@/lib/portalCredentials'
 
@@ -58,8 +58,13 @@ export async function navisLogin(browser: Browser, login: PortalLogin): Promise<
 async function openPreAdvise(s: NavisSession) {
   const { page } = s
   if (!page.url().includes('capHomeView.zul')) await page.goto(HOME_URL)
-  await page.locator('.z-menu-text').filter({ hasText: /^G\u0332?ate$/ }).first().click()
-  await page.locator('.z-menuitem-text', { hasText: 'Pre-advise Export' }).first().click()
+  await page.waitForLoadState('domcontentloaded').catch(() => {})
+  const gate = page.locator('.z-menu-text').filter({ hasText: /^\s*G\u0332?ate\s*$/ }).first()
+  await gate.waitFor({ state: 'attached', timeout: 20_000 })
+  await softClick(gate)
+  const pre = page.locator('.z-menuitem-text', { hasText: 'Pre-advise Export' }).first()
+  await pre.waitFor({ state: 'attached', timeout: 10_000 })
+  await softClick(pre)
   await input(page, NAVIS.fields.containerNo).waitFor({ state: 'visible', timeout: 20_000 })
   s.needsReopen = false
 }
@@ -72,8 +77,10 @@ async function openPreAdvise(s: NavisSession) {
 export async function navisEnterOne(s: NavisSession, v: NavisValues, opts: { dryRun: boolean }): Promise<{ saved: boolean; screenshot?: string }> {
   const { page } = s
   const F = NAVIS.fields
+  let stage = 'Open Gate > Pre-advise Export'
   try {
     if (s.needsReopen) await openPreAdvise(s)
+    stage = 'Fill form'
 
     await fillText(page, 'Container No', F.containerNo, v.containerNo)
     await pickCombo(page, 'Con Type', F.conType, { type: v.conType, choose: o => pickByCode(o, v.conType) })
@@ -97,7 +104,8 @@ export async function navisEnterOne(s: NavisSession, v: NavisValues, opts: { dry
       return { saved: false, screenshot }
     }
 
-    await page.locator(`${NAVIS.saveButton}:visible`).first().click()
+    stage = 'Save button'
+    await softClick(page.locator(`${NAVIS.saveButton}:visible`).first())
 
     // Success = the panel clears (the container box becomes empty). Failure = a ZK error box.
     const box = input(page, F.containerNo)
@@ -111,7 +119,7 @@ export async function navisEnterOne(s: NavisSession, v: NavisValues, opts: { dry
     }
     throw new FieldError('navis', 'Save', 'Clicked Save but Navis neither cleared the form nor showed an error within 25 s — check Navis by hand before re-running')
   } catch (e) {
-    const fe = asFieldError(e, 'navis')
+    const fe = asFieldError(e, 'navis', stage)
     if (!fe.screenshot) fe.screenshot = await snap(page)
     if (!fe.debug && /not found|No dropdown/.test(fe.message)) fe.debug = await dumpInputs(page)
     s.needsReopen = true              // never carry a half-filled form into the next container

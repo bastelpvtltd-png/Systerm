@@ -4,7 +4,7 @@
 // The prefix changes on every login, so fields are matched on the END of the id
 // (input[id$="mm0"]), never the whole id.
 import type { Page } from 'playwright-core'
-import { FieldError, type Step } from './errors'
+import { FieldError, asFieldError, type Step } from './errors'
 import { sleep, snap } from './portal'
 import type { Pick } from './data'
 
@@ -52,9 +52,9 @@ async function need(page: Page, field: string, sel: Sel) {
 }
 
 /** Plain textbox: type, then Tab so ZK registers the change. */
-export async function fillText(page: Page, field: string, sel: Sel, value: string) {
+async function fillTextRaw(page: Page, field: string, sel: Sel, value: string) {
   const el = await need(page, field, sel)
-  await el.click()
+  await el.click({ timeout: 8_000 }).catch(() => el.focus())
   await el.press('Control+A'); await el.press('Backspace')
   await el.pressSequentially(value, { delay: 25 })
   await el.press('Tab')
@@ -67,17 +67,17 @@ export async function fillText(page: Page, field: string, sel: Sel, value: strin
  * read every option's text, let `choose` pick one, click it, and confirm the box really holds a
  * value afterwards. `readonly` boxes (Truck, FCL) are opened by clicking.
  */
-export async function pickCombo(page: Page, field: string, sel: Sel, o: { type?: string; readonly?: boolean; choose: (options: string[]) => Pick }) {
+async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: string; readonly?: boolean; choose: (options: string[]) => Pick }) {
   const el = await need(page, field, sel)
   const items = page.locator('li.z-comboitem:visible')
-  await el.click()
+  await el.click({ timeout: 8_000 }).catch(() => el.focus())
   if (!o.readonly) {
     await el.press('Control+A'); await el.press('Backspace')
     if (o.type) await el.pressSequentially(o.type, { delay: 70 })
   }
   let opened = await items.first().waitFor({ state: 'visible', timeout: o.readonly ? 2_500 : 9_000 }).then(() => true, () => false)
   if (!opened && o.readonly) {
-    await el.locator('xpath=following-sibling::a').first().click().catch(() => {})
+    await softClick(el.locator('xpath=following-sibling::a').first()).catch(() => {})
     opened = await items.first().waitFor({ state: 'visible', timeout: 6_000 }).then(() => true, () => false)
   }
   if (!opened) throw new FieldError(STEP, field, `No dropdown options appeared for "${field}"${o.type ? ` after typing "${o.type}"` : ''}`)
@@ -85,11 +85,22 @@ export async function pickCombo(page: Page, field: string, sel: Sel, o: { type?:
   const options = (await items.locator('.z-comboitem-text').allInnerTexts()).map(clean)
   const choice = o.choose(options)
   if (typeof choice === 'string') throw new FieldError(STEP, field, choice)
-  await items.nth(choice).click()
+  await softClick(items.nth(choice))
   await sleep(400)
   const value = (await el.inputValue()).trim()
   if (!value || value === '--') throw new FieldError(STEP, field, `"${field}": option "${options[choice]}" was clicked but the box is still empty`)
   return value
+}
+
+/** ZK sometimes leaves an invisible mask/popup over the element for a moment, which makes a normal
+ *  Playwright click wait the full 30 s. Try a normal click for a few seconds, then fall back to
+ *  sending the click event straight to the element (which is what ZK listens for). */
+export async function softClick(loc: import('playwright-core').Locator, tries = 6_000) {
+  try { await loc.click({ timeout: tries }) }
+  catch {
+    await loc.waitFor({ state: 'attached', timeout: 5_000 })
+    await loc.dispatchEvent('click')
+  }
 }
 
 /** Text of any ZK error/notification box currently on screen ("" if none). */
@@ -97,4 +108,13 @@ export async function visibleZkError(page: Page): Promise<string> {
   const loc = page.locator('.z-errbox:visible, .z-notification:visible, .z-messagebox-window:visible').first()
   if (!(await loc.count())) return ''
   return clean((await loc.innerText().catch(() => '')) || '').slice(0, 300)
+}
+
+// Any raw Playwright error (timeout etc.) is tagged with the field it happened on, so the
+// Automate Errors panel says e.g. field "COC" instead of an anonymous "locator.click: Timeout".
+export async function fillText(page: Page, field: string, sel: Sel, value: string) {
+  try { return await fillTextRaw(page, field, sel, value) } catch (e) { throw asFieldError(e, STEP, field) }
+}
+export async function pickCombo(page: Page, field: string, sel: Sel, o: { type?: string; readonly?: boolean; choose: (options: string[]) => Pick }) {
+  try { return await pickComboRaw(page, field, sel, o) } catch (e) { throw asFieldError(e, STEP, field) }
 }
