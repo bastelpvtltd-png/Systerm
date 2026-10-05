@@ -364,7 +364,7 @@ export function TricoCheckPanel({ scheduler }: { scheduler: ReactNode }) {
       {error && <p className="text-xs text-red-600 mb-2 flex items-start gap-1"><AlertTriangle size={13} className="mt-0.5 flex-shrink-0"/>{error}</p>}
       {rawSample && (
         <details className="mb-3 text-[11px] bg-amber-50 border border-amber-200 rounded-lg p-2">
-          <summary className="cursor-pointer text-amber-700">Trico returned rows but none matched — raw sample (send this so the field names can be corrected)</summary>
+          <summary className="cursor-pointer text-amber-700">Trico gate pass found but not matched — what the View page contained (send this if the CUSDEC / times look wrong)</summary>
           <pre className="overflow-x-auto mt-1">{JSON.stringify(rawSample, null, 2)}</pre>
         </details>
       )}

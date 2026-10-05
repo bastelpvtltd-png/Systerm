@@ -74,7 +74,7 @@ export async function runTricoCheck(opts: { cdnIds?: string[]; limit?: number; m
       summary.checked++
       if (decision.outcome === 'ok') summary.updated++
       summary.results.push({ ...base, outcome: decision.outcome, note: decision.note })
-      if (decision.outcome === 'no_container' && rawSample.length && !summary.rawSample) summary.rawSample = rawSample
+      if ((decision.outcome === 'no_container' || decision.outcome === 'cusdec_mismatch') && rawSample.length && !summary.rawSample) summary.rawSample = rawSample
     } catch (e: any) {
       // Config / login problems are recorded on the row so the panel can show why,
       // and the batch carries on with the remaining rows.
