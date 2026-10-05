@@ -1,10 +1,9 @@
 // Trico gate lookup (gate add / gate in / gate out per container) + the pure
 // matching rules that decide what may be written onto a CDN row.
 //
-// CALIBRATION NEEDED: the matching/filling rules below are final, but I have not
-// seen the real Trico page/XHR that lists gate add/in/out per container. Until
-// TRICO_GATE_LOOKUP_URL is set (env var, or edit GATE_LOOKUP_URL here), the
-// lookup throws a clear "not configured" error instead of guessing. The field
+// CALIBRATION: the matching/filling rules below are final. Without TRICO_GATE_LOOKUP_URL
+// the lookup auto-discovers the data from the known gate pass page (autoLookup below);
+// if that can't read rows it reports what the page contains instead of guessing. The field
 // name candidates in mapGateRow() are guesses in the same style as
 // trico-yard-sync.ts — the first real run returns a rawSample to correct them.
 import { TRICO_UA } from './tricoSession'
@@ -29,7 +28,27 @@ const pick = (item: any, keys: string[]): string => {
   return ''
 }
 
+// Fallback when none of the exact names above exist: look at the key NAMES
+// (table headers become keys, e.g. "Gate In Time" → gate_in_time).
+const findKey = (item: any, test: RegExp): string => {
+  for (const k of Object.keys(item || {})) {
+    if (test.test(k) && item[k] !== null && item[k] !== undefined && String(item[k]).trim() !== '') return String(item[k]).trim()
+  }
+  return ''
+}
+
 export function mapGateRow(item: any): GateRow {
+  const r = mapGateRowExact(item)
+  return {
+    containerNo: r.containerNo || findKey(item, /cont(ainer)?(_?(no|num|number))?$|^cont_/),
+    cusdecNo: r.cusdecNo || findKey(item, /cusdec|cus_dec|entry/),
+    gateAdd: r.gateAdd || findKey(item, /gate_?add|(^|_)add(ed)?(_|$)/),
+    gateIn: r.gateIn || findKey(item, /gate_?in|(^|_)in(_|$)/),
+    gateOut: r.gateOut || findKey(item, /gate_?out|(^|_)out(_|$)/),
+  }
+}
+
+function mapGateRowExact(item: any): GateRow {
   return {
     containerNo: pick(item, ['cont_number', 'container_no', 'container_number', 'container', 'containerno']),
     cusdecNo: pick(item, ['cusdec_no', 'cusdec_number', 'cusdec', 'cusdecno', 'cus_dec', 'entry_no']),
@@ -46,7 +65,7 @@ export function parseGateResponse(text: string): any[] {
   if (t.startsWith('[') || t.startsWith('{')) {
     try {
       const j = JSON.parse(t)
-      return Array.isArray(j) ? j : Array.isArray(j.data) ? j.data : Array.isArray(j.items) ? j.items : Array.isArray(j.rows) ? j.rows : []
+      return Array.isArray(j) ? j : Array.isArray(j.data) ? j.data : Array.isArray(j.items) ? j.items : Array.isArray(j.rows) ? j.rows : Array.isArray(j.aaData) ? j.aaData : []
     } catch { /* fall through to HTML */ }
   }
   const strip = (s: string) => s.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
@@ -56,9 +75,113 @@ export function parseGateResponse(text: string): any[] {
   return rows.slice(1).filter(r => r.length === header.length).map(r => Object.fromEntries(header.map((h, i) => [h, r[i]])))
 }
 
+// The one Trico page we know lists export gate passes (it is the "after login"
+// page saved in Settings → Credentials). Used when no explicit lookup URL is set.
+const DEFAULT_GATE_PAGE = 'https://s2.tricologi.net/webuser/?option=gatepass&action=gatepass_exp'
+
+const attr = (tag: string, name: string): string => {
+  const m = tag.match(new RegExp(`${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'))
+  return (m?.[1] ?? m?.[2] ?? m?.[3] ?? '').replace(/&amp;/g, '&')
+}
+
+interface FormField { name: string; value: string }
+interface FoundForm { action: string; method: string; fields: FormField[] }
+
+function extractForms(html: string): FoundForm[] {
+  const forms: FoundForm[] = []
+  for (const m of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+    const fields: FormField[] = []
+    for (const i of m[2].matchAll(/<input\b[^>]*>/gi)) {
+      const type = (attr(i[0], 'type') || 'text').toLowerCase()
+      const name = attr(i[0], 'name')
+      if (!name || ['submit', 'button', 'image', 'file', 'reset'].includes(type)) continue
+      if ((type === 'checkbox' || type === 'radio') && !/\bchecked\b/i.test(i[0])) continue
+      fields.push({ name, value: attr(i[0], 'value') })
+    }
+    for (const sel of m[2].matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/gi)) {
+      const name = attr(sel[1], 'name'); if (!name) continue
+      const opt = sel[2].match(/<option\b[^>]*selected[^>]*value\s*=\s*["']?([^"'\s>]*)/i) || sel[2].match(/<option\b[^>]*value\s*=\s*["']?([^"'\s>]*)/i)
+      fields.push({ name, value: opt?.[1] || '' })
+    }
+    forms.push({ action: attr(m[1], 'action'), method: (attr(m[1], 'method') || 'GET').toUpperCase(), fields })
+  }
+  return forms
+}
+
+async function get(url: string, cookie: string, ajax = false, init: RequestInit = {}): Promise<string> {
+  const res = await fetch(url, {
+    ...init,
+    headers: { 'User-Agent': TRICO_UA, Cookie: cookie, ...(ajax ? { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json, text/javascript, */*; q=0.01' } : {}), ...((init.headers as any) || {}) },
+    cache: 'no-store',
+  })
+  const text = await res.text()
+  if (/name="login_user_id"/.test(text)) throw new Error('Trico session was not accepted on the gate lookup page (got the login form).')
+  return text
+}
+
+// Used when TRICO_GATE_LOOKUP_URL is not set. Opens the gate pass page, then tries, in order:
+//   1. the page's own table (if the rows are already in the HTML),
+//   2. its search form (the field whose name contains "cont" gets the container number),
+//   3. any ajax/json endpoint the page's scripts mention (same host).
+// If none of those gives a readable table, the error lists exactly what the page contains
+// (table headers, form field names, ajax URLs) so the lookup can be pinned down in one step.
+const listCache = new Map<string, { t: number; raw: any[] }>()
+
+async function autoLookup(cookie: string, containerNo: string): Promise<any[]> {
+  const cacheKey = cookie
+  const hit = listCache.get(cacheKey)
+  if (hit && Date.now() - hit.t < 30_000) return hit.raw
+
+  const html1 = await get(DEFAULT_GATE_PAGE, cookie)
+  let raw = parseGateResponse(html1)
+  const forms = extractForms(html1)
+
+  if (!raw.length) {
+    const searchForm = forms.find(f => f.fields.some(x => /cont/i.test(x.name)))
+    if (searchForm) {
+      const params = new URLSearchParams()
+      for (const f of searchForm.fields) params.set(f.name, /cont/i.test(f.name) ? containerNo : f.value)
+      const target = new URL(searchForm.action || DEFAULT_GATE_PAGE, DEFAULT_GATE_PAGE)
+      let html2: string
+      if (searchForm.method === 'POST') {
+        html2 = await get(target.toString(), cookie, false, { method: 'POST', body: params.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded', Referer: DEFAULT_GATE_PAGE } })
+      } else {
+        params.forEach((v, k) => target.searchParams.set(k, v))
+        html2 = await get(target.toString(), cookie, false, { headers: { Referer: DEFAULT_GATE_PAGE } })
+      }
+      raw = parseGateResponse(html2)
+      if (raw.length) return raw   // search results are per container — don't cache
+    }
+  }
+
+  const ajaxUrls = Array.from(new Set(Array.from(html1.matchAll(/["'`]([^"'`\s<>]*(?:ajax|json)[^"'`\s<>]*)["'`]/gi)).map(m => m[1])
+    .filter(u => /option=|\.php/i.test(u)))).slice(0, 4)
+
+  if (!raw.length) {
+    for (const u of ajaxUrls) {
+      try {
+        const abs = new URL(u.replace(/&amp;/g, '&'), DEFAULT_GATE_PAGE)
+        if (abs.host !== new URL(DEFAULT_GATE_PAGE).host) continue
+        raw = parseGateResponse(await get(abs.toString(), cookie, true, { headers: { Referer: DEFAULT_GATE_PAGE } }))
+        if (raw.length) break
+      } catch { /* try the next one */ }
+    }
+  }
+
+  if (!raw.length) {
+    const headers = Array.from(html1.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/gi)).map(m => m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 14)
+    const fields = forms.flatMap(f => f.fields.map(x => x.name)).slice(0, 14)
+    throw new Error(`Gate page opened but no gate rows could be read. Table headers: [${headers.join(' | ') || 'none'}]; form fields: [${fields.join(', ') || 'none'}]; ajax urls: [${ajaxUrls.join(', ') || 'none'}]`)
+  }
+
+  listCache.set(cacheKey, { t: Date.now(), raw })
+  return raw
+}
+
 export async function fetchGateRows(cookie: string, containerNo: string): Promise<{ rows: GateRow[]; rawSample: any[] }> {
   if (!GATE_LOOKUP_URL) {
-    throw new Error('Trico gate lookup is not configured yet — set TRICO_GATE_LOOKUP_URL (see lib/tricoGate.ts) once the Trico page that lists gate add / in / out is known.')
+    const raw = await autoLookup(cookie, containerNo)
+    return { rows: raw.map(mapGateRow), rawSample: raw.slice(0, 2) }
   }
   const enc = encodeURIComponent(containerNo)
   const url = GATE_LOOKUP_URL.replace('{container}', enc)

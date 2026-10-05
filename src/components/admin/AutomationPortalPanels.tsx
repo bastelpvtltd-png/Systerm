@@ -156,6 +156,12 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
       <div className="card">
         <h2 className="font-semibold text-gray-900 text-sm mb-1 flex items-center gap-2">{icon}{title}</h2>
         <p className="text-xs text-gray-500 mb-3">{description}</p>
+        {!autoRun && (
+          <p className="text-xs mb-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-2.5 flex items-start gap-1.5">
+            <AlertTriangle size={13} className="mt-0.5 flex-shrink-0"/>
+            <span><b>Run is switched off on purpose:</b> the gate pass entry step has not been built yet (it needs the real Trico gate pass form). Selecting rows works, but nothing will be sent to Trico.</span>
+          </p>
+        )}
         {autoRun && <RunnerInfo driving={driving}/>}
         {autoRun && (
           <label className="flex items-start gap-2 text-xs mb-3 bg-amber-50 border border-amber-200 rounded-lg p-2.5 cursor-pointer">
@@ -170,7 +176,7 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container, CUSDEC or shipper..." className="input pl-8"/>
           </div>
           <button onClick={toggleAll} disabled={!selectableIds.length} className="btn-secondary text-xs">{allSelected ? 'Clear' : 'Select all ready'}</button>
-          <button onClick={run} disabled={busy || !selected.size || !autoRun} className="btn-primary flex items-center gap-2 text-xs">
+          <button onClick={run} disabled={busy || !selected.size || !autoRun} title={autoRun ? '' : 'Gate pass entry is not built yet'} className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-xs">
             {busy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}{testMode && autoRun ? 'Test run' : runLabel} ({selected.size})
           </button>
         </div>

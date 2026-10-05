@@ -78,7 +78,7 @@ export async function runTricoCheck(opts: { cdnIds?: string[]; limit?: number; m
     } catch (e: any) {
       // Config / login problems are recorded on the row so the panel can show why,
       // and the batch carries on with the remaining rows.
-      const note = `Error: ${e.message}`
+      const note = `Error: ${String(e.message).slice(0, 600)}`
       await sb.from('cdn').update({ trico_checked_at: new Date().toISOString(), trico_check_note: note }).eq('id', cdn.id)
       summary.results.push({ ...base, outcome: 'error', note })
     }
