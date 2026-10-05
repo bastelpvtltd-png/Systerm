@@ -11,5 +11,5 @@ export class FieldError extends Error {
 export function asFieldError(e: unknown, step: Step, field = ''): FieldError {
   if (e instanceof FieldError) return e
   const msg = e instanceof Error ? e.message : String(e)
-  return new FieldError(step, field, msg.split('\n')[0].slice(0, 400))   // Playwright timeouts are noisy — first line only
+  return new FieldError(step, field, msg.split('\n')[0].slice(0, 800))   // Playwright timeouts are noisy — first line only
 }
