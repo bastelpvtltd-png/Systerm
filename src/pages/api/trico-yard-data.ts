@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 import { supabase } from '@/lib/supabase'
+import { readSync } from '@/lib/syncStatus'
 
 // Server-side paging + search over the WHOLE trico_yard table.
 //   ?page=1&pageSize=1000&search=...
@@ -12,7 +13,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // strip characters that would break the PostgREST .or() filter syntax
   const search = String(req.query.search || '').replace(/[,()%*]/g, ' ').trim()
   const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1)
-  const pageSize = Math.min(1000, Math.max(1, parseInt(String(req.query.pageSize || '1000'), 10) || 1000))
+  const pageSize = Math.min(1000, Math.max(1, parseInt(String(req.query.pageSize || '200'), 10) || 200))
 
   try {
     const from = (page - 1) * pageSize
@@ -41,6 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       page,
       pageSize,
       latestUpdate: latest.data?.[0]?.updated_at || null,
+      lastSync: await readSync('trico_yard'),
     })
   } catch (error: any) {
     return res.status(200).json({ items: [], total: 0, warning: error.message })

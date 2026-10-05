@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 import { supabase } from '@/lib/supabase'
+import { recordSync } from '@/lib/syncStatus'
 
 const LOGIN_PAGE_URL = 'https://s2.tricologi.net/webuser/?option=user'
 const LOGIN_ACTION_URL = 'https://s2.tricologi.net/webuser/user/login_validate.php'
@@ -218,20 +219,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     containers.forEach(c => uniqueMap.set(c.container_no, c))
     const uniqueContainers = Array.from(uniqueMap.values())
 
-    // Upsert EVERY container on every sync (not just new ones). Before, rows
-    // already saved were skipped, so their status / duration / time_in went
-    // stale and updated_at never moved — the panel couldn't show when the
-    // data was last refreshed. Each row now gets this sync's timestamp.
+    // Load what is already saved so only rows that really changed get a new
+    // updated_at — that way the panel's "newest first" order means "most
+    // recently changed first". Duration grows every minute, so it is refreshed
+    // silently (no updated_at bump) instead of counting as a change.
+    const existing = new Map<string, any>()
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase.from('trico_yard')
+        .select('container_no, veh_no, cusdec_no, cdn, shipper, time_in, duration, status, updated_at')
+        .order('container_no').range(from, from + 999)
+      if (error) throw error
+      for (const r of data || []) existing.set(r.container_no, r)
+      if (!data || data.length < 1000) break
+    }
+    const CHANGE_FIELDS: (keyof YardRow)[] = ['veh_no', 'cusdec_no', 'cdn', 'shipper', 'time_in', 'status']
+    const toWrite: YardRow[] = []
+    let added = 0, changed = 0, unchanged = 0
+    for (const c of uniqueContainers) {
+      const old = existing.get(c.container_no)
+      if (!old) { toWrite.push(c); added++; continue }
+      const differs = CHANGE_FIELDS.some(f => String(old[f] ?? '') !== String(c[f] ?? ''))
+      if (differs) { toWrite.push(c); changed++; continue }
+      unchanged++
+      if (String(old.duration ?? '') !== c.duration) toWrite.push({ ...c, updated_at: old.updated_at })
+    }
+
     const CHUNK = 500
-    for (let i = 0; i < uniqueContainers.length; i += CHUNK) {
+    for (let i = 0; i < toWrite.length; i += CHUNK) {
       const { error: upsertError } = await supabase
         .from('trico_yard')
-        .upsert(uniqueContainers.slice(i, i + CHUNK), { onConflict: 'container_no' })
+        .upsert(toWrite.slice(i, i + CHUNK), { onConflict: 'container_no' })
       if (upsertError) throw upsertError
     }
 
+    const message = `${uniqueContainers.length} fetched · ${added} new · ${changed} changed · ${unchanged} unchanged`
+    await recordSync('trico_yard', message)
+
     return res.status(200).json({
-      message: `${uniqueContainers.length} container(s) updated`,
+      message,
       fetched: uniqueContainers.length,
     })
   } catch (error: any) {

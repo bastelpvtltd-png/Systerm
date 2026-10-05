@@ -34,6 +34,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json({ ok: true })
     }
 
+    // Edit an existing login. Leaving the password empty keeps the old one.
+    if (req.method === 'PUT') {
+      const { id, identity_name, url, username, password } = req.body
+      if (!id) return res.status(400).json({ error: 'id required' })
+      if (!identity_name || !url) return res.status(400).json({ error: 'identity_name and url are required' })
+      const update: Record<string, any> = { identity_name, url, username: username || null }
+      if (password) update.password_encrypted = encryptSecret(password)
+      const { error } = await supabaseAdmin.from('automation_credentials').update(update).eq('id', id)
+      if (error) throw error
+      return res.json({ ok: true })
+    }
+
     if (req.method === 'DELETE') {
       const id = String(req.query.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })

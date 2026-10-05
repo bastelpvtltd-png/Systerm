@@ -2,6 +2,7 @@ node_modules/
 .next/
 .env
 .env.local
+.src.zip
 .env*.local
 LOCAL_SETUP_NOTES.txt
 tokens-and-api-calls.txt

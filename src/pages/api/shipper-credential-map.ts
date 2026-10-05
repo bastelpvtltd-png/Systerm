@@ -15,7 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const [{ data: cdns }, { data: map }, { data: creds }] = await Promise.all([
         sb.from('cdn').select('shipper').not('shipper', 'is', null).limit(5000),
         sb.from('shipper_portal_credentials').select('*'),
-        sb.from('automation_credentials').select('id, identity_name, username').order('identity_name'),
+        sb.from('automation_credentials').select('id, identity_name, url, username').order('identity_name'),
       ])
       const shippers = new Map<string, string>()
       for (const c of cdns || []) { const n = shipperName(c.shipper); if (n) shippers.set(shipperKey(n), n) }

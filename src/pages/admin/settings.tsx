@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
-import { Settings, Database, Trash2, Loader, RefreshCw, ExternalLink, AlertTriangle, Shield, CheckCircle, XCircle, Key, Save } from 'lucide-react'
+import { Settings, Database, Trash2, Loader, RefreshCw, ExternalLink, AlertTriangle, Shield, CheckCircle, XCircle, Key, Save, Pencil, X } from 'lucide-react'
 import { supabase, authHeader } from '@/lib/supabase'
 
 type Tab = 'general' | 'database' | 'logs' | 'credentials'
@@ -30,6 +30,7 @@ function CredentialsSettings() {
   const [form, setForm] = useState({ identity_name: '', url: '', username: '', password: '' })
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   async function load() {
     try {
@@ -60,8 +61,22 @@ function CredentialsSettings() {
     } catch (e: any) { setError(e.message) }
   }
 
+  function startEdit(c: Credential) {
+    setError(''); setStatus('')
+    setEditingId(c.id)
+    // Password is never sent to the browser — leave it empty to keep the saved one.
+    setForm({ identity_name: c.identity_name, url: c.url, username: c.username || '', password: '' })
+  }
+
+  function cancelEdit() {
+    setEditingId(null)
+    setForm({ identity_name: '', url: '', username: '', password: '' })
+    setError('')
+  }
+
   async function remove(id: string) {
     if (!confirm('Delete this credential?')) return
+    if (editingId === id) cancelEdit()
     await fetch(`/api/automation-credentials?id=${id}`, { method: 'DELETE', headers: await authHeader() })
     load()
   }
@@ -69,7 +84,7 @@ function CredentialsSettings() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <div className="card">
-        <h2 className="font-semibold text-gray-900 text-sm mb-3">Add / Update Login</h2>
+        <h2 className="font-semibold text-gray-900 text-sm mb-3">{editingId ? 'Edit Login' : 'Add / Update Login'}</h2>
         <p className="text-xs text-gray-500 mb-3">Asycuda has no automated-login benefit, so it's left out on purpose. Pick an Identity Name below and it auto-fills the known URL.</p>
         {error && <div className="mb-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg px-3 py-2"><AlertTriangle size={13}/>{error}</div>}
         {status && <p className="text-xs text-green-600 mb-3">{status}</p>}
@@ -86,9 +101,12 @@ function CredentialsSettings() {
           </Field>
           <Field label="Login URL"><input value={form.url} onChange={e => setForm(f => ({ ...f, url: e.target.value }))} className="input"/></Field>
           <Field label="Username"><input value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} className="input"/></Field>
-          <Field label="Password"><input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} className="input"/></Field>
+          <Field label={editingId ? 'Password (leave empty to keep current)' : 'Password'}><input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder={editingId ? '••••••••' : ''} className="input"/></Field>
         </div>
-        <button onClick={save} className="btn-primary mt-4 flex items-center gap-2"><Save size={14}/>Save Credential</button>
+        <div className="flex items-center gap-2 mt-4">
+          <button onClick={save} className="btn-primary flex items-center gap-2"><Save size={14}/>{editingId ? 'Update Credential' : 'Save Credential'}</button>
+          {editingId && <button onClick={cancelEdit} className="btn-secondary flex items-center gap-1.5"><X size={14}/>Cancel</button>}
+        </div>
       </div>
 
       <div className="card">
@@ -97,10 +115,13 @@ function CredentialsSettings() {
           {creds.map(c => {
             const site = KNOWN_SITES.find(s => s.identity_name === c.identity_name)
             return (
-              <div key={c.id} className="border border-gray-100 rounded-lg p-3">
+              <div key={c.id} className={`border rounded-lg p-3 ${editingId === c.id ? 'border-blue-400' : 'border-gray-100'}`}>
                 <div className="flex items-center justify-between">
                   <p className="font-semibold text-sm text-gray-800">{c.identity_name}</p>
-                  <button onClick={() => remove(c.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => startEdit(c)} title="Edit" className="text-gray-300 hover:text-blue-500"><Pencil size={14}/></button>
+                    <button onClick={() => remove(c.id)} title="Delete" className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
+                  </div>
                 </div>
                 <p className="text-xs text-gray-500 mt-1">Login URL: <a href={c.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{c.url}</a></p>
                 {site && <p className="text-xs text-gray-400">After login: {site.afterLoginUrl}</p>}

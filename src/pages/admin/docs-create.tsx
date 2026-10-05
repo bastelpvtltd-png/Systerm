@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { portalOfCredential } from '@/lib/portalSites'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { authHeader } from '@/lib/supabase'
 import { Anchor, Loader, RefreshCw, CheckSquare, Square, FileDown, Mail, FileStack, Receipt, Package, Plus, X, Clock, ClipboardCheck, Search, FileCode, ScanText, Copy, Save, Download, AlertTriangle, CheckCircle, Send, Trash2 } from 'lucide-react'
@@ -1743,7 +1744,7 @@ interface TemplateDocCusdec { id: string; number: string; exporter: string; code
 // pass to Trico.
 interface TricoCdnRec { id: string; code: string; cusdec_number: string; container_no: string; [k: string]: any }
 interface TricoMapping { field_label: string; data_source: 'cusdec' | 'cdn' | 'manual'; column_name: string; target_cell_or_range: string }
-interface TricoCredential { id: string; identity_name: string; username: string | null }
+interface TricoCredential { id: string; identity_name: string; url?: string; username: string | null }
 
 function TricoGatePassPanel({ documentType, label }: { documentType: string; label: string }) {
   const [afterLoginUrl, setAfterLoginUrl] = useState('')
@@ -1776,7 +1777,7 @@ function TricoGatePassPanel({ documentType, label }: { documentType: string; lab
     authHeader().then(h => fetch('/api/list-records?table=cdn&limit=500', { headers: h })).then(r => r.json()).then(d => setCdns(d.records || [])).catch(() => {})
     authHeader().then(h => fetch('/api/list-records?table=cusdec&limit=500', { headers: h })).then(r => r.json()).then(d => setCusdecs(d.records || [])).catch(() => {})
     authHeader().then(h => fetch('/api/automation-credentials', { headers: h })).then(r => r.json())
-      .then(d => setCredentials((d.credentials || []).filter((c: TricoCredential) => c.identity_name === 'Trico'))).catch(() => {})
+      .then(d => setCredentials((d.credentials || []).filter((c: TricoCredential) => portalOfCredential(c) === 'trico'))).catch(() => {})
   }, [documentType])
 
   const filteredCdns = cdns.filter(c =>
@@ -1811,7 +1812,7 @@ function TricoGatePassPanel({ documentType, label }: { documentType: string; lab
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Trico Login</h2>
         <select value={credentialId} onChange={e => setCredentialId(e.target.value)} className="input text-sm w-full">
           <option value="">— select credential —</option>
-          {credentials.map(c => <option key={c.id} value={c.id}>{c.username || c.identity_name}</option>)}
+          {credentials.map(c => <option key={c.id} value={c.id}>{c.identity_name}{c.username ? ` (${c.username})` : ''}</option>)}
         </select>
         {credentials.length === 0 && <p className="text-[11px] text-amber-600 mt-1.5">No Trico credentials saved — add one under Settings &gt; Credentials first.</p>}
       </div>

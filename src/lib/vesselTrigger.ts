@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { recordSync } from '@/lib/syncStatus'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -76,5 +77,6 @@ export async function syncVesselTriggers(): Promise<VesselSyncResult> {
     }
   }
 
+  await recordSync('vessel_trigger', `${rows.length} fetched, ${inserted} new, ${updated} updated, ${unchanged} unchanged`)
   return { fetched: rows.length, inserted, updated, unchanged }
 }

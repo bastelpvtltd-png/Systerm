@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react'
 import { authHeader } from '@/lib/supabase'
 import { usePermission } from '@/components/admin/AdminLayout'
+import { portalOfCredential } from '@/lib/portalSites'
 import { Barcode as BarcodeIcon, Truck, Loader, Zap, Search, CheckCircle, XCircle, AlertTriangle, Users, RefreshCw } from 'lucide-react'
 
 // Panels for the Automation tab that talk to the browser worker (Navis / SLPA /
@@ -205,7 +206,7 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
 
 // ── Shipper → Navis / SLPA / Trico login mapping (admin) ───────────────────
 function ShipperLoginsPanel() {
-  const [data, setData] = useState<{ shippers: { key: string; name: string }[]; mappings: any[]; credentials: { id: string; identity_name: string; username: string | null }[] } | null>(null)
+  const [data, setData] = useState<{ shippers: { key: string; name: string }[]; mappings: any[]; credentials: { id: string; identity_name: string; url: string; username: string | null }[] } | null>(null)
   const [draft, setDraft] = useState<Record<string, { navis: string; slpa: string; trico: string }>>({})
   const [savingKey, setSavingKey] = useState('')
   const [msg, setMsg] = useState('')
@@ -221,7 +222,9 @@ function ShipperLoginsPanel() {
   }
   useEffect(() => { load() }, [])
 
-  const optionsFor = (identity: string) => (data?.credentials || []).filter(c => c.identity_name.toLowerCase() === identity.toLowerCase())
+  // Each dropdown only lists the saved logins whose Login URL belongs to that portal
+  // (n4cap → Navis, n4cms → SLPA, tricologi → Trico).
+  const optionsFor = (portal: 'navis' | 'slpa' | 'trico') => (data?.credentials || []).filter(c => portalOfCredential(c) === portal)
 
   async function save(s: { key: string; name: string }) {
     const d = draft[s.key] || { navis: '', slpa: '', trico: '' }
@@ -252,7 +255,7 @@ function ShipperLoginsPanel() {
                 {(['navis', 'slpa', 'trico'] as const).map(p => (
                   <select key={p} value={draft[s.key]?.[p] || ''} onChange={e => set(s.key, p, e.target.value)} className="input text-xs py-1">
                     <option value="">{p.toUpperCase()} — none</option>
-                    {optionsFor(p).map(c => <option key={c.id} value={c.id}>{c.username || c.identity_name}</option>)}
+                    {optionsFor(p).map(c => <option key={c.id} value={c.id}>{c.identity_name}{c.username ? ` (${c.username})` : ''}</option>)}
                   </select>
                 ))}
               </div>
