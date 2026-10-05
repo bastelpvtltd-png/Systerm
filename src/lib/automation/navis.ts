@@ -6,28 +6,30 @@ import { pickByCode, pickPortOption, pickVesselOption, type NavisValues } from '
 import type { PortalLogin } from '@/lib/portalCredentials'
 
 // ── NAVIS CAP (n4cap.slpa.lk) — Gate ▸ Pre-advise Export ──────────────────────
-// Fields are addressed by the END of their ZK id (see zk.ts), taken from the HTML you sent.
+// Fields are located by their label on the form (see byLabel below).
 const HOME_URL = 'https://n4cap.slpa.lk/apex/capHomeView.zul'
 
-// The vessel input's id was not in the HTML you sent. Until NAVIS_VESSEL_ID_SUFFIX (Vercel env
-// var, e.g. "pn0-real") is set, it is located by its "Vessel" label instead; if that fails the
-// error carries a list of every input id on the panel so the real one can be read off it.
-const VESSEL: Sel = process.env.NAVIS_VESSEL_ID_SUFFIX?.trim()
-  || { xpath: '(//*[normalize-space(text())="Vessel" or starts-with(normalize-space(text()),"Vessel")]/following::input[contains(@class,"z-combobox-input")])[1]' }
+// Fields are found by their LABEL on the "Pre-advise Export Container" form (taken from the real
+// form HTML), not by ZK's generated ids — those change whenever the form is opened again, and a
+// wrong id means a silently wrong field. Label → the input in the next table cell of the same row.
+const byLabel = (label: string): Sel => ({
+  xpath: `//span[contains(@class,"z-label") and normalize-space(.)="${label}"]/ancestor::td[1]/following-sibling::td[1]//input[not(@type="hidden") and not(@type="checkbox")] >> visible=true`,
+})
 
 export const NAVIS = {
   fields: {
-    containerNo: 'mm0',
-    conType: 'qm0-real',
-    grossMass: 'fn0',
-    coc: 'jn0-real',
-    truck: 'ho0-real',        // readonly combobox, always "Truck"
-    owner: '1q0-real',        // shows "--" by default, always "PRVT (PRIVATE TRUCKING COMPANY)"
-    voc: 'no0-real',
-    loadPort: 'mr0-real',     // always LKCMB (Colombo)
-    dischargePort: 'bs0-real',
-    cargoType: 'hu0-real',    // readonly combobox, always "FCL (Full Container)"
-    cusdecRef: 'yv0',
+    containerNo: byLabel('Equipment Number:'),
+    conType: byLabel('Equipment Type:'),
+    grossMass: byLabel('Gross Weight (kg):'),
+    coc: byLabel('Operator:'),                // COC
+    truck: byLabel('Carrier Mode:'),          // readonly combobox, always "Truck"
+    owner: byLabel('Trucking Company:'),      // shows "--" by default, always "PRVT (PRIVATE TRUCKING COMPANY)"
+    voc: byLabel('Line Operator:'),           // VOC
+    vessel: byLabel('Vessel Visit:'),
+    loadPort: byLabel('Port of Load:'),       // always LKCMB (Colombo)
+    dischargePort: byLabel('Port of Discharge:'),
+    cargoType: byLabel('Freight Kind-CAP:'),  // readonly combobox, always "FCL (Full Container)"
+    cusdecRef: byLabel('Cusdec Number:'),
   },
   saveButton: 'button.carina-save-button',
 }
@@ -91,7 +93,7 @@ export async function navisEnterOne(s: NavisSession, v: NavisValues, opts: { dry
     await pickCombo(page, 'VOC', F.voc, { type: v.voc, choose: o => pickByCode(o, v.voc) })
 
     // Vessel: clear the "--", type "*" + the voyage, and take the entry whose voyage matches exactly.
-    await pickCombo(page, 'Vessel / Voyage', VESSEL, { type: `*${v.voyage}`, choose: o => pickVesselOption(o, v.vessel, v.voyage) })
+    await pickCombo(page, 'Vessel / Voyage', F.vessel, { type: `*${v.voyage}`, choose: o => pickVesselOption(o, v.vessel, v.voyage) })
     await pickCombo(page, 'Port of Load', F.loadPort, { type: '*LKCMB', choose: o => pickByCode(o, 'LKCMB') })
     await pickCombo(page, 'Port of Discharge', F.dischargePort, { type: `*${v.dischargePort}`, choose: o => pickPortOption(o, v.dischargePort) })
     await pickCombo(page, 'Cargo Type (FCL)', F.cargoType, { readonly: true, choose: o => pickByCode(o, 'FCL') })
