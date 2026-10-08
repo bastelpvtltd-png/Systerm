@@ -51,7 +51,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
-      if (kind === 'trico_gate_pass') return res.status(400).json({ error: 'Trico gate pass entry is not built yet (it needs the gate pass form HTML).' })
       const dryRun = req.body.dryRun !== false   // test mode unless explicitly turned off
       const cdnIds: string[] = Array.isArray(req.body.cdnIds) ? req.body.cdnIds.slice(0, 100) : []
       if (!cdnIds.length) return res.status(400).json({ error: 'cdnIds required' })
@@ -99,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .eq('kind', kind).eq('status', 'failed').is('error_dismissed_at', null).in('cdn_id', rows.map(r => r.cdn_id))
       }
       // Start processing on the server right away (the page does not have to stay open).
-      if (rows.length && kind === 'barcode_enter') await kickRunner(originOf(req))
+      if (rows.length) await kickRunner(originOf(req))
       return res.json({ queued: rows.length, skipped })
     }
 

@@ -43,9 +43,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const runByPanel = Object.fromEntries((runs || []).map(r => [r.panel, r]))
   const results: Record<string, any> = {}
 
-  // Barcode Enter jobs still waiting (e.g. a run was interrupted) — restart the server-side runner.
+  // Barcode Enter / Trico Gate Pass jobs still waiting (e.g. a run was interrupted) — restart the server-side runner.
   try {
-    const { count } = await supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('kind', 'barcode_enter').eq('status', 'queued')
+    const { count } = await supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).in('kind', ['barcode_enter', 'trico_gate_pass']).eq('status', 'queued')
     if (count) results.barcode_enter = { queued: count, kicked: await kickRunner(originOf(req)) }
   } catch (e: any) { results.barcode_enter = { error: e.message } }
 

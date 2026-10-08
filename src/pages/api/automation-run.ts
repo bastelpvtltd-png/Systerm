@@ -14,7 +14,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') return res.status(405).end()
   const viaSecret = requireWorker(req).ok     // Authorization: Bearer WORKER_SECRET (for an external scheduler)
   if (!viaSecret) {
-    const authed = await requireSection(req, 'section:automation.barcode-enter')
+    let authed = await requireSection(req, 'section:automation.barcode-enter')
+    if (!authed.ok) authed = await requireSection(req, 'section:automation.trico-gate-pass')
     if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   }
   try {

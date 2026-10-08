@@ -13,6 +13,7 @@ interface Profile {
   official_email: string
   whatsapp_number: string
   contact_number: string
+  trico_wharf_number: string
   is_admin: boolean
   is_owner?: boolean
   allowed_tabs: string[]
@@ -29,7 +30,7 @@ const ALL_SHIPPERS = '__ALL__'
 
 const emptyForm = {
   username: '', full_name: '', position: '', designation: '',
-  personal_email: '', official_email: '', whatsapp_number: '', contact_number: '',
+  personal_email: '', official_email: '', whatsapp_number: '', contact_number: '', trico_wharf_number: '',
   password: '', is_admin: false, is_owner: false, allowed_tabs: [] as string[], assigned_shippers: [] as string[],
   is_shipper: false, shipper_name: '',
 }
@@ -103,7 +104,7 @@ export default function UsersPage() {
     const patch = {
       username: form.username, full_name: form.full_name, position: form.position, designation: form.designation,
       personal_email: form.personal_email, official_email: form.official_email,
-      whatsapp_number: form.whatsapp_number, contact_number: form.contact_number,
+      whatsapp_number: form.whatsapp_number, contact_number: form.contact_number, trico_wharf_number: form.trico_wharf_number,
       is_admin: form.is_admin, is_owner: form.is_owner, allowed_tabs: form.allowed_tabs,
       assigned_shippers: form.assigned_shippers,
       is_shipper: form.is_shipper, shipper_name: form.is_shipper ? form.shipper_name.trim() : null,
@@ -238,7 +239,7 @@ export default function UsersPage() {
                       setForm({
                         username: u.username, full_name: u.full_name, position: u.position || '', designation: u.designation || '',
                         personal_email: u.personal_email || '', official_email: u.official_email || '',
-                        whatsapp_number: u.whatsapp_number || '', contact_number: u.contact_number || '',
+                        whatsapp_number: u.whatsapp_number || '', contact_number: u.contact_number || '', trico_wharf_number: u.trico_wharf_number || '',
                         password: '', is_admin: !!u.is_admin, is_owner: !!u.is_owner, allowed_tabs: u.allowed_tabs || [],
                         assigned_shippers: u.assigned_shippers || [],
                         is_shipper: !!u.is_shipper, shipper_name: u.shipper_name || '',
@@ -277,6 +278,7 @@ export default function UsersPage() {
                 ['Position (job title)','position','text'],['Designation','designation','text'],
                 ['Personal Email','personal_email','email'],['Official Email','official_email','email'],
                 ['WhatsApp Number','whatsapp_number','text'],['Contact Number','contact_number','text'],
+                ['Trico Wharf Number (for Gate Pass SMS)','trico_wharf_number','text'],
                 ['Password (new only)','password','password'],
               ].map(([label,key,type]) => (
                 <div key={key}>

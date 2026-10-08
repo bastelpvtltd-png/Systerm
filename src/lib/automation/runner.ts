@@ -6,6 +6,8 @@ import { prepareValues } from './data'
 import { navisLogin, navisEnterOne, navisClose } from './navis'
 import { slpaLogin, slpaEnterOne, slpaClose } from './slpa'
 import { finalizeBarcode } from './finalize'
+import { fetchGatePassForm, prepareGatePassValues, submitGatePass } from './tricoGatePass'
+import { tricoLoginWith } from '@/lib/tricoSession'
 import { resolvePortalLogins, type PortalLogin } from '@/lib/portalCredentials'
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
@@ -15,6 +17,7 @@ const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 const HARD_MS = Number(process.env.AUTOMATION_MAX_MS) || 285_000
 const NAVIS_NEEDS_MS = 70_000      // a new container is only started if this much time is left
 const SLPA_NEEDS_MS = 100_000
+const TRICO_NEEDS_MS = 30_000      // plain fetch, no browser — much cheaper than Navis/SLPA
 const LOGIN_MS = 25_000
 const LOCK_KEY = 'automation_runner_lock'
 const MAX_ATTEMPTS = 3
@@ -22,7 +25,7 @@ const BATCH = 40
 
 export interface SliceResult { busy?: boolean; processed: number; remaining: number }
 type Row = Record<string, any>
-interface Cand { job: Row; cdn: Row; cusdec: { code?: string; number?: string; date?: string } | null; login: PortalLogin }
+interface Cand { job: Row; cdn: Row; cusdec: { code?: string; number?: string; date?: string; hs_code?: string } | null; login: PortalLogin }
 
 // ── DB helpers ───────────────────────────────────────────────────────────────
 async function acquireLock(): Promise<boolean> {
@@ -54,9 +57,11 @@ async function failJob(job: Row, e: FieldError) {
 // worse than asking); an interrupted SLPA/finalize step is safe to retry.
 async function recoverStale() {
   const before = new Date(Date.now() - (HARD_MS + 30_000)).toISOString()
-  const { data } = await sb.from('automation_jobs').select('id, container_no, attempts, step').eq('kind', 'barcode_enter').eq('status', 'running').lt('started_at', before)
+  const { data } = await sb.from('automation_jobs').select('id, container_no, attempts, step').in('kind', ['barcode_enter', 'trico_gate_pass']).eq('status', 'running').lt('started_at', before)
   for (const s of data || []) {
-    if (!s.step || s.step === 'navis') {
+    if (s.step === 'trico') {
+      await failJob(s, new FieldError('trico', 'Interrupted', 'The run was interrupted while this container was being submitted to Trico — check the Trico Gate Pass List by hand (it may or may not have been saved) before running it again'))
+    } else if (!s.step || s.step === 'navis') {
       await failJob(s, new FieldError('navis', 'Interrupted', 'The run was interrupted while this container was being entered in Navis — check Navis by hand (it may or may not have been saved) before running it again'))
     } else if ((s.attempts || 0) >= MAX_ATTEMPTS) {
       await failJob(s, new FieldError(s.step === 'finalize' ? 'finalize' : 'slpa', 'Retries', `Gave up after ${MAX_ATTEMPTS} attempts`))
@@ -67,7 +72,7 @@ async function recoverStale() {
 }
 
 // Loads CDN + CUSDEC + the shipper's decrypted login for a batch of queued jobs; jobs that can't run fail here.
-async function loadCandidates(jobs: Row[], portal: 'navis' | 'slpa'): Promise<Cand[]> {
+async function loadCandidates(jobs: Row[], portal: 'navis' | 'slpa' | 'trico'): Promise<Cand[]> {
   const out: Cand[] = []
   for (const job of jobs.slice(0, BATCH)) {
     const { data: cdn } = await sb.from('cdn').select('*').eq('id', job.cdn_id).maybeSingle()
@@ -75,7 +80,7 @@ async function loadCandidates(jobs: Row[], portal: 'navis' | 'slpa'): Promise<Ca
     const logins = await resolvePortalLogins(cdn.shipper, [portal])
     const login = logins[portal]
     if (!login) { await failJob(job, new FieldError('prepare', 'Shipper login', `No ${portal.toUpperCase()} login mapped for this shipper (Barcode Enter → Shipper logins)`)); continue }
-    const { data: cusdec } = await sb.from('cusdec').select('code, number, date').eq('code', cdn.code).eq('number', cdn.cusdec_number).order('date', { ascending: false }).limit(1).maybeSingle()
+    const { data: cusdec } = await sb.from('cusdec').select('code, number, date, hs_code').eq('code', cdn.code).eq('number', cdn.cusdec_number).order('date', { ascending: false }).limit(1).maybeSingle()
     out.push({ job, cdn, cusdec: cusdec || null, login })
   }
   return out
@@ -89,6 +94,11 @@ const groupByLogin = (cands: Cand[]) => {
 
 async function queuedBarcodeJobs(): Promise<Row[]> {
   const { data } = await sb.from('automation_jobs').select('*').eq('kind', 'barcode_enter').eq('status', 'queued').order('created_at', { ascending: true }).limit(200)
+  return data || []
+}
+
+async function queuedTricoJobs(): Promise<Row[]> {
+  const { data } = await sb.from('automation_jobs').select('*').eq('kind', 'trico_gate_pass').eq('status', 'queued').order('created_at', { ascending: true }).limit(200)
   return data || []
 }
 
@@ -109,8 +119,6 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
 
   try {
     await recoverStale()
-    // Gate-pass entry isn't built — never leave such jobs queued forever.
-    await sb.from('automation_jobs').update({ status: 'failed', error: 'Trico gate pass entry is not built yet', error_step: 'trico', error_field: 'Gate pass', finished_at: new Date().toISOString() }).eq('kind', 'trico_gate_pass').eq('status', 'queued')
 
     // ── A) Navis ──
     const needNavis = (await queuedBarcodeJobs()).filter(j => !j.result?.navis_done)
@@ -168,8 +176,47 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
       await slpaClose(session)
     }
 
-    const { count } = await sb.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('kind', 'barcode_enter').eq('status', 'queued')
-    return { processed, remaining: count || 0 }
+    // ── C) Trico Gate Pass — plain fetch + session cookie, no browser needed ──
+    const needTrico = await queuedTricoJobs()
+    const creatorIds = Array.from(new Set(needTrico.map(j => j.created_by).filter(Boolean)))
+    const { data: creators } = creatorIds.length
+      ? await sb.from('profiles').select('id, trico_wharf_number').in('id', creatorIds)
+      : { data: [] as Row[] }
+    const wharfByCreator = new Map((creators || []).map((p: Row) => [p.id, p.trico_wharf_number as string | null]))
+
+    for (const group of groupByLogin(await loadCandidates(needTrico, 'trico'))) {
+      if (!hasBudget(TRICO_NEEDS_MS + LOGIN_MS)) break
+      let cookie: string
+      try { cookie = await tricoLoginWith(group[0].login.username, group[0].login.password) }
+      catch (e) { for (const c of group) { if (await claim(c.job.id, 'trico')) { await failJob(c.job, asFieldError(e, 'trico', 'Login')); processed++ } } continue }
+
+      for (const c of group) {
+        if (!hasBudget(TRICO_NEEDS_MS)) break
+        if (!(await claim(c.job.id, 'trico'))) continue
+        processed++
+        try {
+          const form = await fetchGatePassForm(cookie)
+          const wharfNumber = wharfByCreator.get(c.job.created_by) || null
+          const values = prepareGatePassValues(c.cdn as any, c.cusdec as any, form, wharfNumber)
+          const dry = !!c.job.result?.dry_run
+          if (dry) {
+            await sb.from('automation_jobs').update({
+              status: 'cancelled', error: 'TEST MODE — Gate Pass fields were resolved; nothing was submitted to Trico.',
+              finished_at: new Date().toISOString(), debug: JSON.stringify(values, null, 2).slice(0, 4000),
+            }).eq('id', c.job.id)
+          } else {
+            const out = await submitGatePass(cookie, form.token, values)
+            await sb.from('automation_jobs').update({
+              status: 'done', finished_at: new Date().toISOString(), debug: out.preview.slice(0, 4000) || null,
+            }).eq('id', c.job.id)
+          }
+        } catch (e) { await failJob(c.job, asFieldError(e, 'prepare')) }
+      }
+    }
+
+    const { count: barcodeLeft } = await sb.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('kind', 'barcode_enter').eq('status', 'queued')
+    const { count: tricoLeft } = await sb.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('kind', 'trico_gate_pass').eq('status', 'queued')
+    return { processed, remaining: (barcodeLeft || 0) + (tricoLeft || 0) }
   } finally {
     await (browser as Browser | null)?.close().catch(() => {})
     await releaseLock()

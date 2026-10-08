@@ -159,14 +159,18 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
         {!autoRun && (
           <p className="text-xs mb-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-2.5 flex items-start gap-1.5">
             <AlertTriangle size={13} className="mt-0.5 flex-shrink-0"/>
-            <span><b>Run is switched off on purpose:</b> the gate pass entry step has not been built yet (it needs the real Trico gate pass form). Selecting rows works, but nothing will be sent to Trico.</span>
+            <span><b>Run is switched off on purpose.</b> Selecting rows works, but nothing will be sent.</span>
           </p>
         )}
         {autoRun && <RunnerInfo driving={driving}/>}
         {autoRun && (
           <label className="flex items-start gap-2 text-xs mb-3 bg-amber-50 border border-amber-200 rounded-lg p-2.5 cursor-pointer">
             <input type="checkbox" checked={testMode} onChange={e => setTestMode(e.target.checked)} className="mt-0.5"/>
-            <span><b>Test mode</b> — fills the Navis form and takes a screenshot but does <b>not</b> save anything on Navis/SLPA. Untick only when the test screenshots look right.{!testMode && <b className="text-red-600"> LIVE: this will really enter data on Navis and SLPA.</b>}</span>
+            {kind === 'trico_gate_pass' ? (
+              <span><b>Test mode</b> — resolves every field (shipper, driver, wharf clerk, container size...) and records what would be sent, but does <b>not</b> submit anything to Trico. Untick only after the resolved fields look right.{!testMode && <b className="text-red-600"> LIVE: this will really create a Gate Pass on Trico (and spend account balance).</b>}</span>
+            ) : (
+              <span><b>Test mode</b> — fills the Navis form and takes a screenshot but does <b>not</b> save anything on Navis/SLPA. Untick only when the test screenshots look right.{!testMode && <b className="text-red-600"> LIVE: this will really enter data on Navis and SLPA.</b>}</span>
+            )}
           </label>
         )}
         {extraHeader}
@@ -176,7 +180,7 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search container, CUSDEC or shipper..." className="input pl-8"/>
           </div>
           <button onClick={toggleAll} disabled={!selectableIds.length} className="btn-secondary text-xs">{allSelected ? 'Clear' : 'Select all ready'}</button>
-          <button onClick={run} disabled={busy || !selected.size || !autoRun} title={autoRun ? '' : 'Gate pass entry is not built yet'} className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-xs">
+          <button onClick={run} disabled={busy || !selected.size || !autoRun} title={autoRun ? '' : 'Run is switched off'} className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-xs">
             {busy ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}{testMode && autoRun ? 'Test run' : runLabel} ({selected.size})
           </button>
         </div>
@@ -295,8 +299,8 @@ export function BarcodeEnterPanel() {
 
 export function TricoGatePassPanel() {
   return (
-    <QueuePanel kind="trico_gate_pass" title="Trico Gate Pass Enter" icon={<Truck size={15}/>} needs={['trico']} runLabel="Run Gate Pass Enter"
-      description="Only CDNs with no gate add time yet are listed here. Run Trico Checking first, so containers that already have a gate pass on Trico are filled in and drop off this list. (The gate pass entry form itself is not built yet — Run is disabled until it is.)"/>
+    <QueuePanel kind="trico_gate_pass" title="Trico Gate Pass Enter" icon={<Truck size={15}/>} needs={['trico']} runLabel="Run Gate Pass Enter" autoRun
+      description="Only CDNs with no gate add time yet are listed here. Run Trico Checking first, so containers that already have a gate pass on Trico are filled in and drop off this list. The server logs in to Trico and submits the New Export Gate Pass form (shipper, CUSDEC, vessel/voyage, driver and wharf clerk are matched automatically — Container Weighing/Fumigation/Quarantine are always set to Yes). A CDN that can't be mapped (no driver match, no wharf number set, etc.) is skipped and shown in Dashboard → Automate Errors."/>
   )
 }
 
