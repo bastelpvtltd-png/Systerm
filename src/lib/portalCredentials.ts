@@ -5,7 +5,7 @@ import { shipperKey } from '@/lib/shipperName'
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
 export type PortalName = 'navis' | 'slpa' | 'trico'
-export interface PortalLogin { id: string; identity_name: string; url: string; username: string; password: string }
+export interface PortalLogin { id: string; identity_name: string; url: string; username: string; password: string; wharf_number: string | null }
 export interface ShipperMapRow {
   shipper_key: string; shipper_name: string
   navis_credential_id: string | null; slpa_credential_id: string | null; trico_credential_id: string | null
@@ -34,9 +34,9 @@ export async function resolvePortalLogins(shipperRaw: string | null | undefined,
   for (const p of portals) {
     const id = (row as any)[`${p}_credential_id`] as string | null
     if (!id) continue
-    const { data: c } = await sb.from('automation_credentials').select('id, identity_name, url, username, password_encrypted').eq('id', id).maybeSingle()
+    const { data: c } = await sb.from('automation_credentials').select('id, identity_name, url, username, password_encrypted, wharf_number').eq('id', id).maybeSingle()
     if (!c || !c.username || !c.password_encrypted) continue
-    out[p] = { id: c.id, identity_name: c.identity_name, url: c.url, username: c.username, password: decryptSecret(c.password_encrypted) }
+    out[p] = { id: c.id, identity_name: c.identity_name, url: c.url, username: c.username, password: decryptSecret(c.password_encrypted), wharf_number: c.wharf_number || null }
   }
   return out
 }

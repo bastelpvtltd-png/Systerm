@@ -5,7 +5,7 @@ import { supabase, authHeader } from '@/lib/supabase'
 
 type Tab = 'general' | 'database' | 'logs' | 'credentials'
 
-interface Credential { id: string; identity_name: string; url: string; username: string | null; created_at: string }
+interface Credential { id: string; identity_name: string; url: string; username: string | null; wharf_number: string | null; created_at: string }
 const KNOWN_SITES = [
   { identity_name: 'Navis', url: 'https://n4cap.slpa.lk/apex/cap.zul', afterLoginUrl: 'https://n4cap.slpa.lk/apex/capHomeView.zul' },
   { identity_name: 'SLPA', url: 'https://n4cms.slpa.lk/auth/login', afterLoginUrl: 'https://n4cms.slpa.lk/wapp/export/service-orders/container-consolidation' },
@@ -27,7 +27,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 // these same saved credentials, just no longer manage them locally.
 function CredentialsSettings() {
   const [creds, setCreds] = useState<Credential[]>([])
-  const [form, setForm] = useState({ identity_name: '', url: '', username: '', password: '' })
+  const [form, setForm] = useState({ identity_name: '', url: '', username: '', password: '', wharf_number: '' })
+  const isTrico = form.identity_name.trim().toLowerCase() === 'trico'
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -56,7 +57,7 @@ function CredentialsSettings() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setStatus(`✓ Saved "${form.identity_name}"`)
-      setForm({ identity_name: '', url: '', username: '', password: '' })
+      setForm({ identity_name: '', url: '', username: '', password: '', wharf_number: '' })
       load()
     } catch (e: any) { setError(e.message) }
   }
@@ -65,12 +66,12 @@ function CredentialsSettings() {
     setError(''); setStatus('')
     setEditingId(c.id)
     // Password is never sent to the browser — leave it empty to keep the saved one.
-    setForm({ identity_name: c.identity_name, url: c.url, username: c.username || '', password: '' })
+    setForm({ identity_name: c.identity_name, url: c.url, username: c.username || '', password: '', wharf_number: c.wharf_number || '' })
   }
 
   function cancelEdit() {
     setEditingId(null)
-    setForm({ identity_name: '', url: '', username: '', password: '' })
+    setForm({ identity_name: '', url: '', username: '', password: '', wharf_number: '' })
     setError('')
   }
 
@@ -102,6 +103,12 @@ function CredentialsSettings() {
           <Field label="Login URL"><input value={form.url} onChange={e => setForm(f => ({ ...f, url: e.target.value }))} className="input"/></Field>
           <Field label="Username"><input value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} className="input"/></Field>
           <Field label={editingId ? 'Password (leave empty to keep current)' : 'Password'}><input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder={editingId ? '••••••••' : ''} className="input"/></Field>
+          {isTrico && (
+            <Field label="Wharf Number">
+              <input value={form.wharf_number} onChange={e => setForm(f => ({ ...f, wharf_number: e.target.value }))} placeholder="e.g. 0710940466" className="input"/>
+              <p className="text-[11px] text-gray-400 mt-1">Must match one of the phone numbers in Trico's own Wharf Clerk list — used by Trico Gate Pass Enter.</p>
+            </Field>
+          )}
         </div>
         <div className="flex items-center gap-2 mt-4">
           <button onClick={save} className="btn-primary flex items-center gap-2"><Save size={14}/>{editingId ? 'Update Credential' : 'Save Credential'}</button>
@@ -126,6 +133,7 @@ function CredentialsSettings() {
                 <p className="text-xs text-gray-500 mt-1">Login URL: <a href={c.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{c.url}</a></p>
                 {site && <p className="text-xs text-gray-400">After login: {site.afterLoginUrl}</p>}
                 <p className="text-xs text-gray-400">Username: {c.username || '—'} · Password: ••••••••</p>
+                {c.identity_name.trim().toLowerCase() === 'trico' && <p className="text-xs text-gray-400">Wharf Number: {c.wharf_number || '—'}</p>}
               </div>
             )
           })}

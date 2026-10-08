@@ -178,12 +178,6 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
 
     // ── C) Trico Gate Pass — plain fetch + session cookie, no browser needed ──
     const needTrico = await queuedTricoJobs()
-    const creatorIds = Array.from(new Set(needTrico.map(j => j.created_by).filter(Boolean)))
-    const { data: creators } = creatorIds.length
-      ? await sb.from('profiles').select('id, trico_wharf_number').in('id', creatorIds)
-      : { data: [] as Row[] }
-    const wharfByCreator = new Map((creators || []).map((p: Row) => [p.id, p.trico_wharf_number as string | null]))
-
     for (const group of groupByLogin(await loadCandidates(needTrico, 'trico'))) {
       if (!hasBudget(TRICO_NEEDS_MS + LOGIN_MS)) break
       let cookie: string
@@ -196,8 +190,7 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
         processed++
         try {
           const form = await fetchGatePassForm(cookie)
-          const wharfNumber = wharfByCreator.get(c.job.created_by) || null
-          const values = prepareGatePassValues(c.cdn as any, c.cusdec as any, form, wharfNumber)
+          const values = prepareGatePassValues(c.cdn as any, c.cusdec as any, form, c.login.wharf_number)
           const dry = !!c.job.result?.dry_run
           if (dry) {
             await sb.from('automation_jobs').update({

@@ -119,7 +119,7 @@ export function prepareGatePassValues(cdn: GatePassCdn, cusdec: GatePassCusdec |
   if (!shipper) throw new FieldError('prepare', 'Shipper', `No active Trico shipper matches "${shipperName(cdn.shipper)}". Trico shippers: ${form.shippers.map(s => s.name).join(' | ')}`)
 
   const wharfDigits = digitsOnly(wharfNumber || '')
-  if (!wharfDigits) throw new FieldError('prepare', 'Wharf Clerk', 'No Trico Wharf Number set on your user profile — add it in Settings → Users before running Trico Gate Pass')
+  if (!wharfDigits) throw new FieldError('prepare', 'Wharf Clerk', 'No Wharf Number set on this shipper\'s Trico login — add it in Settings → Credentials before running Trico Gate Pass')
   const wc = form.wharfClerks.find(w => w.phone === wharfDigits)
   if (!wc) throw new FieldError('prepare', 'Wharf Clerk', `Your Trico Wharf Number (${wharfNumber}) is not one of Trico's Wharf Clerk options`)
 

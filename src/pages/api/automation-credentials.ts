@@ -19,27 +19,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method === 'GET') {
       const { data, error } = await supabaseAdmin.from('automation_credentials')
-        .select('id, identity_name, url, username, created_at').order('identity_name')
+        .select('id, identity_name, url, username, wharf_number, created_at').order('identity_name')
       if (error) throw error
       return res.json({ credentials: data || [] })
     }
 
     if (req.method === 'POST') {
-      const { identity_name, url, username, password } = req.body
+      const { identity_name, url, username, password, wharf_number } = req.body
       if (!identity_name || !url) return res.status(400).json({ error: 'identity_name and url are required' })
       const password_encrypted = password ? encryptSecret(password) : null
       const { error } = await supabaseAdmin.from('automation_credentials')
-        .insert({ identity_name, url, username: username || null, password_encrypted })
+        .insert({ identity_name, url, username: username || null, password_encrypted, wharf_number: wharf_number || null })
       if (error) throw error
       return res.json({ ok: true })
     }
 
     // Edit an existing login. Leaving the password empty keeps the old one.
     if (req.method === 'PUT') {
-      const { id, identity_name, url, username, password } = req.body
+      const { id, identity_name, url, username, password, wharf_number } = req.body
       if (!id) return res.status(400).json({ error: 'id required' })
       if (!identity_name || !url) return res.status(400).json({ error: 'identity_name and url are required' })
-      const update: Record<string, any> = { identity_name, url, username: username || null }
+      const update: Record<string, any> = { identity_name, url, username: username || null, wharf_number: wharf_number || null }
       if (password) update.password_encrypted = encryptSecret(password)
       const { error } = await supabaseAdmin.from('automation_credentials').update(update).eq('id', id)
       if (error) throw error
