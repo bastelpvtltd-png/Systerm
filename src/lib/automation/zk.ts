@@ -72,7 +72,13 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   const items = page.locator('li.z-comboitem:visible')
   await el.click({ timeout: 8_000 }).catch(() => el.focus())
   if (!o.readonly) {
-    await el.press('Control+A'); await el.press('Backspace')
+    // Navis can auto-fill this box itself a moment after it renders (e.g. Con Type guessed from
+    // the container number). A single Control+A/Backspace can race that and leave the guessed text
+    // in front of what we type next ("45G" + "45G1" -> "45G45G1", which then matches nothing in the
+    // dropdown). Keep clearing until the box is actually empty before typing the filter.
+    for (let i = 0; i < 5 && (await el.inputValue()) !== ''; i++) {
+      await el.press('Control+A'); await el.press('Backspace'); await sleep(100)
+    }
     if (o.type) await el.pressSequentially(o.type, { delay: 70 })
   }
   let opened = await items.first().waitFor({ state: 'visible', timeout: o.readonly ? 2_500 : 9_000 }).then(() => true, () => false)
@@ -91,7 +97,7 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   while (true) {
     await sleep(o.readonly ? 300 : 450)
     options = await readOptions()
-    choice = options.length ? o.choose(options) : 'The dropdown list is empty'
+    choice = options.length ? o.choose(options) : `The dropdown list is empty${o.type ? ` after typing "${o.type}"` : ''}`
     if (typeof choice === 'number') {
       await sleep(350)
       const again = await readOptions()
