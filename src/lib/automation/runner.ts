@@ -6,7 +6,7 @@ import { prepareValues } from './data'
 import { navisLogin, navisEnterOne, navisClose } from './navis'
 import { slpaLogin, slpaEnterOne, slpaClose } from './slpa'
 import { finalizeBarcode } from './finalize'
-import { fetchGatePassForm, prepareGatePassValues, submitGatePass } from './tricoGatePass'
+import { fetchGatePassForm, prepareGatePassValues, submitGatePass, formatGatePassPreview } from './tricoGatePass'
 import { tricoLoginWith } from '@/lib/tricoSession'
 import { resolvePortalLogins, type PortalLogin } from '@/lib/portalCredentials'
 
@@ -193,14 +193,15 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
           const values = prepareGatePassValues(c.cdn as any, c.cusdec as any, form, c.login.wharf_number)
           const dry = !!c.job.result?.dry_run
           if (dry) {
+            const shipperLabel = form.shippers.find(s => s.id === values.shipper_id)?.name || values.shipper_id
             await sb.from('automation_jobs').update({
               status: 'cancelled', error: 'TEST MODE — Gate Pass fields were resolved; nothing was submitted to Trico.',
-              finished_at: new Date().toISOString(), debug: JSON.stringify(values, null, 2).slice(0, 4000),
+              finished_at: new Date().toISOString(), has_screenshot: true, debug: formatGatePassPreview(values, shipperLabel).slice(0, 4000),
             }).eq('id', c.job.id)
           } else {
             const out = await submitGatePass(cookie, form.token, values)
             await sb.from('automation_jobs').update({
-              status: 'done', finished_at: new Date().toISOString(), debug: out.preview.slice(0, 4000) || null,
+              status: 'done', finished_at: new Date().toISOString(), has_screenshot: !!out.preview, debug: out.preview.slice(0, 4000) || null,
             }).eq('id', c.job.id)
           }
         } catch (e) { await failJob(c.job, asFieldError(e, 'prepare')) }

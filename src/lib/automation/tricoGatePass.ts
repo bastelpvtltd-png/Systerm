@@ -164,6 +164,37 @@ export function prepareGatePassValues(cdn: GatePassCdn, cusdec: GatePassCusdec |
   }
 }
 
+// Human-readable "this is exactly what would be sent" summary for TEST MODE —
+// there's no real page to screenshot (this automation never opens a browser),
+// and Trico's own preview page only renders AFTER the save call that creates
+// the real Gate Pass, so it can't be shown ahead of time either. Field order
+// and labels match the live form top-to-bottom.
+export function formatGatePassPreview(v: GatePassValues, shipperLabel: string): string {
+  const yn = (s: string) => s === 'Y' ? 'Yes' : 'No'
+  const rows: [string, string][] = [
+    ['Shipper', shipperLabel],
+    ['CUSDEC No.', v.cusdec_number],
+    ['Export Container Terminal', v.cont_terminal],
+    ['Vessel Name', v.vessel_name],
+    ['Voyage No.', v.voyage_no],
+    ['Expected Arrival Date to EFC', v.entry_date],
+    ['Wharf Clerk', v.wc_list.replace('|', ' - ')],
+    ['SMS Notification to Driver', v.driver_list.replace('|', ' - ')],
+    ['e-CDN No.', v.cdn_number],
+    ['Container Size', v.contanier_type],
+    ['Container Number', v.cont_numebr],
+    ['Seal Number', v.seal_number],
+    ['Vehicle Number', v.vechi_numebr],
+    ['HS Code', v.hs_code],
+    ['Container Weighing (VGM)', yn(v.weigh_inyard)],
+    ['Fumigation', yn(v.fumi_inyard)],
+    ['Quarantine', yn(v.qrntne_inyard)],
+  ]
+  const width = Math.max(...rows.map(([k]) => k.length))
+  return 'TEST MODE — this is exactly what would be submitted to Trico:\n\n'
+    + rows.map(([k, val]) => `${k.padEnd(width)} : ${val}`).join('\n')
+}
+
 export interface GatePassResult { preview: string }
 
 // Posts the save request Trico's own "Next" button posts (?...gatepass_exp_save).

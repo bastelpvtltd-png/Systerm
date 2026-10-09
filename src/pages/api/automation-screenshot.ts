@@ -9,6 +9,7 @@ const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
   let authed = await requireSection(req, 'section:automation.barcode-enter')
+  if (!authed.ok) authed = await requireSection(req, 'section:automation.trico-gate-pass')
   if (!authed.ok) authed = await requireSection(req, 'section:dashboard.automation-errors')
   if (!authed.ok) return res.status(authed.status).json({ error: authed.error })
   const id = String(req.query.id || '')
