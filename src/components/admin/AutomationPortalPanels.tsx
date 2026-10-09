@@ -56,7 +56,7 @@ function RunnerInfo({ driving }: { driving: boolean }) {
   )
 }
 
-function JobsTable({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) => void }) {
+function JobsTable({ jobs, onCancel, onDelete, isAdmin }: { jobs: Job[]; onCancel: (id: string) => void; onDelete: (id: string) => void; isAdmin: boolean }) {
   if (!jobs.length) return null
   const color = (s: Job['status']) => s === 'done' ? 'text-green-600' : s === 'failed' ? 'text-red-600' : s === 'running' ? 'text-blue-600' : 'text-gray-500'
   return (
@@ -76,6 +76,7 @@ function JobsTable({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) => 
               {j.has_screenshot && <button onClick={() => openShot(j.id)} className="text-[10px] text-blue-600 hover:underline block ml-auto">screenshot</button>}
               <p className="text-gray-400 text-[10px]">{fmt(j.finished_at || j.created_at)}</p>
               {j.status === 'queued' && <button onClick={() => onCancel(j.id)} className="text-[10px] text-red-500 hover:underline">cancel</button>}
+              {j.status !== 'queued' && isAdmin && <button onClick={() => onDelete(j.id)} className="text-[10px] text-red-500 hover:underline">delete</button>}
             </div>
           </div>
         ))}
@@ -104,6 +105,7 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
   function setAllOpt(key: keyof TricoOpts, value: boolean, ids: string[]) {
     setRowOpts(prev => { const n = { ...prev }; for (const id of ids) n[id] = { ...optFor(id), [key]: value }; return n })
   }
+  const { isAdmin } = usePermission()
   const [driving, setDriving] = useState(false)
   const driveRef = useRef(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -163,6 +165,10 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
   }
 
   async function cancel(id: string) { try { await api(`/api/automation-jobs?id=${id}`, { method: 'DELETE' }); load() } catch (e: any) { setMsg({ ok: false, text: e.message }) } }
+  async function deleteJob(id: string) {
+    if (!confirm('Delete this run from the list? This cannot be undone.')) return
+    try { await api(`/api/automation-jobs?id=${id}`, { method: 'DELETE' }); load() } catch (e: any) { setMsg({ ok: false, text: e.message }) }
+  }
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -252,7 +258,7 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
             {!filtered.length && <p className="text-xs text-gray-400 text-center py-8">Nothing eligible right now</p>}
           </div>
         )}
-        <JobsTable jobs={jobs} onCancel={cancel}/>
+        <JobsTable jobs={jobs} onCancel={cancel} onDelete={deleteJob} isAdmin={isAdmin}/>
       </div>
     </div>
   )

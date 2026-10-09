@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { requireSection } from '@/lib/serverAuth'
+import { requireSection, requireAdmin } from '@/lib/serverAuth'
 import { shipperName } from '@/lib/shipperName'
 import { loadShipperMap, mappedPortals } from '@/lib/portalCredentials'
 import { kickRunner, originOf } from '@/lib/automation/kick'
@@ -111,11 +111,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'DELETE') {
       const id = String(req.query.id || '')
       if (!id) return res.status(400).json({ error: 'id required' })
-      const { data: job } = await sb.from('automation_jobs').select('kind').eq('id', id).maybeSingle()
+      const { data: job } = await sb.from('automation_jobs').select('kind, status').eq('id', id).maybeSingle()
       if (!job) return res.status(404).json({ error: 'Job not found' })
-      const sec = await requireSection(req, SECTION[job.kind as Kind])
-      if (!sec.ok) return res.status(sec.status).json({ error: sec.error })
-      const { error } = await sb.from('automation_jobs').update({ status: 'cancelled', finished_at: new Date().toISOString() }).eq('id', id).eq('status', 'queued')
+      if (job.status === 'queued') {
+        const sec = await requireSection(req, SECTION[job.kind as Kind])
+        if (!sec.ok) return res.status(sec.status).json({ error: sec.error })
+        const { error } = await sb.from('automation_jobs').update({ status: 'cancelled', finished_at: new Date().toISOString() }).eq('id', id).eq('status', 'queued')
+        if (error) throw error
+        return res.json({ ok: true })
+      }
+      // Removing a finished/failed/cancelled row from the Recent runs list is
+      // permanent (not just a status flip) — admin only.
+      const admin = await requireAdmin(req)
+      if (!admin.ok) return res.status(admin.status).json({ error: admin.error })
+      const { error } = await sb.from('automation_jobs').delete().eq('id', id)
       if (error) throw error
       return res.json({ ok: true })
     }
