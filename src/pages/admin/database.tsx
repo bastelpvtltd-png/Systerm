@@ -448,7 +448,10 @@ function DatabaseContent() {
     if (!draft) return
     setSavingId(rowId)
     try {
-      const { id, created_at, ...updates } = draft
+      // voyage_full is a generated column (derived from voyage + voyage_date by
+      // Postgres) — sending it back in an UPDATE always fails with "column
+      // can only be updated to DEFAULT", even when its value is unchanged.
+      const { id, created_at, voyage_full, ...updates } = draft
       const res = await fetch('/api/admin-data', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ table, id: rowId, updates }),

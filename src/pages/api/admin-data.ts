@@ -48,6 +48,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method === 'PATCH') {
       const { id, updates } = req.body
       if (!id || !updates) return res.status(400).json({ error: 'id and updates required' })
+      // cdn.voyage_full is a generated column (derived from voyage + voyage_date) —
+      // Postgres rejects any UPDATE that sets it, even to its own current value.
+      if (table === 'cdn') delete updates.voyage_full
       const patch = HAS_UPDATED_AT.has(table) ? { ...updates, updated_at: new Date().toISOString() } : updates
       const { error } = await supabaseAdmin.from(table).update(patch).eq('id', id)
       if (error) return res.status(400).json({ error: error.message })
