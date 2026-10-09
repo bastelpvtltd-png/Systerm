@@ -350,7 +350,7 @@ export function BarcodeEnterPanel() {
 export function TricoGatePassPanel() {
   return (
     <QueuePanel kind="trico_gate_pass" title="Trico Gate Pass Enter" icon={<Truck size={15}/>} needs={['trico']} runLabel="Run Gate Pass Enter" autoRun
-      description="Only CDNs with no gate add time yet are listed here. Run Trico Checking first, so containers that already have a gate pass on Trico are filled in and drop off this list. The server logs in to Trico and submits the New Export Gate Pass form (shipper, CUSDEC, vessel/voyage, driver and wharf clerk are matched automatically — Container Weighing/Fumigation/Quarantine are always set to Yes). A CDN that can't be mapped (no driver match, no wharf number set, etc.) is skipped and shown in Dashboard → Automate Errors."/>
+      description="Only CDNs with no gate add time yet are listed here. Run Trico Checking first, so containers that already have a gate pass on Trico are filled in and drop off this list. The server logs in to Trico and submits the New Export Gate Pass form (shipper, CUSDEC, vessel/voyage, driver and wharf clerk are matched automatically — Container Weighing/Fumigation/Quarantine are set per row below, ticked Yes by default). A CDN that can't be mapped (no driver match, no wharf number set, etc.) is skipped and shown in Dashboard → Automate Errors."/>
   )
 }
 
