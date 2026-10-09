@@ -87,7 +87,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         rows.push({
           kind, cdn_id: c.id, container_no: c.container_no, cusdec_number: c.cusdec_number, shipper: shipperName(c.shipper),
           created_by: authed.userId, created_by_name: prof?.full_name || prof?.username || '',
-          result: { ...(navisDone.has(c.id) ? { navis_done: true } : {}), dry_run: dryRun },
+          result: {
+            ...(navisDone.has(c.id) ? { navis_done: true } : {}), dry_run: dryRun,
+            ...(kind === 'trico_gate_pass' ? {
+              vgm: req.body.vgm !== false, fumigation: req.body.fumigation !== false, quarantine: req.body.quarantine !== false,
+            } : {}),
+          },
         })
       }
       if (rows.length) {

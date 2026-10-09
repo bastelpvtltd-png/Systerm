@@ -92,6 +92,9 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
   const [eligible, setEligible] = useState<EligibleCdn[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [testMode, setTestMode] = useState(true)
+  const [vgm, setVgm] = useState(true)
+  const [fumigation, setFumigation] = useState(true)
+  const [quarantine, setQuarantine] = useState(true)
   const [driving, setDriving] = useState(false)
   const driveRef = useRef(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -141,7 +144,7 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
   async function run() {
     setBusy(true); setMsg(null)
     try {
-      const d = await api('/api/automation-jobs', { method: 'POST', body: JSON.stringify({ kind, cdnIds: Array.from(selected), dryRun: testMode }) })
+      const d = await api('/api/automation-jobs', { method: 'POST', body: JSON.stringify({ kind, cdnIds: Array.from(selected), dryRun: testMode, vgm, fumigation, quarantine }) })
       setMsg({ ok: d.queued > 0, text: `${d.queued} queued${d.skipped?.length ? `, ${d.skipped.length} skipped` : ''}`, skipped: d.skipped })
       setSelected(new Set()); await load()
       if (d.queued > 0) drive()
@@ -172,6 +175,14 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
               <span><b>Test mode</b> — fills the Navis form and takes a screenshot but does <b>not</b> save anything on Navis/SLPA. Untick only when the test screenshots look right.{!testMode && <b className="text-red-600"> LIVE: this will really enter data on Navis and SLPA.</b>}</span>
             )}
           </label>
+        )}
+        {kind === 'trico_gate_pass' && (
+          <div className="flex items-center gap-4 mb-3 bg-gray-50 border border-gray-200 rounded-lg p-2.5">
+            <span className="text-xs font-medium text-gray-600">Applies to this batch:</span>
+            <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer"><input type="checkbox" checked={vgm} onChange={e => setVgm(e.target.checked)}/>Container Weighing (VGM)</label>
+            <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer"><input type="checkbox" checked={fumigation} onChange={e => setFumigation(e.target.checked)}/>Fumigation</label>
+            <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer"><input type="checkbox" checked={quarantine} onChange={e => setQuarantine(e.target.checked)}/>Quarantine</label>
+          </div>
         )}
         {extraHeader}
         <div className="flex items-center gap-2 mb-3 flex-wrap">

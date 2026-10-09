@@ -190,7 +190,10 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
         processed++
         try {
           const form = await fetchGatePassForm(cookie)
-          const values = prepareGatePassValues(c.cdn as any, c.cusdec as any, form, c.login.wharf_number)
+          const opts = {
+            vgm: c.job.result?.vgm !== false, fumigation: c.job.result?.fumigation !== false, quarantine: c.job.result?.quarantine !== false,
+          }
+          const values = prepareGatePassValues(c.cdn as any, c.cusdec as any, form, c.login.wharf_number, opts)
           const dry = !!c.job.result?.dry_run
           if (dry) {
             const shipperLabel = form.shippers.find(s => s.id === values.shipper_id)?.name || values.shipper_id

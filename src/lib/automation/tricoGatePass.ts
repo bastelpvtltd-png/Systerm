@@ -99,10 +99,11 @@ export async function fetchGatePassForm(cookie: string): Promise<GatePassForm> {
 export interface GatePassCdn {
   shipper: string | null; cusdec_number: string | null; code: string | null
   container_no: string | null; con_type: string | null; seal_no: string | null
-  trailer_no: string | null; vessel: string | null; voyage: string | null
+  trailer_no: string | null; lorry_no: string | null; vessel: string | null; voyage: string | null
   location: string | null; cdn_no: string | null; driver_name: string | null
 }
 export interface GatePassCusdec { date: string | null; hs_code: string | null }
+export interface GatePassOptions { vgm: boolean; fumigation: boolean; quarantine: boolean }
 
 export type GatePassValues = Record<
   'shipper_id' | 'cusdec_number' | 'cont_terminal' | 'vessel_name' | 'voyage_no' | 'entry_date' |
@@ -116,7 +117,7 @@ export type GatePassValues = Record<
 // nothing gets near Trico until the whole payload is known-good (per the rule:
 // a mapping problem is OUR error, shown on our own Automate Errors panel, not
 // something half-submitted to Trico).
-export function prepareGatePassValues(cdn: GatePassCdn, cusdec: GatePassCusdec | null, form: GatePassForm, wharfNumber: string | null | undefined): GatePassValues {
+export function prepareGatePassValues(cdn: GatePassCdn, cusdec: GatePassCusdec | null, form: GatePassForm, wharfNumber: string | null | undefined, opts: GatePassOptions): GatePassValues {
   const need = (field: string, val: unknown, msg: string) => { const v = clean(val); if (!v) throw new FieldError('prepare', field, msg); return v }
 
   const shipperDisplay = normName(shipperName(cdn.shipper))
@@ -158,9 +159,13 @@ export function prepareGatePassValues(cdn: GatePassCdn, cusdec: GatePassCusdec |
     contanier_type: mapContainerSize(cdn.con_type),
     cont_numebr: need('Container Number', cdn.container_no, 'CDN has no container number'),
     seal_number: need('Seal Number', cdn.seal_no, 'CDN has no seal number'),
-    vechi_numebr: need('Vehicle Number', cdn.trailer_no, 'CDN has no trailer number'),
+    // Weighing (VGM) is done with the trailer attached — Vehicle Number is the
+    // trailer when that's ticked Yes, otherwise the lorry/truck number.
+    vechi_numebr: opts.vgm
+      ? need('Vehicle Number', cdn.trailer_no, 'Container Weighing is Yes but CDN has no trailer number')
+      : need('Vehicle Number', cdn.lorry_no, 'CDN has no lorry number'),
     hs_code: hs.slice(0, 8),
-    weigh_inyard: 'Y', fumi_inyard: 'Y', qrntne_inyard: 'Y',
+    weigh_inyard: opts.vgm ? 'Y' : 'N', fumi_inyard: opts.fumigation ? 'Y' : 'N', qrntne_inyard: opts.quarantine ? 'Y' : 'N',
   }
 }
 
