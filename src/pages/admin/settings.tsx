@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import AdminLayout, { usePermission } from '@/components/admin/AdminLayout'
 import { Settings, Database, Trash2, Loader, RefreshCw, ExternalLink, AlertTriangle, Shield, CheckCircle, XCircle, Key, Save, Pencil, X } from 'lucide-react'
 import { supabase, authHeader } from '@/lib/supabase'
+import { portalOfCredential } from '@/lib/portalSites'
 
 type Tab = 'general' | 'database' | 'logs' | 'credentials'
 
@@ -27,8 +28,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 // these same saved credentials, just no longer manage them locally.
 function CredentialsSettings() {
   const [creds, setCreds] = useState<Credential[]>([])
-  const [form, setForm] = useState({ identity_name: '', url: '', username: '', password: '', wharf_number: '' })
-  const isTrico = form.identity_name.trim().toLowerCase() === 'trico'
+  const [form, setForm] = useState({ portal: '', identity_name: '', url: '', username: '', password: '', wharf_number: '' })
+  const isTrico = form.portal === 'Trico'
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -57,7 +58,7 @@ function CredentialsSettings() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setStatus(`✓ Saved "${form.identity_name}"`)
-      setForm({ identity_name: '', url: '', username: '', password: '', wharf_number: '' })
+      setForm({ portal: '', identity_name: '', url: '', username: '', password: '', wharf_number: '' })
       load()
     } catch (e: any) { setError(e.message) }
   }
@@ -66,12 +67,16 @@ function CredentialsSettings() {
     setError(''); setStatus('')
     setEditingId(c.id)
     // Password is never sent to the browser — leave it empty to keep the saved one.
-    setForm({ identity_name: c.identity_name, url: c.url, username: c.username || '', password: '', wharf_number: c.wharf_number || '' })
+    const portal = portalOfCredential(c)
+    setForm({
+      portal: portal === 'navis' ? 'Navis' : portal === 'slpa' ? 'SLPA' : portal === 'trico' ? 'Trico' : '',
+      identity_name: c.identity_name, url: c.url, username: c.username || '', password: '', wharf_number: c.wharf_number || '',
+    })
   }
 
   function cancelEdit() {
     setEditingId(null)
-    setForm({ identity_name: '', url: '', username: '', password: '', wharf_number: '' })
+    setForm({ portal: '', identity_name: '', url: '', username: '', password: '', wharf_number: '' })
     setError('')
   }
 
@@ -86,19 +91,22 @@ function CredentialsSettings() {
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <div className="card">
         <h2 className="font-semibold text-gray-900 text-sm mb-3">{editingId ? 'Edit Login' : 'Add / Update Login'}</h2>
-        <p className="text-xs text-gray-500 mb-3">Asycuda has no automated-login benefit, so it's left out on purpose. Pick an Identity Name below and it auto-fills the known URL.</p>
+        <p className="text-xs text-gray-500 mb-3">Asycuda has no automated-login benefit, so it's left out on purpose. Pick a Portal below to auto-fill its known URL, then give THIS login its own Identity Name (e.g. the shipper it belongs to) — several logins can share the same Portal.</p>
         {error && <div className="mb-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg px-3 py-2"><AlertTriangle size={13}/>{error}</div>}
         {status && <p className="text-xs text-green-600 mb-3">{status}</p>}
         <div className="space-y-3">
-          <Field label="Identity Name">
-            <select value={form.identity_name} onChange={e => {
+          <Field label="Portal">
+            <select value={form.portal} onChange={e => {
               const site = KNOWN_SITES.find(s => s.identity_name === e.target.value)
-              setForm(f => ({ ...f, identity_name: e.target.value, url: site?.url || f.url }))
+              setForm(f => ({ ...f, portal: e.target.value, url: site?.url || f.url }))
             }} className="input">
-              <option value="">Choose or type below...</option>
+              <option value="">Choose...</option>
               {KNOWN_SITES.map(s => <option key={s.identity_name} value={s.identity_name}>{s.identity_name}</option>)}
             </select>
-            <input value={form.identity_name} onChange={e => setForm(f => ({ ...f, identity_name: e.target.value }))} placeholder="or type a custom name" className="input mt-1.5"/>
+          </Field>
+          <Field label="Identity Name">
+            <input value={form.identity_name} onChange={e => setForm(f => ({ ...f, identity_name: e.target.value }))} placeholder="e.g. Sakthi International — Navis" className="input"/>
+            <p className="text-[11px] text-gray-400 mt-1">Shown in Barcode Enter → Shipper logins so you can tell this login apart from others on the same Portal.</p>
           </Field>
           <Field label="Login URL"><input value={form.url} onChange={e => setForm(f => ({ ...f, url: e.target.value }))} className="input"/></Field>
           <Field label="Username"><input value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} className="input"/></Field>
@@ -120,7 +128,8 @@ function CredentialsSettings() {
         <h2 className="font-semibold text-gray-900 text-sm mb-3">Saved Logins</h2>
         <div className="space-y-2">
           {creds.map(c => {
-            const site = KNOWN_SITES.find(s => s.identity_name === c.identity_name)
+            const portal = portalOfCredential(c)
+            const site = KNOWN_SITES.find(s => s.identity_name.toLowerCase() === portal)
             return (
               <div key={c.id} className={`border rounded-lg p-3 ${editingId === c.id ? 'border-blue-400' : 'border-gray-100'}`}>
                 <div className="flex items-center justify-between">
@@ -133,7 +142,7 @@ function CredentialsSettings() {
                 <p className="text-xs text-gray-500 mt-1">Login URL: <a href={c.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{c.url}</a></p>
                 {site && <p className="text-xs text-gray-400">After login: {site.afterLoginUrl}</p>}
                 <p className="text-xs text-gray-400">Username: {c.username || '—'} · Password: ••••••••</p>
-                {c.identity_name.trim().toLowerCase() === 'trico' && <p className="text-xs text-gray-400">Wharf Number: {c.wharf_number || '—'}</p>}
+                {portal === 'trico' && <p className="text-xs text-gray-400">Wharf Number: {c.wharf_number || '—'}</p>}
               </div>
             )
           })}
