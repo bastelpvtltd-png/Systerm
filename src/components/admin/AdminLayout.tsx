@@ -787,11 +787,11 @@ export const SECTION_ITEMS = [
   { key: 'section:database.profiles',            tabHref: '/admin/database', label: 'Users (Profiles) table' },
   { key: 'section:database.delete',              tabHref: '/admin/database', label: 'Delete/Restore/Purge rows' },
   { key: 'section:my-tasks.other-work',          tabHref: '/admin/my-tasks', label: 'Other Work panel' },
-  { key: 'section:automation.xml-generator',       tabHref: '/admin/automation', label: 'Cusdec XML Generator' },
-  { key: 'section:automation.cdn-text',             tabHref: '/admin/automation', label: 'CDN Text Extractor & Database' },
+  // Same order as automation.tsx's own SUB_TABS array, so this checklist reads
+  // top-to-bottom exactly like the tab bar the granted user will actually see.
   { key: 'section:automation.barcode-enter',        tabHref: '/admin/automation', label: 'Barcode Enter' },
-  { key: 'section:automation.trico-gate-pass',      tabHref: '/admin/automation', label: 'Trico Gate Passes' },
   { key: 'section:automation.trico-checking',       tabHref: '/admin/automation', label: 'Trico Checking' },
+  { key: 'section:automation.trico-gate-pass',      tabHref: '/admin/automation', label: 'Trico Gate Passes' },
   { key: 'section:automation.data-updates',         tabHref: '/admin/automation', label: 'Data Updates' },
   { key: 'section:automation.boat-note-create',     tabHref: '/admin/automation', label: 'Boat Note Create' },
   { key: 'section:automation.party-copy-create',    tabHref: '/admin/automation', label: "Party's Copy Create" },
@@ -802,7 +802,9 @@ export const SECTION_ITEMS = [
   { key: 'section:automation.conflict-review',       tabHref: '/admin/automation', label: 'Conflict Review panel (admin)' },
   { key: 'section:automation.cdn-approval',          tabHref: '/admin/automation', label: 'CDN Approval (admin)' },
   { key: 'section:automation.notes',                tabHref: '/admin/automation', label: 'System Logic & Integration Notes' },
-  { key: 'section:automation.monthly-reports',      tabHref: '/admin/automation', label: 'Monthly Reports toggle' },
+  { key: 'section:automation.pdf-editor',           tabHref: '/admin/automation', label: 'PDF Editor' },
+  { key: 'section:automation.monthly-reports',      tabHref: '/admin/automation', label: 'Monthly Reports' },
+  { key: 'section:automation.trico-yard',           tabHref: '/admin/automation', label: 'Trico Yard View' },
 ]
 
 // isAdmin here is deliberately the real is_admin flag only — every existing
