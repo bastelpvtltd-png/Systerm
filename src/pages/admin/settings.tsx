@@ -51,13 +51,16 @@ function CredentialsSettings() {
     setError('')
     if (!form.identity_name || !form.url) { setError('Identity Name and URL are required'); return }
     try {
+      // Editing an existing login must UPDATE that row (PUT + its id) — POST always
+      // inserted a new row instead, so "edit and save" silently duplicated the login.
       const res = await fetch('/api/automation-credentials', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-        body: JSON.stringify(form),
+        method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
+        body: JSON.stringify(editingId ? { ...form, id: editingId } : form),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error)
       setStatus(`✓ Saved "${form.identity_name}"`)
+      setEditingId(null)
       setForm({ portal: '', identity_name: '', url: '', username: '', password: '', wharf_number: '' })
       load()
     } catch (e: any) { setError(e.message) }
