@@ -27,6 +27,13 @@ interface Profile {
 // store every current + future exporter name.
 const ALL_SHIPPERS = '__ALL__'
 
+// "(admin)"-labeled panels (Conflict Review, CDN Approval) are meant to be
+// reachable by actual admin accounts only (who bypass this whole checklist
+// via is_admin) — never offer them in the non-admin access checklist below,
+// individually or via a parent-tab/"Select all" cascade, or a non-admin
+// could end up granted one by mistake.
+const GRANTABLE_SECTION_ITEMS = SECTION_ITEMS.filter(s => !s.label.includes('(admin)'))
+
 const emptyForm = {
   username: '', full_name: '', position: '', designation: '',
   personal_email: '', official_email: '', whatsapp_number: '', contact_number: '',
@@ -77,7 +84,7 @@ export default function UsersPage() {
   }
 
   function toggleTab(href: string) {
-    const sectionKeys = SECTION_ITEMS.filter(s => s.tabHref === href).map(s => s.key)
+    const sectionKeys = GRANTABLE_SECTION_ITEMS.filter(s => s.tabHref === href).map(s => s.key)
     setForm(f => {
       const isAdding = !f.allowed_tabs.includes(href)
       if (isAdding) {
@@ -140,7 +147,7 @@ export default function UsersPage() {
   // matches if its own label matches, OR any of its panels do (in which case
   // only the matching panels are listed under it).
   const visibleTabs = TAB_ITEMS.map(tab => {
-    const all = SECTION_ITEMS.filter(s => s.tabHref === tab.href)
+    const all = GRANTABLE_SECTION_ITEMS.filter(s => s.tabHref === tab.href)
     const q = permSearch.trim().toLowerCase()
     if (!q) return { tab, sections: all }
     const tabMatches = tab.label.toLowerCase().includes(q)
@@ -150,13 +157,13 @@ export default function UsersPage() {
   }).filter(Boolean) as { tab: typeof TAB_ITEMS[number]; sections: typeof SECTION_ITEMS }[]
 
   const grantedTabCount = TAB_ITEMS.filter(t => form.allowed_tabs.includes(t.href)).length
-  const grantedPanelCount = SECTION_ITEMS.filter(s => form.allowed_tabs.includes(s.key)).length
+  const grantedPanelCount = GRANTABLE_SECTION_ITEMS.filter(s => form.allowed_tabs.includes(s.key)).length
 
   function grantEverything() {
-    setForm(f => ({ ...f, allowed_tabs: [...TAB_ITEMS.map(t => t.href), ...SECTION_ITEMS.map(s => s.key)] }))
+    setForm(f => ({ ...f, allowed_tabs: [...TAB_ITEMS.map(t => t.href), ...GRANTABLE_SECTION_ITEMS.map(s => s.key)] }))
   }
   function setSectionsForTab(href: string, on: boolean) {
-    const keys = SECTION_ITEMS.filter(s => s.tabHref === href).map(s => s.key)
+    const keys = GRANTABLE_SECTION_ITEMS.filter(s => s.tabHref === href).map(s => s.key)
     setForm(f => ({
       ...f,
       allowed_tabs: on

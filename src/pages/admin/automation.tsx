@@ -76,7 +76,12 @@ function AutomationContent() {
 
       <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit flex-wrap">
         {visibleTabs.map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => {
+            setTab(t.key)
+            // Keeps the sub-tab bookmarkable/shareable and in browser history,
+            // same as the Dashboard's own deep-links into this page already rely on.
+            router.replace({ pathname: router.pathname, query: { ...router.query, tab: t.key } }, undefined, { shallow: true })
+          }}
             className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
               tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
             }`}>
