@@ -46,6 +46,12 @@ function mapContainerSize(conType: string | null | undefined): string {
 
 const cdnNumberClean = (s: string | null | undefined) => clean(s).replace(/\s+/g, '').toUpperCase()
 
+// Punctuation-insensitive name match: CDN shipper text has no parens/periods
+// ("SAKTHI INTERNATIONAL PVT LTD"), Trico's own list does ("SAKTHI
+// INTERNATIONAL (PVT) LTD."). Stripping everything but letters/digits before
+// comparing means the two sides match on name alone, not on formatting.
+const normName = (s: string) => clean(s).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
+
 function todayDDMMYYYY(): string {
   const d = new Date()
   const p = (n: number) => String(n).padStart(2, '0')
@@ -113,9 +119,9 @@ export type GatePassValues = Record<
 export function prepareGatePassValues(cdn: GatePassCdn, cusdec: GatePassCusdec | null, form: GatePassForm, wharfNumber: string | null | undefined): GatePassValues {
   const need = (field: string, val: unknown, msg: string) => { const v = clean(val); if (!v) throw new FieldError('prepare', field, msg); return v }
 
-  const shipperDisplay = shipperName(cdn.shipper).toUpperCase()
-  const shipper = form.shippers.find(s => s.name.toUpperCase() === shipperDisplay)
-    || form.shippers.find(s => shipperDisplay.includes(s.name.toUpperCase()) || s.name.toUpperCase().includes(shipperDisplay))
+  const shipperDisplay = normName(shipperName(cdn.shipper))
+  const shipper = form.shippers.find(s => normName(s.name) === shipperDisplay)
+    || form.shippers.find(s => { const n = normName(s.name); return shipperDisplay.includes(n) || n.includes(shipperDisplay) })
   if (!shipper) throw new FieldError('prepare', 'Shipper', `No active Trico shipper matches "${shipperName(cdn.shipper)}". Trico shippers: ${form.shippers.map(s => s.name).join(' | ')}`)
 
   const wharfDigits = digitsOnly(wharfNumber || '')
