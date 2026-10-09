@@ -92,9 +92,18 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
   const [eligible, setEligible] = useState<EligibleCdn[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [testMode, setTestMode] = useState(true)
-  const [vgm, setVgm] = useState(true)
-  const [fumigation, setFumigation] = useState(true)
-  const [quarantine, setQuarantine] = useState(true)
+  type TricoOpts = { vgm: boolean; fumigation: boolean; quarantine: boolean }
+  const DEFAULT_TRICO_OPTS: TricoOpts = { vgm: true, fumigation: true, quarantine: true }
+  const [rowOpts, setRowOpts] = useState<Record<string, TricoOpts>>({})
+  const optFor = (id: string): TricoOpts => rowOpts[id] || DEFAULT_TRICO_OPTS
+  function setRowOpt(id: string, key: keyof TricoOpts, value: boolean) {
+    setRowOpts(prev => ({ ...prev, [id]: { ...optFor(id), [key]: value } }))
+  }
+  // Master checkbox per category: ticks/unticks it for every row currently on screen at once;
+  // each row's own box still overrides it afterwards.
+  function setAllOpt(key: keyof TricoOpts, value: boolean, ids: string[]) {
+    setRowOpts(prev => { const n = { ...prev }; for (const id of ids) n[id] = { ...optFor(id), [key]: value }; return n })
+  }
   const [driving, setDriving] = useState(false)
   const driveRef = useRef(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -144,7 +153,8 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
   async function run() {
     setBusy(true); setMsg(null)
     try {
-      const d = await api('/api/automation-jobs', { method: 'POST', body: JSON.stringify({ kind, cdnIds: Array.from(selected), dryRun: testMode, vgm, fumigation, quarantine }) })
+      const tricoOptions = Object.fromEntries(Array.from(selected).map(id => [id, optFor(id)]))
+      const d = await api('/api/automation-jobs', { method: 'POST', body: JSON.stringify({ kind, cdnIds: Array.from(selected), dryRun: testMode, tricoOptions }) })
       setMsg({ ok: d.queued > 0, text: `${d.queued} queued${d.skipped?.length ? `, ${d.skipped.length} skipped` : ''}`, skipped: d.skipped })
       setSelected(new Set()); await load()
       if (d.queued > 0) drive()
@@ -178,10 +188,17 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
         )}
         {kind === 'trico_gate_pass' && (
           <div className="flex items-center gap-4 mb-3 bg-gray-50 border border-gray-200 rounded-lg p-2.5">
-            <span className="text-xs font-medium text-gray-600">Applies to this batch:</span>
-            <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer"><input type="checkbox" checked={vgm} onChange={e => setVgm(e.target.checked)}/>Container Weighing (VGM)</label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer"><input type="checkbox" checked={fumigation} onChange={e => setFumigation(e.target.checked)}/>Fumigation</label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer"><input type="checkbox" checked={quarantine} onChange={e => setQuarantine(e.target.checked)}/>Quarantine</label>
+            <span className="text-xs font-medium text-gray-600">Tick all:</span>
+            {(['vgm', 'fumigation', 'quarantine'] as const).map(key => {
+              const label = key === 'vgm' ? 'Container Weighing (VGM)' : key === 'fumigation' ? 'Fumigation' : 'Quarantine'
+              const allOn = filtered.length > 0 && filtered.every(c => optFor(c.id)[key])
+              return (
+                <label key={key} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                  <input type="checkbox" checked={allOn} onChange={e => setAllOpt(key, e.target.checked, filtered.map(c => c.id))}/>{label}
+                </label>
+              )
+            })}
+            <span className="text-[11px] text-gray-400">— sets every row below at once; each row can still be adjusted individually</span>
           </div>
         )}
         {extraHeader}
@@ -205,15 +222,31 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
           <div className="border border-gray-100 rounded-lg divide-y divide-gray-100 max-h-96 overflow-y-auto">
             {filtered.map(c => {
               const ready = isReady(c)
+              const opts = optFor(c.id)
               return (
-                <label key={c.id} className={`flex items-center gap-3 px-3 py-2 text-xs ${ready ? 'cursor-pointer hover:bg-gray-50' : 'opacity-60'}`}>
-                  <input type="checkbox" disabled={!ready} checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="w-3.5 h-3.5"/>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-mono font-semibold text-gray-800">{c.container_no} <span className="font-sans font-normal text-gray-400">· {c.cusdec_number}</span></p>
-                    <p className="text-gray-500 truncate">{c.shipper}</p>
-                  </div>
+                <div key={c.id} className={`flex items-center gap-3 px-3 py-2 text-xs ${!ready ? 'opacity-60' : ''}`}>
+                  <label className={`flex items-center gap-3 flex-1 min-w-0 ${ready ? 'cursor-pointer hover:bg-gray-50' : ''}`}>
+                    <input type="checkbox" disabled={!ready} checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="w-3.5 h-3.5 flex-shrink-0"/>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-mono font-semibold text-gray-800">{c.container_no} <span className="font-sans font-normal text-gray-400">· {c.cusdec_number}</span></p>
+                      <p className="text-gray-500 truncate">{c.shipper}</p>
+                    </div>
+                  </label>
+                  {kind === 'trico_gate_pass' && (
+                    <div className="flex gap-2 flex-shrink-0 text-[10px] text-gray-500">
+                      <label className="flex items-center gap-1 cursor-pointer" title="Container Weighing (VGM)">
+                        <input type="checkbox" checked={opts.vgm} onChange={e => setRowOpt(c.id, 'vgm', e.target.checked)}/>VGM
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer" title="Fumigation">
+                        <input type="checkbox" checked={opts.fumigation} onChange={e => setRowOpt(c.id, 'fumigation', e.target.checked)}/>Fumi
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer" title="Quarantine">
+                        <input type="checkbox" checked={opts.quarantine} onChange={e => setRowOpt(c.id, 'quarantine', e.target.checked)}/>Qtn
+                      </label>
+                    </div>
+                  )}
                   <div className="flex gap-1 flex-shrink-0">{needs.map(p => <Badge key={p} ok={c.ready[p]} label={p.toUpperCase()}/>)}</div>
-                </label>
+                </div>
               )
             })}
             {!filtered.length && <p className="text-xs text-gray-400 text-center py-8">Nothing eligible right now</p>}

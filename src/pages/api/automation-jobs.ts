@@ -84,13 +84,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const ready = mappedPortals(map, c.shipper)
         const missing = NEEDS[kind].filter(p => !ready[p])
         if (missing.length) { skipped.push({ cdnId: c.id, container: ref, reason: `No ${missing.join(' / ').toUpperCase()} login mapped for this shipper` }); continue }
+        const tricoOpt = req.body.tricoOptions?.[c.id] || {}
         rows.push({
           kind, cdn_id: c.id, container_no: c.container_no, cusdec_number: c.cusdec_number, shipper: shipperName(c.shipper),
           created_by: authed.userId, created_by_name: prof?.full_name || prof?.username || '',
           result: {
             ...(navisDone.has(c.id) ? { navis_done: true } : {}), dry_run: dryRun,
             ...(kind === 'trico_gate_pass' ? {
-              vgm: req.body.vgm !== false, fumigation: req.body.fumigation !== false, quarantine: req.body.quarantine !== false,
+              vgm: tricoOpt.vgm !== false, fumigation: tricoOpt.fumigation !== false, quarantine: tricoOpt.quarantine !== false,
             } : {}),
           },
         })
