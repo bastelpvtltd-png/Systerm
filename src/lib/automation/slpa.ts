@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, Page } from 'playwright-core'
 import fs from 'node:fs/promises'
-import { newSession, sleep, snap } from './portal'
+import { newSession, sleep, snap, softClick } from './portal'
 import { FieldError, asFieldError } from './errors'
 import type { SlpaValues } from './data'
 import type { PortalLogin } from '@/lib/portalCredentials'
@@ -74,7 +74,12 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
     // 2) consolidation: pick a free service-order container and Save — unless this row was already consolidated
     const already = (await r.locator('i.fa-save').count()) || (await r.locator('i.fa-edit').count())
     if (!already) {
-      await r.locator('nb-select button.select-button').click()
+      // The row can be below the fold on a CUSDEC with several containers, and the Angular
+      // select-button needs a moment after the table renders before it actually responds to a
+      // click — scrollIntoView + softClick (plain click, falling back to a dispatched click
+      // event) covers both instead of a bare .click() timing out at 30s.
+      await r.scrollIntoViewIfNeeded().catch(() => {})
+      await softClick(r.locator('nb-select button.select-button'))
       const options = page.locator('nb-option')
       await options.first().waitFor({ state: 'visible', timeout: 10_000 })
       let pick = -1
@@ -83,12 +88,12 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
         if (!disabled) pick = i
       }
       if (pick < 0) throw new FieldError('slpa', 'Service Order Container', 'No free service-order container left to select for this CUSDEC')
-      await options.nth(pick).click()
+      await softClick(options.nth(pick))
 
       const save = page.locator('button', { hasText: /^\s*Save\s*$/ }).last()
       for (let i = 0; i < 20 && !(await save.isEnabled()); i++) await sleep(500)
       if (!(await save.isEnabled())) throw new FieldError('slpa', 'Consolidation Save', 'Save button stayed disabled after selecting the container')
-      await save.click()
+      await softClick(save)
       const ok = await page.getByText(/Consolidation Saved Successfully/i).first().waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
       if (!ok) throw new FieldError('slpa', 'Consolidation Save', `SLPA did not confirm the consolidation${(await toastText(page)) ? `: ${await toastText(page)}` : ''}`)
     }

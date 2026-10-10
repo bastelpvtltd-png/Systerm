@@ -61,3 +61,17 @@ export async function snap(page: Page | undefined | null): Promise<string> {
   if (!page || page.isClosed()) return ''
   try { return (await page.screenshot({ type: 'jpeg', quality: 55 })).toString('base64') } catch { return '' }
 }
+
+/** Both the Navis (ZK) and SLPA (Nebular/Angular) portals sometimes leave an invisible mask,
+ *  tooltip or in-flight animation over an element for a moment, which makes a normal Playwright
+ *  click wait out its full timeout even though the element is really there and really clickable.
+ *  Try a normal click for a few seconds, then fall back to sending the click event straight to
+ *  the element (which is what both frameworks' own listeners respond to either way). */
+export async function softClick(loc: import('playwright-core').Locator, tries = 6_000) {
+  try { await loc.click({ timeout: tries }) }
+  catch {
+    await loc.waitFor({ state: 'attached', timeout: 5_000 })
+    await loc.scrollIntoViewIfNeeded().catch(() => {})
+    await loc.dispatchEvent('click')
+  }
+}

@@ -5,7 +5,8 @@
 // (input[id$="mm0"]), never the whole id.
 import type { Page } from 'playwright-core'
 import { FieldError, asFieldError, type Step } from './errors'
-import { sleep, snap } from './portal'
+import { sleep, snap, softClick } from './portal'
+export { softClick }
 import type { Pick } from './data'
 
 const clean = (s: string) => s.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
@@ -112,17 +113,6 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   const value = (await el.inputValue()).trim()
   if (!value || value === '--') throw new FieldError(STEP, field, `"${field}": option "${options[choice]}" was clicked but the box is still empty`)
   return value
-}
-
-/** ZK sometimes leaves an invisible mask/popup over the element for a moment, which makes a normal
- *  Playwright click wait the full 30 s. Try a normal click for a few seconds, then fall back to
- *  sending the click event straight to the element (which is what ZK listens for). */
-export async function softClick(loc: import('playwright-core').Locator, tries = 6_000) {
-  try { await loc.click({ timeout: tries }) }
-  catch {
-    await loc.waitFor({ state: 'attached', timeout: 5_000 })
-    await loc.dispatchEvent('click')
-  }
 }
 
 /** Text of any ZK error/notification box currently on screen ("" if none). */
