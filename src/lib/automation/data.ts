@@ -94,7 +94,15 @@ export function pickVesselOption(options: string[], vessel: string | null | unde
   const wantVoyage = norm(voyage || '')
   if (!wantVoyage) return 'CDN has no voyage number'
   const parsed = options.map((o, i) => ({ i, p: parseVesselOption(o) })).filter(x => x.p)
-  const sameVoyage = parsed.filter(x => norm(x.p!.voyage) === wantVoyage)
+  // The ",VOYAGE,YARD" fields in parens aren't always there — some options are just "CODE (NAME)"
+  // with no comma at all, and then the voyage only shows up embedded in CODE itself (confirmed from
+  // a real option, "ZEY26076NS (ZHONG PENG YOU YI)" for CDN voyage "26076N" — Navis's own code adds
+  // a leg-letter suffix). Exact match on the parsed voyage field when there is one; when that field
+  // is blank, fall back to the voyage appearing in the code instead of rejecting a real match.
+  const sameVoyage = parsed.filter(x => {
+    const v = norm(x.p!.voyage)
+    return v ? v === wantVoyage : norm(x.p!.code).includes(wantVoyage)
+  })
   if (!sameVoyage.length) return `No vessel with voyage "${clean(voyage || '')}" in Navis. Options shown: ${options.map(clean).slice(0, 8).join(' | ') || 'none'}`
 
   const words = (s: string) => clean(s).toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 3)

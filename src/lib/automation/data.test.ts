@@ -26,6 +26,11 @@ assert.equal(pickVesselOption(opts, '', '640E'), 0)                     // no ve
 assert.equal(typeof pickVesselOption(opts, 'MARGRETHE MAERSK', '999X'), 'string')   // voyage not found -> error
 assert.equal(typeof pickVesselOption(opts, 'COMPLETELY OTHER SHIP', '640E'), 'string') // voyage ok, vessel unrelated -> error
 assert.equal(typeof pickVesselOption(opts, 'MARGRETHE MAERSK', ''), 'string')
+// real Navis option with no comma at all in parens — voyage embedded in the code instead,
+// with a leg-letter suffix Navis adds that the CDN's own voyage doesn't have
+const noCommaOpts = ['ZEY26076NS (ZHONG PENG YOU YI)']
+assert.deepEqual(parseVesselOption(noCommaOpts[0]), { code: 'ZEY26076NS', name: 'ZHONG PENG YOU YI', voyage: '' })
+assert.equal(pickVesselOption(noCommaOpts, 'ZHONG PENG YOU YI', '26076N'), 0)
 // ports
 const ports = ['AEJEA\u00a0(Jebel\u00a0Ali)', 'INTUT (Tuticorin)', 'INMUN (Mundra)']
 assert.equal(pickPortOption(ports, 'JEBEL ALI'), 0); assert.equal(pickPortOption(ports, 'TUTICORIN'), 1); assert.equal(pickPortOption(ports, 'MUNDRA'), 2)
