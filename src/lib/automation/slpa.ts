@@ -39,7 +39,13 @@ async function toastText(page: Page): Promise<string> {
 }
 
 async function search(page: Page, ref: string) {
-  await page.goto(CONSOL_URL)
+  // Right after login the app's own client-side router can still be bouncing through
+  // /wapp/dashboard — a goto that lands mid-bounce gets reported as "Navigation ... is interrupted
+  // by another navigation to .../dashboard". One retry after a short wait lets that settle first.
+  for (let attempt = 0; ; attempt++) {
+    try { await page.goto(CONSOL_URL); break }
+    catch (e) { if (attempt >= 1) throw e; await sleep(1_500) }
+  }
   await page.getByRole('button', { name: 'FCL', exact: true }).click()
   const box = page.locator('xpath=//*[contains(normalize-space(text()),"Cusdec No")]/following::input[1]')
   await box.waitFor({ state: 'visible' })
@@ -117,14 +123,31 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
       catch { throw new FieldError('slpa', field, `Could not fill "${field}" on the Verified Container Slip`) }
     }
     // Agent Pass No — a fixed value for this agency's account, not per-container CDN data (real
-    // screenshot: Save stays disabled with "Agent Pass No is required." until it's filled). Found
-    // by its label text rather than a guessed id, since the other fields' ids (#driverid etc.)
-    // don't follow an obvious pattern this one would reliably match.
-    try {
-      const agentPass = slip.locator('xpath=//*[contains(normalize-space(text()),"Agent Pass No")]/following::input[1]')
-      await agentPass.fill(AGENT_PASS_NO)
-      await agentPass.press('Tab')
-    } catch { throw new FieldError('slpa', 'Agent Pass No', 'Could not fill "Agent Pass No" on the Verified Container Slip') }
+    // screenshot: Save stays disabled with "Agent Pass No is required." until it's filled).
+    // Finding it by its label text failed once already (the label may not be a plain text node
+    // the way "Cusdec No" on the search page is), so this now tries a few likely ids first, and
+    // if none of those exist, falls back to whichever visible, editable input on the slip is
+    // still empty — the only one left once the four fields above are already filled.
+    let agentPassFilled = false
+    for (const guess of ['#agentpassno', '#agentpass', '#agentPassNo', '#agent_pass_no']) {
+      const el = slip.locator(guess)
+      if (await el.count().catch(() => 0)) {
+        await el.first().fill(AGENT_PASS_NO); await el.first().press('Tab')
+        agentPassFilled = true
+        break
+      }
+    }
+    if (!agentPassFilled) {
+      const candidates = slip.locator('input:visible:not([readonly]):not([disabled])')
+      for (let i = 0, n = await candidates.count(); i < n && !agentPassFilled; i++) {
+        const el = candidates.nth(i)
+        if ((await el.inputValue().catch(() => 'x')) === '') {
+          await el.fill(AGENT_PASS_NO); await el.press('Tab')
+          agentPassFilled = true
+        }
+      }
+    }
+    if (!agentPassFilled) throw new FieldError('slpa', 'Agent Pass No', 'Could not find the empty "Agent Pass No" field on the Verified Container Slip')
     await slip.locator('button[type="submit"]', { hasText: 'Save' }).first().click()
     const print = slip.getByRole('button', { name: 'Print', exact: true })
     const printed = await print.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
