@@ -146,7 +146,9 @@ export async function navisEnterOne(s: NavisSession, v: NavisValues, opts: { dry
 
     // Vessel: clear the "--", type "*" + the voyage, and take the entry whose voyage matches exactly.
     await pickCombo(page, 'Vessel / Voyage', F.vessel, { type: `*${v.voyage}`, choose: o => pickVesselOption(o, v.vessel, v.voyage) })
-    await pickCombo(page, 'Port of Load', F.loadPort, { type: '*LKCMB', choose: o => pickByCode(o, 'LKCMB') })
+    // Navis's combo filters on the port NAME, not the code — typing "*LKCMB" found nothing;
+    // "*Colombo" is what actually brings up the LKCMB option.
+    await pickCombo(page, 'Port of Load', F.loadPort, { type: '*Colombo', choose: o => pickByCode(o, 'LKCMB') })
     await pickCombo(page, 'Port of Discharge', F.dischargePort, { type: `*${v.dischargePort}`, choose: o => pickPortOption(o, v.dischargePort) })
     await pickCombo(page, 'Cargo Type (FCL)', F.cargoType, { readonly: true, choose: o => pickByCode(o, 'FCL') })
     await fillText(page, 'CUSDEC Reference', F.cusdecRef, v.cusdecRef)

@@ -74,9 +74,13 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   await el.click({ timeout: 8_000 }).catch(() => el.focus())
   if (!o.readonly) {
     // Navis can auto-fill this box itself a moment after it renders (e.g. Con Type guessed from
-    // the container number). A single Control+A/Backspace can race that and leave the guessed text
+    // the container number), and several boxes start showing "--" as a REAL value, not just a
+    // placeholder. A single Control+A/Backspace can race the auto-fill and leave the guessed text
     // in front of what we type next ("45G" + "45G1" -> "45G45G1", which then matches nothing in the
-    // dropdown). Keep clearing until the box is actually empty before typing the filter.
+    // dropdown) — and keyboard selection can simply miss if focus isn't fully settled yet. .fill('')
+    // clears it directly at the DOM level first (no focus/selection to go wrong), then the
+    // Control+A/Backspace loop is the fallback/verification that the box is really empty before typing.
+    await el.fill('').catch(() => {})
     for (let i = 0; i < 5 && (await el.inputValue()) !== ''; i++) {
       await el.press('Control+A'); await el.press('Backspace'); await sleep(100)
     }
