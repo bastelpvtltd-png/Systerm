@@ -75,19 +75,14 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   if (!o.readonly) {
     // Navis can auto-fill this box itself a moment after it renders (e.g. Con Type guessed from
     // the container number), and several boxes start showing "--" as a REAL value, not just a
-    // placeholder. Worse, ZK resyncs the box's displayed value from its own client-side widget
-    // state a moment AFTER a plain .fill('')/Backspace — clearing it, then checking it's empty
-    // immediately, then typing right away can still lose the race: ZK's resync lands mid-type and
-    // splices "--" back in among the keystrokes ("*26076N" -> "--076N", confirmed from a real
-    // screenshot). So: clear, then sleep BEFORE each check — giving ZK room to resync first — and
-    // only start typing once the box has read back empty, not just once.
-    await el.fill('').catch(() => {})
-    for (let i = 0; i < 8; i++) {
-      await sleep(150)
-      if ((await el.inputValue()) === '') break
-      await el.press('Control+A'); await el.press('Backspace')
-    }
-    await sleep(150)
+    // placeholder. Clearing to empty first (fill('') or Control+A/Backspace, with or without a
+    // wait afterwards) doesn't survive: ZK reinserts "--" the instant the box reads as empty — not
+    // after a delay, so no amount of waiting-then-checking avoids it (confirmed from two real
+    // screenshots: "*26076N" -> "--076N" typing immediately, then "--*26076N" even after adding a
+    // settle wait). So never let the box go empty at all: select everything with Control+A, then
+    // type straight over the selection — the first keystroke replaces "--" in the same action
+    // that types it, with no empty moment in between for ZK to react to.
+    await el.press('Control+A')
     if (o.type) await el.pressSequentially(o.type, { delay: 70 })
   }
   let opened = await items.first().waitFor({ state: 'visible', timeout: o.readonly ? 2_500 : 9_000 }).then(() => true, () => false)
