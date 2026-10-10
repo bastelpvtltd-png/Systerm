@@ -34,6 +34,57 @@ export const NAVIS = {
   saveButton: 'button.carina-save-button',
 }
 
+// Some Navis business-rule rejections (e.g. "Can not pre-advise unit X to facility ... It is
+// already ACTIVE.") render as plain red text inline in the Pre-advise panel, not as the
+// .z-errbox/.z-notification popups visibleZkError() already watches for. Rather than chase every
+// Carina-theme class name, this looks for the leaf element with the reddest visible text — works
+// for this message and any other inline red validation text the form throws up.
+async function redBannerText(page: Page): Promise<string> {
+  try {
+    return await page.evaluate(() => {
+      const isReddish = (c: string) => {
+        const m = c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+        if (!m) return false
+        const [r, g, b] = [+m[1], +m[2], +m[3]]
+        return r > 150 && r - g > 60 && r - b > 60
+      }
+      let best = ''
+      document.querySelectorAll('div,span,td,p,li').forEach(el => {
+        if (el.children.length) return   // leaf text nodes only, skip containers
+        const r = el.getBoundingClientRect()
+        if (!r.width || !r.height) return
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim()
+        if (text.length > best.length && text.length < 300 && isReddish(getComputedStyle(el).color)) best = text
+      })
+      return best
+    })
+  } catch { return '' }
+}
+
+// Navis sometimes doesn't recognize a container's ISO check digit and pops up a modal "Action"
+// window — "Equipment unknown or check digit validation failed for container." — with its OWN
+// mini Equipment Number / Equipment Type / Operator / Save, on top of (and blocking) the main
+// Pre-advise form. Every field lookup here is scoped to that popup specifically (by walking up
+// to its containing z-window from the message text) since the main form behind it has fields
+// with the very same labels — an unscoped lookup could silently hit the wrong one.
+async function resolveUnknownEquipmentPopup(page: Page, v: NavisValues) {
+  const msg = page.locator('text=/Equipment unknown or check digit validation failed/i').first()
+  const appeared = await msg.waitFor({ state: 'visible', timeout: 4_000 }).then(() => true, () => false)
+  if (!appeared) return
+
+  const scope = '//div[contains(@class,"z-window")][.//text()[contains(.,"Equipment unknown or check digit")]]'
+  const byPopupLabel = (label: string): Sel => ({
+    xpath: `${scope}//span[contains(@class,"z-label") and normalize-space(.)="${label}"]/ancestor::td[1]/following-sibling::td[1]//input[not(@type="hidden") and not(@type="checkbox")] >> visible=true`,
+  })
+
+  await fillText(page, 'Equipment Number (popup)', byPopupLabel('Equipment Number:'), v.containerNo)
+  await pickCombo(page, 'Equipment Type (popup)', byPopupLabel('Equipment Type:'), { type: v.conType, choose: o => pickByCode(o, v.conType) })
+  await softClick(page.locator('button.carina-save-button:visible').last())
+  await msg.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => {
+    throw new FieldError('navis', 'Equipment registration', 'Filled the "Equipment unknown" popup and saved it, but it did not close')
+  })
+}
+
 export interface NavisSession { context: BrowserContext; page: Page; needsReopen: boolean }
 
 export async function navisLogin(browser: Browser, login: PortalLogin): Promise<NavisSession> {
@@ -85,6 +136,7 @@ export async function navisEnterOne(s: NavisSession, v: NavisValues, opts: { dry
     stage = 'Fill form'
 
     await fillText(page, 'Container No', F.containerNo, v.containerNo)
+    await resolveUnknownEquipmentPopup(page, v)
     await pickCombo(page, 'Con Type', F.conType, { type: v.conType, choose: o => pickByCode(o, v.conType) })
     await fillText(page, 'Gross Mass', F.grossMass, v.grossMass)
     await pickCombo(page, 'COC', F.coc, { type: v.coc, choose: o => pickByCode(o, v.coc, 'Line Operator') })
