@@ -137,7 +137,7 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
         if (!(await claim(c.job.id, 'navis'))) continue
         processed++
         try {
-          const values = prepareValues(c.cdn, c.cusdec)
+          const values = prepareValues(c.cdn, c.cusdec, c.job.result?.cusdec_override)
           const dry = !!c.job.result?.dry_run
           const r = await navisEnterOne(session, values.navis, { dryRun: dry })
           if (dry) {
@@ -175,7 +175,7 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
         if (!(await claim(c.job.id, 'slpa'))) continue
         processed++
         try {
-          const values = prepareValues(c.cdn, c.cusdec)
+          const values = prepareValues(c.cdn, c.cusdec, c.job.result?.cusdec_override)
           const out = await slpaEnterOne(session, values.slpa)
           await sb.from('automation_jobs').update({ step: 'finalize' }).eq('id', c.job.id)
           const fin = await finalizeBarcode({ cdn: c.cdn, pdf: out.pdf, fileName: out.fileName, origin: opts.origin })

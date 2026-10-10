@@ -150,7 +150,7 @@ export interface SlpaValues { cusdecRef: string; containerNo: string; driverId: 
 
 const need = (field: string, value: string, why: string) => { if (!value) throw new FieldError('prepare', field, why) }
 
-export function prepareValues(cdn: Record<string, any>, cusdec: { code?: string; number?: string; date?: string } | null): { navis: NavisValues; slpa: SlpaValues } {
+export function prepareValues(cdn: Record<string, any>, cusdec: { code?: string; number?: string; date?: string } | null, cusdecOverride?: string | null): { navis: NavisValues; slpa: SlpaValues } {
   const containerNo = clean(cdn.container_no || '').replace(/\s+/g, '').toUpperCase()
   need('Container No', containerNo, 'CDN has no container number')
 
@@ -170,7 +170,10 @@ export function prepareValues(cdn: Record<string, any>, cusdec: { code?: string;
   const dischargePort = clean(cdn.discharge_port || '')
   need('Discharge Port', dischargePort, 'CDN has no discharge port')
 
-  const ref = cusdecReference(cusdec?.code || cdn.code, cusdec?.number || cdn.cusdec_number, cusdec?.date)
+  // A manual override (set via "fix CUSDEC & retry" after SLPA rejected what was typed into Navis
+  // the first time) is a one-off correction for this run only — it is never written back to the
+  // CDN's own cusdec_number, so it always takes priority over the computed reference here.
+  const ref = clean(cusdecOverride || '') || cusdecReference(cusdec?.code || cdn.code, cusdec?.number || cdn.cusdec_number, cusdec?.date)
   need('CUSDEC Reference', ref, 'Could not build CUSDEC reference (CUSDEC code/number/date missing)')
 
   const id = driverId(cdn.driver_name)

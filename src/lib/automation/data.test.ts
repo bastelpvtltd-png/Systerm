@@ -52,4 +52,7 @@ for (const [patch, field] of [[{ driver_name: 'NO ID' }, 'Driver ID'], [{ gross_
   try { prepareValues({ ...cdn, ...patch }, { code: 'CBEX1', number: 'E 60147', date: '29/09/2026' }); assert.fail('should have thrown') }
   catch (e) { assert.ok(e instanceof FieldError); assert.equal((e as FieldError).field, field) }
 }
+// a "fix CUSDEC & retry" override always wins over the computed reference, and never touches it
+const withOverride = prepareValues(cdn, { code: 'CBEX1', number: 'E 60147', date: '29/09/2026' }, 'CBEX1E999992026')
+assert.equal(withOverride.navis.cusdecRef, 'CBEX1E999992026'); assert.equal(withOverride.slpa.cusdecRef, 'CBEX1E999992026')
 console.log('data rules: all tests passed')

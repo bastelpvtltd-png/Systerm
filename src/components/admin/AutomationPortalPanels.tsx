@@ -12,6 +12,7 @@ interface EligibleCdn {
   id: string; cusdec_number: string; container_no: string; cdn_no: string | null; shipper: string
   gate_add_time?: string | null; trico_check_note?: string | null
   ready: { navis: boolean; slpa: boolean; trico: boolean }
+  navisDone: boolean
 }
 interface Job {
   id: string; cdn_id: string; container_no: string; cusdec_number: string; shipper: string
@@ -212,6 +213,12 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
     if (!confirm('Delete this run from the list? This cannot be undone.')) return
     try { await api(`/api/automation-jobs?id=${id}`, { method: 'DELETE' }); load() } catch (e: any) { setMsg({ ok: false, text: e.message }) }
   }
+  // For a CDN with no job yet (e.g. Navis was done by hand, outside the automation) — marks it so
+  // a run started from here skips Navis and goes straight to SLPA.
+  async function markNavis(cdnId: string, value: boolean) {
+    try { await api(`/api/automation-jobs?kind=${kind}&cdnId=${cdnId}`, { method: 'PATCH', body: JSON.stringify({ navisDone: value }) }); load() }
+    catch (e: any) { setMsg({ ok: false, text: e.message }) }
+  }
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -293,6 +300,13 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
                         <input type="checkbox" checked={opts.quarantine} onChange={e => setRowOpt(c.id, 'quarantine', e.target.checked)}/>Qtn
                       </label>
                     </div>
+                  )}
+                  {kind === 'barcode_enter' && (
+                    <button onClick={() => markNavis(c.id, !c.navisDone)}
+                      className={`text-[10px] flex-shrink-0 hover:underline ${c.navisDone ? 'text-green-600' : 'text-gray-400'}`}
+                      title="Mark whether Navis was already done for this CDN (e.g. by hand) — a run then skips straight to SLPA">
+                      {c.navisDone ? 'Navis ✓' : 'Navis OK?'}
+                    </button>
                   )}
                   <div className="flex gap-1 flex-shrink-0">{needs.map(p => <Badge key={p} ok={c.ready[p]} label={p.toUpperCase()}/>)}</div>
                 </div>
