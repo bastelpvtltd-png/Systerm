@@ -73,20 +73,18 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   const items = page.locator('li.z-comboitem:visible')
   await el.click({ timeout: 8_000 }).catch(() => el.focus())
   if (!o.readonly) {
-    // Four strategies tried, four different failures against the same box (real screenshots):
+    // Five strategies tried against this box, five different failures (real screenshots):
     // fill('')+type -> "--076N"; fill('')+settle-wait+type -> "--*26076N"; Control+A+type ->
-    // "--76N"; writing the value straight into the DOM + one real keystroke -> ZK's dropdown
-    // opened but showed the FULL unfiltered vessel list, not a "26076N" filter — so the DOM write
-    // never reached ZK's own live-search listener at all, despite the input event.
-    // ZK's filter demonstrably responds to real, individual keystrokes (every OTHER combo on this
-    // form that never starts with "--" has worked on plain pressSequentially this whole time) — so
-    // clear with real Backspace presses, a fixed count matching the box's current length (no
-    // Control+A, which this widget doesn't reliably honor), then type normally.
-    const current = await el.inputValue().catch(() => '')
-    if (current) {
-      await el.press('End')
-      for (let i = 0; i < current.length; i++) await el.press('Backspace')
-    }
+    // "--76N"; DOM value write + one keystroke -> dropdown opened unfiltered, ZK's live-search
+    // never fired at all; Backspace x inputValue().length -> still not cleared. That last one
+    // means inputValue() can't be trusted to report what's actually showing here — "--" may be
+    // rendered some other way than a true input value, with el.inputValue() reading back ''
+    // while "--" still visibly sits in the box. So stop asking the box what it contains at all:
+    // press End, then a fixed, deliberately-generous 10 Backspaces (a harmless no-op once it's
+    // actually empty) before typing normally — same real-keystroke path every other combo field
+    // on this form (none of which start at "--") has always worked on.
+    await el.press('End')
+    for (let i = 0; i < 10; i++) await el.press('Backspace')
     if (o.type) await el.pressSequentially(o.type, { delay: 70 })
   }
   let opened = await items.first().waitFor({ state: 'visible', timeout: o.readonly ? 2_500 : 9_000 }).then(() => true, () => false)
