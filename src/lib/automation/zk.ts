@@ -73,17 +73,26 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   const items = page.locator('li.z-comboitem:visible')
   await el.click({ timeout: 8_000 }).catch(() => el.focus())
   if (!o.readonly) {
-    // Navis can auto-fill this box itself a moment after it renders (e.g. Con Type guessed from
-    // the container number), and several boxes start showing "--" as a REAL value, not just a
-    // placeholder. Clearing to empty first (fill('') or Control+A/Backspace, with or without a
-    // wait afterwards) doesn't survive: ZK reinserts "--" the instant the box reads as empty — not
-    // after a delay, so no amount of waiting-then-checking avoids it (confirmed from two real
-    // screenshots: "*26076N" -> "--076N" typing immediately, then "--*26076N" even after adding a
-    // settle wait). So never let the box go empty at all: select everything with Control+A, then
-    // type straight over the selection — the first keystroke replaces "--" in the same action
-    // that types it, with no empty moment in between for ZK to react to.
-    await el.press('Control+A')
-    if (o.type) await el.pressSequentially(o.type, { delay: 70 })
+    // Three different keyboard-based clear strategies all lost this race against ZK (three real
+    // screenshots: fill('')+type -> "--076N", fill('')+settle-wait+type -> "--*26076N",
+    // Control+A+type -> "--76N" — "--" survives every time, and keystrokes go missing too, which
+    // points at the box not reliably being focused/ready when pressSequentially starts, not just
+    // at ZK re-inserting "--"). Stop relying on synthetic keyboard events for the clear+set part:
+    // write the final value straight into the DOM (via the native input value setter, so no
+    // framework-level override intercepts it) and fire its own input event. Then replay just the
+    // LAST character as a real keystroke (Backspace, retype) — one genuine keyup is what ZK's
+    // live-filter AJAX actually listens for, and this restores the exact same final value.
+    if (o.type) {
+      const value = o.type
+      await el.evaluate((node: HTMLInputElement, v: string) => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+        setter.call(node, v)
+        node.dispatchEvent(new Event('input', { bubbles: true }))
+      }, value)
+      await sleep(150)
+      await el.press('Backspace')
+      await el.pressSequentially(value.slice(-1), { delay: 70 })
+    }
   }
   let opened = await items.first().waitFor({ state: 'visible', timeout: o.readonly ? 2_500 : 9_000 }).then(() => true, () => false)
   if (!opened && o.readonly) {
