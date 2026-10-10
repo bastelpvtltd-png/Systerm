@@ -85,11 +85,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const missing = NEEDS[kind].filter(p => !ready[p])
         if (missing.length) { skipped.push({ cdnId: c.id, container: ref, reason: `No ${missing.join(' / ').toUpperCase()} login mapped for this shipper` }); continue }
         const tricoOpt = req.body.tricoOptions?.[c.id] || {}
+        // A CDN whose Navis entry already really happened (carried over above) can't be put
+        // back into test mode — there's nothing left to simulate, and "dry_run: true" here
+        // would make the SLPA phase's own filter (navis_done && !dry_run) skip it forever,
+        // stranding the job in "queued" with neither phase ever picking it up.
+        const navisAlreadyDone = navisDone.has(c.id)
         rows.push({
           kind, cdn_id: c.id, container_no: c.container_no, cusdec_number: c.cusdec_number, shipper: shipperName(c.shipper),
           created_by: authed.userId, created_by_name: prof?.full_name || prof?.username || '',
           result: {
-            ...(navisDone.has(c.id) ? { navis_done: true } : {}), dry_run: dryRun,
+            ...(navisAlreadyDone ? { navis_done: true } : {}), dry_run: navisAlreadyDone ? false : dryRun,
             ...(kind === 'trico_gate_pass' ? {
               vgm: tricoOpt.vgm !== false, fumigation: tricoOpt.fumigation !== false, quarantine: tricoOpt.quarantine !== false,
             } : {}),
