@@ -56,13 +56,26 @@ async function search(page: Page, ref: string) {
 async function fetchAsBase64(page: Page, url: string): Promise<Buffer> {
   const b64 = await page.evaluate(async (u: string) => {
     const buf = new Uint8Array(await (await fetch(u)).arrayBuffer())
-    let s = ''; for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+    let s = ''; for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, Array.from(buf.subarray(i, i + 0x8000)))
     return btoa(s)
   }, url)
   return Buffer.from(b64, 'base64')
 }
 
 const isPdf = (b: Buffer) => b.subarray(0, 1024).includes('%PDF-')
+
+// A render that is structurally a valid PDF (isPdf) can still be the WRONG page — e.g. the
+// Angular app's print route is guarded by in-memory router state that a hard page.goto() doesn't
+// carry, so it silently redirects to /dashboard instead of 404-ing or erroring, and a page.pdf()
+// taken at that point is a perfectly valid PDF of the dashboard. The only way to catch that is to
+// check the PDF's own text actually contains this container's number before trusting it.
+async function containsContainer(buf: Buffer, containerNo: string): Promise<boolean> {
+  try {
+    const pdfParse = require('pdf-parse')
+    const { text } = await pdfParse(buf)
+    return text.replace(/\s+/g, '').toUpperCase().includes(containerNo.toUpperCase())
+  } catch { return false }
+}
 
 export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaResult> {
   const { page, context } = s
@@ -152,43 +165,72 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
     const print = slip.getByRole('button', { name: 'Print', exact: true })
     const printed = await print.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
     if (!printed) throw new FieldError('slpa', 'Slip Save', `Print button did not appear after saving the slip${(await toastText(slip)) ? `: ${await toastText(slip)}` : ''}`)
+    const slipUrl = slip.url()
 
     // 5) the PDF. SLPA's real flow: the slip's own URL carries a numeric gate pass id
     // (.../gatepass/<id>/verified-container-slip) once Save succeeds, and the printable version
-    // lives at .../gatepass/<id>/print — going there directly is the confirmed correct way to get
-    // it, rather than guessing at what the Print button's own click handler does (one real
-    // extraction failure showed it can navigate the page to the dashboard instead of printing).
+    // lives at .../gatepass/<id>/print. That route reads its data from the Angular app's
+    // in-memory router state (set when you reach it by clicking through from the slip) — a hard
+    // page.goto() straight to it loses that state and the app's route guard silently redirects to
+    // /dashboard instead of erroring, which still renders as a perfectly valid PDF, just of the
+    // wrong page. Every candidate below is therefore checked against the slip's own PDF template
+    // box positions actually landing on this container's number before being trusted, and we fall
+    // back to recovering the slip page and trying the next strategy if it doesn't.
     let pdf: Buffer | null = null
-    const gatepassId = slip.url().match(/\/gatepass\/(\d+)\b/)?.[1]
+    const tryAccept = async (buf: Buffer | null) => (buf && isPdf(buf) && await containsContainer(buf, v.containerNo)) ? buf : null
+    const backToSlip = async () => { if (slip.url() !== slipUrl) await slip.goto(slipUrl, { timeout: 15_000 }).catch(() => {}) }
+
+    const gatepassId = slipUrl.match(/\/gatepass\/(\d+)\b/)?.[1]
     if (gatepassId) {
       const printUrl = `https://n4cms.slpa.lk/wapp/export/service-orders/gatepass/${gatepassId}/print`
       try {
         const resp = await slip.goto(printUrl, { timeout: 20_000 })
+        let candidate: Buffer | null = null
         if (resp && (resp.headers()['content-type'] || '').includes('pdf')) {
-          pdf = await resp.body()
+          candidate = await resp.body()
         } else {
           await slip.emulateMedia({ media: 'print' })
-          pdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
+          candidate = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
         }
+        pdf = await tryAccept(candidate)
       } catch { /* fall through to the Print-button path below */ }
-      if (!isPdf(pdf as Buffer)) pdf = null
+      if (!pdf) await backToSlip()
     }
 
     if (!pdf) {
-      // Fallback: capture the slip's own content BEFORE clicking Print (it's fully rendered right
-      // after Save regardless of what Print's handler does to the page afterward), then try the
-      // button click's own download/popup, and fall back to that pre-capture if neither appears.
-      await slip.emulateMedia({ media: 'print' })
-      const slipPdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
+      // Fallback: click the Print button itself — same-tab client-side navigation (if that's how
+      // this route is reached) keeps the Angular router state the hard goto above lost, so this
+      // can succeed even when the direct-URL path hits the dashboard redirect. Also covers the
+      // button opening a new tab or triggering a browser download instead of navigating in place.
       const dlP = slip.waitForEvent('download', { timeout: 7_000 }).catch(() => null)
       const popP = context.waitForEvent('page', { timeout: 7_000 }).catch(() => null)
-      await print.click()
+      await slip.locator('button', { hasText: 'Print' }).first().click()
       const [dl, pop] = await Promise.all([dlP, popP])
-      if (dl) { const p = await dl.path(); if (p) pdf = await fs.readFile(p) }
-      if (!pdf && pop) { await pop.waitForLoadState().catch(() => {}); pdf = await fetchAsBase64(pop, pop.url()).catch(() => null); await pop.close().catch(() => {}) }
-      if (!pdf || !isPdf(pdf)) pdf = isPdf(slipPdf) ? slipPdf : null
+      if (dl) { const p = await dl.path(); if (p) pdf = await tryAccept(await fs.readFile(p)) }
+      if (!pdf && pop) {
+        await pop.waitForLoadState().catch(() => {})
+        pdf = await tryAccept(await fetchAsBase64(pop, pop.url()).catch(() => null))
+        await pop.close().catch(() => {})
+      }
+      if (!pdf && !dl && !pop) {
+        // Neither a download nor a popup fired — Print navigated the same tab in place. Give the
+        // route a moment to actually settle before capturing it.
+        await slip.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {})
+        await slip.emulateMedia({ media: 'print' }).catch(() => {})
+        pdf = await tryAccept(Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }).catch(() => Buffer.alloc(0))))
+      }
+      if (!pdf) await backToSlip()
     }
-    if (!pdf || !isPdf(pdf)) throw new FieldError('slpa', 'Print', 'Print produced no PDF (gate pass print URL, download, PDF tab, and rendering the slip itself all failed)')
+
+    if (!pdf) {
+      // Last resort: the data-entry slip form itself, fully rendered right after Save. This is a
+      // different layout than the real printed slip (it has input boxes, not a flat table), so a
+      // saved extraction template calibrated on the real printout will likely misread it — but
+      // returning something plausible beats throwing "Print produced no PDF" outright.
+      await slip.emulateMedia({ media: 'print' })
+      pdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
+    }
+    if (!pdf || !isPdf(pdf)) throw new FieldError('slpa', 'Print', 'Print produced no PDF (gate pass print URL, Print button, and rendering the slip itself all failed)')
     if (popup) await popup.close().catch(() => {})
     return { pdf, fileName: `${v.containerNo}.pdf` }
   } catch (e) {

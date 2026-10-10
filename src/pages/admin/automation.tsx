@@ -133,13 +133,7 @@ function MonthlyReportsPanel() {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
         body: JSON.stringify({ key: 'monthly_reports_enabled', value: String(next) }),
       })
-      if (res.ok) {
-        setEnabled(next)
-        // Switching a panel ON can start its work right away (Boat Note /
-        // Party's Copy Create pass their Run Now here) instead of sitting
-        // idle until the next scheduled interval comes round.
-        if (next && onTurnedOn) onTurnedOn()
-      }
+      if (res.ok) setEnabled(next)
     } finally { setSaving(false) }
   }
 
@@ -192,7 +186,7 @@ function DataUpdates() {
 // Shared by both check panels — plain-minutes interval editor + "last ran"
 // readout for the scheduled cron (cron-check-pending.ts), which is what
 // actually applies this interval; this control only reads/writes the number.
-function SchedulerControl({ panel, label, onTurnedOn }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger' | 'boat_note_create' | 'party_copy_create' | 'trico_check'; label: string; onTurnedOn?: () => void }) {
+function SchedulerControl({ panel, label, onTurnedOn }: { panel: 'boat_note' | 'export_release' | 'vessel_trigger' | 'boat_note_create' | 'party_copy_create' | 'trico_check' | 'trico_yard'; label: string; onTurnedOn?: () => void }) {
   const [minutes, setMinutes] = useState<string>('')
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
   const [enabled, setEnabled] = useState(true)

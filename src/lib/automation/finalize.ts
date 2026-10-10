@@ -40,9 +40,15 @@ export async function finalizeBarcode(p: { cdn: Record<string, any>; pdf: Buffer
     if (!er.ok) throw new FieldError('finalize', 'Barcode extraction', `Barcode extraction failed: ${ej.error || er.status}${er.status === 401 ? ' (is WORKER_SECRET set on Vercel?)' : ''}`)
     tableData = Object.fromEntries((ej.fields || []).map((f: any) => [f.key, f.value]))
 
-    // The slip must be for THIS container — never save a barcode against the wrong CDN.
+    // The slip must be for THIS container — never save a barcode against the wrong CDN. On a
+    // mismatch the Drive file below gets deleted, so without this the actual extracted
+    // fields/text are lost and a wrong read can only ever be guessed at, not diagnosed.
     const extracted = String(tableData.container_no || '').replace(/\s+/g, '').toUpperCase()
-    if (extracted && extracted !== container) throw new FieldError('finalize', 'Container No', `The printed slip is for ${extracted}, not ${container}`)
+    if (extracted && extracted !== container) {
+      const err = new FieldError('finalize', 'Container No', `The printed slip is for ${extracted}, not ${container}`)
+      err.debug = `extracted fields: ${JSON.stringify(tableData).slice(0, 3000)}`
+      throw err
+    }
     tableData.container_no = container
 
     const saved = await insertExtractedData('barcode', tableData, driveLink, { uploadedBy: 'Automation (Barcode Enter)' })
