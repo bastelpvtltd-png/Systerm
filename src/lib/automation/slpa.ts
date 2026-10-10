@@ -153,8 +153,11 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
     const printed = await print.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
     if (!printed) throw new FieldError('slpa', 'Slip Save', `Print button did not appear after saving the slip${(await toastText(slip)) ? `: ${await toastText(slip)}` : ''}`)
 
-    // 5) the PDF: a download, a PDF tab, or (if the button only calls window.print) render the page itself
-    await slip.evaluate(() => { (window as any).__printCalls = 0; window.print = () => { (window as any).__printCalls++ } })
+    // 5) the PDF: a download, a PDF tab, or — since the slip (with its barcode) is already fully
+    // rendered on this same page regardless of what the Print button's own handler does under the
+    // hood (real screenshot confirmed: saved fields + barcode, right there, no navigation, no
+    // download, no window.print() call detected) — just render this page itself as the fallback,
+    // unconditionally, instead of only attempting that when a window.print() call was observed.
     const dlP = slip.waitForEvent('download', { timeout: 7_000 }).catch(() => null)
     const popP = context.waitForEvent('page', { timeout: 7_000 }).catch(() => null)
     await print.click()
@@ -163,12 +166,10 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
     if (dl) { const p = await dl.path(); if (p) pdf = await fs.readFile(p) }
     if (!pdf && pop) { await pop.waitForLoadState().catch(() => {}); pdf = await fetchAsBase64(pop, pop.url()).catch(() => null); await pop.close().catch(() => {}) }
     if (!pdf || !isPdf(pdf)) {
-      if (await slip.evaluate(() => (window as any).__printCalls > 0).catch(() => false)) {
-        await slip.emulateMedia({ media: 'print' })
-        pdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
-      }
+      await slip.emulateMedia({ media: 'print' })
+      pdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
     }
-    if (!pdf || !isPdf(pdf)) throw new FieldError('slpa', 'Print', 'Print produced no PDF (no download, no PDF tab, no print call)')
+    if (!pdf || !isPdf(pdf)) throw new FieldError('slpa', 'Print', 'Print produced no PDF (no download, no PDF tab, and rendering the page itself failed too)')
     if (popup) await popup.close().catch(() => {})
     return { pdf, fileName: `${v.containerNo}.pdf` }
   } catch (e) {
