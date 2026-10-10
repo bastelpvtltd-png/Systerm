@@ -73,16 +73,16 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   const items = page.locator('li.z-comboitem:visible')
   await el.click({ timeout: 8_000 }).catch(() => el.focus())
   if (!o.readonly) {
-    // Five strategies tried against this box, five different failures (real screenshots):
-    // fill('')+type -> "--076N"; fill('')+settle-wait+type -> "--*26076N"; Control+A+type ->
-    // "--76N"; DOM value write + one keystroke -> dropdown opened unfiltered, ZK's live-search
-    // never fired at all; Backspace x inputValue().length -> still not cleared. That last one
-    // means inputValue() can't be trusted to report what's actually showing here — "--" may be
-    // rendered some other way than a true input value, with el.inputValue() reading back ''
-    // while "--" still visibly sits in the box. So stop asking the box what it contains at all:
-    // press End, then a fixed, deliberately-generous 10 Backspaces (a harmless no-op once it's
-    // actually empty) before typing normally — same real-keystroke path every other combo field
-    // on this form (none of which start at "--") has always worked on.
+    // Six strategies tried against this box. The last one (End, then a fixed 10 Backspaces) still
+    // left "--" in place, but now with the typed text landing BEFORE it ("--*26076N", new text
+    // first this time, not after) — that specific pattern means the cursor isn't ending up after
+    // "--" the way End is supposed to put it, so Backspace (which deletes BACKWARD) had nothing to
+    // its left to remove, and typing then inserted at the untouched cursor position instead.
+    // Covering both possible cursor positions at once: Home + Delete (forward) clears anything
+    // after the cursor if it starts at 0, End + Backspace clears anything before it if it starts
+    // at the end — doing both, regardless of which one turns out to be the no-op, before typing.
+    await el.press('Home')
+    for (let i = 0; i < 10; i++) await el.press('Delete')
     await el.press('End')
     for (let i = 0; i < 10; i++) await el.press('Backspace')
     if (o.type) await el.pressSequentially(o.type, { delay: 70 })
