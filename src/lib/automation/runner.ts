@@ -115,7 +115,11 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
   const hasBudget = (needMs: number) => Date.now() + needMs < t0 + HARD_MS
   let processed = 0
   let browser: Browser | null = null
-  const getBrowser = async () => (browser ??= await launch())
+  // If Chromium died mid-slice (OOM, crash — seen as "Target page, context or
+  // browser has been closed" when the next login tries to open a page), a
+  // cached dead Browser object just keeps failing every call after it. Relaunch
+  // instead of reusing a browser that's no longer connected.
+  const getBrowser = async () => (browser && browser.isConnected() ? browser : (browser = await launch()))
 
   try {
     await recoverStale()
