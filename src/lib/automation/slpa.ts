@@ -153,11 +153,15 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
     const printed = await print.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
     if (!printed) throw new FieldError('slpa', 'Slip Save', `Print button did not appear after saving the slip${(await toastText(slip)) ? `: ${await toastText(slip)}` : ''}`)
 
-    // 5) the PDF: a download, a PDF tab, or — since the slip (with its barcode) is already fully
-    // rendered on this same page regardless of what the Print button's own handler does under the
-    // hood (real screenshot confirmed: saved fields + barcode, right there, no navigation, no
-    // download, no window.print() call detected) — just render this page itself as the fallback,
-    // unconditionally, instead of only attempting that when a window.print() call was observed.
+    // 5) the PDF. Capture the slip's own content as the fallback BEFORE clicking Print — a real
+    // extraction result came back "(@DASHBC" instead of the container number, meaning Print had
+    // already navigated the page to the dashboard by the time the old code rendered it AFTER the
+    // click, so it silently PDF'd the wrong page. The slip (with its barcode) is fully rendered
+    // right after Save regardless of what Print's own handler does to the page afterward, so grab
+    // it now while we know for certain this is still the slip.
+    await slip.emulateMedia({ media: 'print' })
+    const slipPdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
+
     const dlP = slip.waitForEvent('download', { timeout: 7_000 }).catch(() => null)
     const popP = context.waitForEvent('page', { timeout: 7_000 }).catch(() => null)
     await print.click()
@@ -165,11 +169,8 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
     let pdf: Buffer | null = null
     if (dl) { const p = await dl.path(); if (p) pdf = await fs.readFile(p) }
     if (!pdf && pop) { await pop.waitForLoadState().catch(() => {}); pdf = await fetchAsBase64(pop, pop.url()).catch(() => null); await pop.close().catch(() => {}) }
-    if (!pdf || !isPdf(pdf)) {
-      await slip.emulateMedia({ media: 'print' })
-      pdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
-    }
-    if (!pdf || !isPdf(pdf)) throw new FieldError('slpa', 'Print', 'Print produced no PDF (no download, no PDF tab, and rendering the page itself failed too)')
+    if (!pdf || !isPdf(pdf)) pdf = isPdf(slipPdf) ? slipPdf : null
+    if (!pdf || !isPdf(pdf)) throw new FieldError('slpa', 'Print', 'Print produced no PDF (no download, no PDF tab, and rendering the slip itself failed too)')
     if (popup) await popup.close().catch(() => {})
     return { pdf, fileName: `${v.containerNo}.pdf` }
   } catch (e) {
