@@ -14,7 +14,7 @@ interface EligibleCdn {
   ready: { navis: boolean; slpa: boolean; trico: boolean }
 }
 interface Job {
-  id: string; container_no: string; cusdec_number: string; shipper: string
+  id: string; cdn_id: string; container_no: string; cusdec_number: string; shipper: string
   status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'; step: string | null; error: string | null; error_step?: string | null; error_field?: string | null; has_screenshot?: boolean
   created_at: string; finished_at: string | null; created_by_name: string | null
   result?: { navis_done?: boolean } | null
@@ -56,9 +56,16 @@ function RunnerInfo({ driving }: { driving: boolean }) {
   )
 }
 
-function JobsTable({ jobs, onCancel, onDelete, isAdmin }: { jobs: Job[]; onCancel: (id: string) => void; onDelete: (id: string) => void; isAdmin: boolean }) {
+function JobsTable({ jobs, kind, onCancel, onDelete, onToggleNavis, onFixCusdec, isAdmin }: {
+  jobs: Job[]; kind: 'barcode_enter' | 'trico_gate_pass'; onCancel: (id: string) => void; onDelete: (id: string) => void
+  onToggleNavis: (id: string, value: boolean) => void; onFixCusdec: (job: Job, cusdecNumber: string) => void; isAdmin: boolean
+}) {
+  const [fixing, setFixing] = useState<string | null>(null)
+  const [fixValue, setFixValue] = useState('')
   if (!jobs.length) return null
   const color = (s: Job['status']) => s === 'done' ? 'text-green-600' : s === 'failed' ? 'text-red-600' : s === 'running' ? 'text-blue-600' : 'text-gray-500'
+  const startFix = (j: Job) => { setFixing(j.id); setFixValue(j.cusdec_number || '') }
+  const submitFix = (j: Job) => { if (fixValue.trim()) onFixCusdec(j, fixValue.trim()); setFixing(null) }
   return (
     <div className="mt-5">
       <h3 className="font-semibold text-gray-900 text-xs mb-2">Recent runs</h3>
@@ -69,10 +76,28 @@ function JobsTable({ jobs, onCancel, onDelete, isAdmin }: { jobs: Job[]; onCance
               <p className="font-mono font-semibold text-gray-800">{j.container_no} <span className="font-sans font-normal text-gray-400">· {j.cusdec_number}</span></p>
               <p className="text-gray-500 truncate">{j.shipper}</p>
               {j.error && <p className={`mt-0.5 break-words ${j.status === 'failed' ? 'text-red-600' : 'text-gray-500'}`}>{j.status === 'failed' && (j.error_step || j.error_field) ? `[${[j.error_step, j.error_field].filter(Boolean).join(' · ')}] ` : ''}{j.error}</p>}
+              {kind === 'barcode_enter' && j.status === 'failed' && (
+                fixing === j.id ? (
+                  <div className="mt-1 flex items-center gap-1">
+                    <input value={fixValue} onChange={e => setFixValue(e.target.value)} placeholder="Correct CUSDEC number"
+                      className="input text-[11px] py-0.5 px-1.5 w-32" onKeyDown={e => e.key === 'Enter' && submitFix(j)}/>
+                    <button onClick={() => submitFix(j)} className="text-[10px] text-green-600 hover:underline">save & retry</button>
+                    <button onClick={() => setFixing(null)} className="text-[10px] text-gray-400 hover:underline">cancel</button>
+                  </div>
+                ) : (
+                  <button onClick={() => startFix(j)} className="mt-0.5 text-[10px] text-blue-600 hover:underline block">fix CUSDEC & retry</button>
+                )
+              )}
             </div>
             <div className="text-right flex-shrink-0">
               <p className={`font-medium ${color(j.status)}`}>{j.status}{j.status === 'running' && j.step ? ` · ${j.step}` : ''}</p>
-              {j.result?.navis_done && <p className="text-[10px] text-green-600">Navis ✓</p>}
+              {kind === 'barcode_enter' && j.status === 'failed' ? (
+                <button onClick={() => onToggleNavis(j.id, !j.result?.navis_done)}
+                  className={`text-[10px] block ml-auto hover:underline ${j.result?.navis_done ? 'text-green-600' : 'text-gray-400'}`}
+                  title="Click to flip whether a re-run skips Navis for this CDN">
+                  {j.result?.navis_done ? 'Navis ✓ (click to clear)' : 'Navis not done (click to mark)'}
+                </button>
+              ) : j.result?.navis_done && <p className="text-[10px] text-green-600">Navis ✓</p>}
               {j.has_screenshot && <button onClick={() => openShot(j.id)} className="text-[10px] text-blue-600 hover:underline block ml-auto">screenshot</button>}
               <p className="text-gray-400 text-[10px]">{fmt(j.finished_at || j.created_at)}</p>
               {j.status === 'queued' && <button onClick={() => onCancel(j.id)} className="text-[10px] text-red-500 hover:underline">cancel</button>}
@@ -165,6 +190,24 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
   }
 
   async function cancel(id: string) { try { await api(`/api/automation-jobs?id=${id}`, { method: 'DELETE' }); load() } catch (e: any) { setMsg({ ok: false, text: e.message }) } }
+
+  async function toggleNavis(id: string, value: boolean) {
+    try { await api(`/api/automation-jobs?id=${id}`, { method: 'PATCH', body: JSON.stringify({ navisDone: value }) }); load() }
+    catch (e: any) { setMsg({ ok: false, text: e.message }) }
+  }
+  // Corrects the CDN's CUSDEC number and clears this job's "Navis done" mark, then immediately
+  // queues a fresh, live (not test-mode) run for that CDN — the user is fixing a real failure, not
+  // previewing one.
+  async function fixCusdec(job: Job, cusdecNumber: string) {
+    setMsg(null)
+    try {
+      await api(`/api/automation-jobs?id=${job.id}`, { method: 'PATCH', body: JSON.stringify({ cusdecNumber }) })
+      const d = await api('/api/automation-jobs', { method: 'POST', body: JSON.stringify({ kind, cdnIds: [job.cdn_id], dryRun: false }) })
+      setMsg({ ok: d.queued > 0, text: d.queued > 0 ? `Retrying ${job.container_no} with corrected CUSDEC` : `Could not retry: ${d.skipped?.[0]?.reason || 'not queued'}` })
+      await load()
+      if (d.queued > 0) drive()
+    } catch (e: any) { setMsg({ ok: false, text: e.message }) }
+  }
   async function deleteJob(id: string) {
     if (!confirm('Delete this run from the list? This cannot be undone.')) return
     try { await api(`/api/automation-jobs?id=${id}`, { method: 'DELETE' }); load() } catch (e: any) { setMsg({ ok: false, text: e.message }) }
@@ -258,7 +301,7 @@ function QueuePanel({ kind, title, icon, description, needs, extraHeader, runLab
             {!filtered.length && <p className="text-xs text-gray-400 text-center py-8">Nothing eligible right now</p>}
           </div>
         )}
-        <JobsTable jobs={jobs} onCancel={cancel} onDelete={deleteJob} isAdmin={isAdmin}/>
+        <JobsTable jobs={jobs} kind={kind} onCancel={cancel} onDelete={deleteJob} onToggleNavis={toggleNavis} onFixCusdec={fixCusdec} isAdmin={isAdmin}/>
       </div>
     </div>
   )
