@@ -153,24 +153,42 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
     const printed = await print.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
     if (!printed) throw new FieldError('slpa', 'Slip Save', `Print button did not appear after saving the slip${(await toastText(slip)) ? `: ${await toastText(slip)}` : ''}`)
 
-    // 5) the PDF. Capture the slip's own content as the fallback BEFORE clicking Print — a real
-    // extraction result came back "(@DASHBC" instead of the container number, meaning Print had
-    // already navigated the page to the dashboard by the time the old code rendered it AFTER the
-    // click, so it silently PDF'd the wrong page. The slip (with its barcode) is fully rendered
-    // right after Save regardless of what Print's own handler does to the page afterward, so grab
-    // it now while we know for certain this is still the slip.
-    await slip.emulateMedia({ media: 'print' })
-    const slipPdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
-
-    const dlP = slip.waitForEvent('download', { timeout: 7_000 }).catch(() => null)
-    const popP = context.waitForEvent('page', { timeout: 7_000 }).catch(() => null)
-    await print.click()
-    const [dl, pop] = await Promise.all([dlP, popP])
+    // 5) the PDF. SLPA's real flow: the slip's own URL carries a numeric gate pass id
+    // (.../gatepass/<id>/verified-container-slip) once Save succeeds, and the printable version
+    // lives at .../gatepass/<id>/print — going there directly is the confirmed correct way to get
+    // it, rather than guessing at what the Print button's own click handler does (one real
+    // extraction failure showed it can navigate the page to the dashboard instead of printing).
     let pdf: Buffer | null = null
-    if (dl) { const p = await dl.path(); if (p) pdf = await fs.readFile(p) }
-    if (!pdf && pop) { await pop.waitForLoadState().catch(() => {}); pdf = await fetchAsBase64(pop, pop.url()).catch(() => null); await pop.close().catch(() => {}) }
-    if (!pdf || !isPdf(pdf)) pdf = isPdf(slipPdf) ? slipPdf : null
-    if (!pdf || !isPdf(pdf)) throw new FieldError('slpa', 'Print', 'Print produced no PDF (no download, no PDF tab, and rendering the slip itself failed too)')
+    const gatepassId = slip.url().match(/\/gatepass\/(\d+)\b/)?.[1]
+    if (gatepassId) {
+      const printUrl = `https://n4cms.slpa.lk/wapp/export/service-orders/gatepass/${gatepassId}/print`
+      try {
+        const resp = await slip.goto(printUrl, { timeout: 20_000 })
+        if (resp && (resp.headers()['content-type'] || '').includes('pdf')) {
+          pdf = await resp.body()
+        } else {
+          await slip.emulateMedia({ media: 'print' })
+          pdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
+        }
+      } catch { /* fall through to the Print-button path below */ }
+      if (!isPdf(pdf as Buffer)) pdf = null
+    }
+
+    if (!pdf) {
+      // Fallback: capture the slip's own content BEFORE clicking Print (it's fully rendered right
+      // after Save regardless of what Print's handler does to the page afterward), then try the
+      // button click's own download/popup, and fall back to that pre-capture if neither appears.
+      await slip.emulateMedia({ media: 'print' })
+      const slipPdf = Buffer.from(await slip.pdf({ format: 'A4', printBackground: true }))
+      const dlP = slip.waitForEvent('download', { timeout: 7_000 }).catch(() => null)
+      const popP = context.waitForEvent('page', { timeout: 7_000 }).catch(() => null)
+      await print.click()
+      const [dl, pop] = await Promise.all([dlP, popP])
+      if (dl) { const p = await dl.path(); if (p) pdf = await fs.readFile(p) }
+      if (!pdf && pop) { await pop.waitForLoadState().catch(() => {}); pdf = await fetchAsBase64(pop, pop.url()).catch(() => null); await pop.close().catch(() => {}) }
+      if (!pdf || !isPdf(pdf)) pdf = isPdf(slipPdf) ? slipPdf : null
+    }
+    if (!pdf || !isPdf(pdf)) throw new FieldError('slpa', 'Print', 'Print produced no PDF (gate pass print URL, download, PDF tab, and rendering the slip itself all failed)')
     if (popup) await popup.close().catch(() => {})
     return { pdf, fileName: `${v.containerNo}.pdf` }
   } catch (e) {
