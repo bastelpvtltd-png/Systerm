@@ -154,6 +154,14 @@ export async function runSlice(opts: { origin: string }): Promise<SliceResult> {
       await navisClose(session)
     }
 
+    // Navis can leave the shared Chromium process carrying a lot of accumulated memory by the
+    // time this many pages/contexts have been through it — SLPA's own login has crashed right at
+    // its first page open ("Target page, context or browser has been closed") straight after a
+    // busy Navis phase. Starting SLPA with a clean, freshly-launched browser instead of the one
+    // Navis wore down costs one extra ~3s cold start but avoids carrying that pressure over.
+    await (browser as Browser | null)?.close().catch(() => {})
+    browser = null
+
     // ── B) SLPA (only containers Navis accepted) ──
     const needSlpa = (await queuedBarcodeJobs()).filter(j => j.result?.navis_done && !j.result?.dry_run)
     for (const group of groupByLogin(await loadCandidates(needSlpa, 'slpa'))) {
