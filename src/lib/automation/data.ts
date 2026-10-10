@@ -76,6 +76,19 @@ export function pickByCode(options: string[], code: string, mustContain?: string
   return i >= 0 ? i : `No option for "${code}"${mustContain ? ` (${mustContain})` : ''}. Options shown: ${options.map(clean).slice(0, 8).join(' | ') || 'none'}`
 }
 
+/**
+ * For a fixed-value field with only ever one real choice (e.g. Navis's "Trucking Company", which
+ * is always the agency's own "PRVT" entry) — pickByCode's strict CODE-must-be-a-prefix rule breaks
+ * if the portal ever shows that code elsewhere in the label (e.g. as a trailing "(PRVT)" instead
+ * of a leading "PRVT ("). Any option containing the text anywhere is unambiguous here, so just
+ * take it.
+ */
+export function pickContaining(options: string[], text: string): Pick {
+  const t = text.toUpperCase()
+  const i = options.findIndex(o => clean(o).toUpperCase().includes(t))
+  return i >= 0 ? i : `No option containing "${text}". Options shown: ${options.map(clean).slice(0, 8).join(' | ') || 'none'}`
+}
+
 /** "1XM640EW (MARGRETHE MAERSK,640E,SLPA)" -> { code, name, voyage } */
 export function parseVesselOption(text: string): { code: string; name: string; voyage: string } | null {
   const t = clean(text)

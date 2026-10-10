@@ -2,7 +2,7 @@ import type { Browser, BrowserContext, Page } from 'playwright-core'
 import { newSession, sleep, snap } from './portal'
 import { FieldError, asFieldError } from './errors'
 import { fillText, pickCombo, input, visibleZkError, dumpInputs, softClick, type Sel } from './zk'
-import { pickByCode, pickPortOption, pickVesselOption, type NavisValues } from './data'
+import { pickByCode, pickContaining, pickPortOption, pickVesselOption, type NavisValues } from './data'
 import type { PortalLogin } from '@/lib/portalCredentials'
 
 // ── NAVIS CAP (n4cap.slpa.lk) — Gate ▸ Pre-advise Export ──────────────────────
@@ -141,7 +141,7 @@ export async function navisEnterOne(s: NavisSession, v: NavisValues, opts: { dry
     await fillText(page, 'Gross Mass', F.grossMass, v.grossMass)
     await pickCombo(page, 'COC', F.coc, { type: v.coc, choose: o => pickByCode(o, v.coc, 'Line Operator') })
     await pickCombo(page, 'Truck', F.truck, { readonly: true, choose: o => pickByCode(o, 'Truck') })
-    await pickCombo(page, 'Owner (PRVT)', F.owner, { type: '*PRVT', choose: o => pickByCode(o, 'PRVT') })
+    await pickCombo(page, 'Owner (PRVT)', F.owner, { type: '*PRVT', choose: o => pickContaining(o, 'PRVT') })
     await pickCombo(page, 'VOC', F.voc, { type: v.voc, choose: o => pickByCode(o, v.voc) })
 
     // Vessel: clear the "--", type "*" + the voyage, and take the entry whose voyage matches exactly.
