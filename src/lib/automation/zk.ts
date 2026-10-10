@@ -73,26 +73,21 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   const items = page.locator('li.z-comboitem:visible')
   await el.click({ timeout: 8_000 }).catch(() => el.focus())
   if (!o.readonly) {
-    // Three different keyboard-based clear strategies all lost this race against ZK (three real
-    // screenshots: fill('')+type -> "--076N", fill('')+settle-wait+type -> "--*26076N",
-    // Control+A+type -> "--76N" — "--" survives every time, and keystrokes go missing too, which
-    // points at the box not reliably being focused/ready when pressSequentially starts, not just
-    // at ZK re-inserting "--"). Stop relying on synthetic keyboard events for the clear+set part:
-    // write the final value straight into the DOM (via the native input value setter, so no
-    // framework-level override intercepts it) and fire its own input event. Then replay just the
-    // LAST character as a real keystroke (Backspace, retype) — one genuine keyup is what ZK's
-    // live-filter AJAX actually listens for, and this restores the exact same final value.
-    if (o.type) {
-      const value = o.type
-      await el.evaluate((node: HTMLInputElement, v: string) => {
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-        setter.call(node, v)
-        node.dispatchEvent(new Event('input', { bubbles: true }))
-      }, value)
-      await sleep(150)
-      await el.press('Backspace')
-      await el.pressSequentially(value.slice(-1), { delay: 70 })
+    // Four strategies tried, four different failures against the same box (real screenshots):
+    // fill('')+type -> "--076N"; fill('')+settle-wait+type -> "--*26076N"; Control+A+type ->
+    // "--76N"; writing the value straight into the DOM + one real keystroke -> ZK's dropdown
+    // opened but showed the FULL unfiltered vessel list, not a "26076N" filter — so the DOM write
+    // never reached ZK's own live-search listener at all, despite the input event.
+    // ZK's filter demonstrably responds to real, individual keystrokes (every OTHER combo on this
+    // form that never starts with "--" has worked on plain pressSequentially this whole time) — so
+    // clear with real Backspace presses, a fixed count matching the box's current length (no
+    // Control+A, which this widget doesn't reliably honor), then type normally.
+    const current = await el.inputValue().catch(() => '')
+    if (current) {
+      await el.press('End')
+      for (let i = 0; i < current.length; i++) await el.press('Backspace')
     }
+    if (o.type) await el.pressSequentially(o.type, { delay: 70 })
   }
   let opened = await items.first().waitFor({ state: 'visible', timeout: o.readonly ? 2_500 : 9_000 }).then(() => true, () => false)
   if (!opened && o.readonly) {
