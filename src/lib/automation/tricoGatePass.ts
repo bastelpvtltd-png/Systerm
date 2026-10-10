@@ -6,7 +6,6 @@
 import { FieldError } from './errors'
 import { TRICO_UA } from '../tricoSession'
 import { shipperName } from '../shipperName'
-import { cusdecReference } from './data'
 
 const FORM_URL = 'https://s2.tricologi.net/webuser/?option=gatepass&action=gatepass_exp'
 const SAVE_URL = 'https://s2.tricologi.net/webuser/?option=gatepass&action=gatepass_exp_save&req_type=raw'
@@ -46,11 +45,32 @@ function mapContainerSize(conType: string | null | undefined): string {
 
 const cdnNumberClean = (s: string | null | undefined) => clean(s).replace(/\s+/g, '').toUpperCase()
 
-// Punctuation-insensitive name match: CDN shipper text has no parens/periods
-// ("SAKTHI INTERNATIONAL PVT LTD"), Trico's own list does ("SAKTHI
-// INTERNATIONAL (PVT) LTD."). Stripping everything but letters/digits before
-// comparing means the two sides match on name alone, not on formatting.
-const normName = (s: string) => clean(s).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
+// Punctuation/spacing-insensitive name match: CDN shipper text has no parens
+// or periods ("SAKTHI INTERNATIONAL PVT LTD"), Trico's own list does ("SAKTHI
+// INTERNATIONAL (PVT) LTD."), and spacing can differ too ("AM TRADING" vs
+// "A M TRADING"). Stripping everything but letters/digits (spaces included)
+// before comparing means the two sides match on the name's letters alone.
+const normName = (s: string) => clean(s).toUpperCase().replace(/[^A-Z0-9]+/g, '')
+
+function yearFromDate(raw: string | null | undefined): string {
+  const s = clean(raw || '')
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+  if (m) return m[1]
+  m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2,4})/)
+  if (m) { const y = Number(m[3]); return String(y < 100 ? 2000 + y : y) }
+  const d = new Date(s)
+  return Number.isNaN(d.getTime()) ? '' : String(d.getFullYear())
+}
+
+// Trico's own format is <OfficeCode><Year><Cusdec>, e.g. "CBEX1" + "2026" +
+// "E00000" -> "CBEX12026E00000" (its form literally shows this as a hint) —
+// year BEFORE the cusdec number. Navis wants the opposite order (code+number+
+// year, see data.ts's cusdecReference), so this is its own function rather
+// than reusing that one.
+function tricoCusdecReference(code: string | null | undefined, number: string | null | undefined, date: string | null | undefined): string {
+  const c = clean(code || '').replace(/\s+/g, ''), n = clean(number || '').replace(/\s+/g, ''), y = yearFromDate(date)
+  return c && y && n ? `${c}${y}${n}`.toUpperCase() : ''
+}
 
 function todayDDMMYYYY(): string {
   const d = new Date()
@@ -136,7 +156,7 @@ export function prepareGatePassValues(cdn: GatePassCdn, cusdec: GatePassCusdec |
   if (!driverMatches.length) throw new FieldError('prepare', 'Driver', `No Trico driver with surname "${driverSurname}" (from "${cdn.driver_name}")`)
   if (driverMatches.length > 1) throw new FieldError('prepare', 'Driver', `${driverMatches.length} Trico drivers share surname "${driverSurname}" — can't pick one automatically`)
 
-  const cusdecNo = cusdecReference(cdn.code, cdn.cusdec_number, cusdec?.date)
+  const cusdecNo = tricoCusdecReference(cdn.code, cdn.cusdec_number, cusdec?.date)
   if (!cusdecNo) throw new FieldError('prepare', 'CUSDEC No.', 'Could not build the CUSDEC reference (missing code / number / date)')
 
   const hs = clean(cusdec?.hs_code)

@@ -304,7 +304,7 @@ function ShipperLoginsPanel() {
   return (
     <div className="card">
       <h2 className="font-semibold text-gray-900 text-sm mb-1 flex items-center gap-2"><Users size={15}/>Shipper logins</h2>
-      <p className="text-xs text-gray-500 mb-3">Pick which saved Navis / SLPA / Trico login each shipper uses. Logins themselves are added in Settings → Credentials; the shipper list comes from the CDN database.</p>
+      <p className="text-xs text-gray-500 mb-3">Pick which saved Navis / SLPA / Trico login each shipper uses. Logins themselves are added in Settings → Credentials; the shipper list is every exporter name in the CUSDEC database.</p>
       {msg && <p className={`text-xs mb-2 ${msg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>{msg}</p>}
       {!data ? <Loader size={16} className="animate-spin text-gray-400"/> : (
         <div className="space-y-2 max-h-96 overflow-y-auto">
