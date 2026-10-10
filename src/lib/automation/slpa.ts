@@ -10,6 +10,8 @@ import type { PortalLogin } from '@/lib/portalCredentials'
 // container on the row of the pre-advised container -> Save -> floppy icon on that row ->
 // Verified Container Slip (driver / truck / trailer / seal) -> Save -> Print -> PDF.
 const CONSOL_URL = 'https://n4cms.slpa.lk/wapp/export/service-orders/container-consolidation'
+// Fixed for this agency's own SLPA account — the same for every container, not read off the CDN.
+const AGENT_PASS_NO = '2916'
 
 export interface SlpaSession { context: BrowserContext; page: Page }
 export interface SlpaResult { pdf: Buffer; fileName: string }
@@ -114,6 +116,15 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
       try { const el = slip.locator(id); await el.fill(value); await el.press('Tab') }
       catch { throw new FieldError('slpa', field, `Could not fill "${field}" on the Verified Container Slip`) }
     }
+    // Agent Pass No — a fixed value for this agency's account, not per-container CDN data (real
+    // screenshot: Save stays disabled with "Agent Pass No is required." until it's filled). Found
+    // by its label text rather than a guessed id, since the other fields' ids (#driverid etc.)
+    // don't follow an obvious pattern this one would reliably match.
+    try {
+      const agentPass = slip.locator('xpath=//*[contains(normalize-space(text()),"Agent Pass No")]/following::input[1]')
+      await agentPass.fill(AGENT_PASS_NO)
+      await agentPass.press('Tab')
+    } catch { throw new FieldError('slpa', 'Agent Pass No', 'Could not fill "Agent Pass No" on the Verified Container Slip') }
     await slip.locator('button[type="submit"]', { hasText: 'Save' }).first().click()
     const print = slip.getByRole('button', { name: 'Print', exact: true })
     const printed = await print.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
