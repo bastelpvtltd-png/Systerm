@@ -75,15 +75,19 @@ async function pickComboRaw(page: Page, field: string, sel: Sel, o: { type?: str
   if (!o.readonly) {
     // Navis can auto-fill this box itself a moment after it renders (e.g. Con Type guessed from
     // the container number), and several boxes start showing "--" as a REAL value, not just a
-    // placeholder. A single Control+A/Backspace can race the auto-fill and leave the guessed text
-    // in front of what we type next ("45G" + "45G1" -> "45G45G1", which then matches nothing in the
-    // dropdown) — and keyboard selection can simply miss if focus isn't fully settled yet. .fill('')
-    // clears it directly at the DOM level first (no focus/selection to go wrong), then the
-    // Control+A/Backspace loop is the fallback/verification that the box is really empty before typing.
+    // placeholder. Worse, ZK resyncs the box's displayed value from its own client-side widget
+    // state a moment AFTER a plain .fill('')/Backspace — clearing it, then checking it's empty
+    // immediately, then typing right away can still lose the race: ZK's resync lands mid-type and
+    // splices "--" back in among the keystrokes ("*26076N" -> "--076N", confirmed from a real
+    // screenshot). So: clear, then sleep BEFORE each check — giving ZK room to resync first — and
+    // only start typing once the box has read back empty, not just once.
     await el.fill('').catch(() => {})
-    for (let i = 0; i < 5 && (await el.inputValue()) !== ''; i++) {
-      await el.press('Control+A'); await el.press('Backspace'); await sleep(100)
+    for (let i = 0; i < 8; i++) {
+      await sleep(150)
+      if ((await el.inputValue()) === '') break
+      await el.press('Control+A'); await el.press('Backspace')
     }
+    await sleep(150)
     if (o.type) await el.pressSequentially(o.type, { delay: 70 })
   }
   let opened = await items.first().waitFor({ state: 'visible', timeout: o.readonly ? 2_500 : 9_000 }).then(() => true, () => false)
