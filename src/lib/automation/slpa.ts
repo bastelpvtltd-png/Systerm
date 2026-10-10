@@ -51,6 +51,15 @@ async function search(page: Page, ref: string) {
   await box.waitFor({ state: 'visible' })
   await box.fill(ref)
   await page.getByRole('button', { name: 'Search', exact: true }).click()
+  // A CUSDEC number that was mistyped at the source (the CDN row) can still get typed into Navis
+  // without Navis itself complaining, but SLPA's own search rejects it outright here instead of
+  // just returning no rows — catching that now and naming the CUSDEC number means the failure
+  // reads as "this CUSDEC is wrong" rather than the generic "was Navis pre-advised?" guess below.
+  await sleep(800)
+  const err = await toastText(page)
+  if (err && /invalid|not found|no record|error/i.test(err)) {
+    throw new FieldError('slpa', 'CUSDEC Number', `SLPA rejected CUSDEC "${ref}" while searching: ${err} — check this CUSDEC number for a typo on the CDN`)
+  }
 }
 
 async function fetchAsBase64(page: Page, url: string): Promise<Buffer> {
@@ -89,7 +98,7 @@ export async function slpaEnterOne(s: SlpaSession, v: SlpaValues): Promise<SlpaR
       await search(page, v.cusdecRef)
       found = await row.first().waitFor({ state: 'visible', timeout: 10_000 }).then(() => true, () => false)
     }
-    if (!found) throw new FieldError('slpa', 'Pre-advised container', `Container ${v.containerNo} not listed under CUSDEC ${v.cusdecRef} in SLPA (searched 4 times) — was the Navis pre-advise accepted?`)
+    if (!found) throw new FieldError('slpa', 'Pre-advised container', `Container ${v.containerNo} not listed under CUSDEC "${v.cusdecRef}" in SLPA (searched 4 times) — check the CUSDEC number for a typo on the CDN, or whether the Navis pre-advise was accepted`)
     const r = row.first()
 
     // 2) consolidation: pick a free service-order container and Save — unless this row was already consolidated

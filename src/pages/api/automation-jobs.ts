@@ -69,13 +69,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const { data: b } = await sb.from('barcode').select('container_no').in('container_no', (cdns || []).map((c: any) => c.container_no).filter(Boolean))
         barcodeSet = new Set((b || []).map((x: any) => String(x.container_no).trim().toUpperCase()))
       }
-      // A barcode run that failed AFTER Navis succeeded must not enter Navis again
-      // on the re-run — carry the "Navis done" mark over to the new job.
-      let navisDone = new Set<string>()
-      if (kind === 'barcode_enter') {
-        const { data: prev } = await sb.from('automation_jobs').select('cdn_id, result').eq('kind', kind).eq('status', 'failed').in('cdn_id', cdnIds)
-        navisDone = new Set((prev || []).filter((j: any) => j.result?.navis_done).map((j: any) => j.cdn_id))
-      }
       for (const c of cdns || []) {
         const ref = c.container_no || c.id
         if (blank(c.container_no)) { skipped.push({ cdnId: c.id, container: ref, reason: 'No container number' }); continue }
@@ -85,16 +78,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const missing = NEEDS[kind].filter(p => !ready[p])
         if (missing.length) { skipped.push({ cdnId: c.id, container: ref, reason: `No ${missing.join(' / ').toUpperCase()} login mapped for this shipper` }); continue }
         const tricoOpt = req.body.tricoOptions?.[c.id] || {}
-        // A CDN whose Navis entry already really happened (carried over above) can't be put
-        // back into test mode — there's nothing left to simulate, and "dry_run: true" here
-        // would make the SLPA phase's own filter (navis_done && !dry_run) skip it forever,
-        // stranding the job in "queued" with neither phase ever picking it up.
-        const navisAlreadyDone = navisDone.has(c.id)
+        // Every queue action is a full, fresh run — re-queuing a CDN (after a previous attempt
+        // failed, or after fixing something like a mistyped CUSDEC number on the CDN itself) goes
+        // through Navis again rather than trusting an old job's "Navis done" mark. Navis is safe to
+        // re-enter; skipping it on a stale assumption is not, especially once what was actually
+        // typed into Navis the first time was itself wrong.
         rows.push({
           kind, cdn_id: c.id, container_no: c.container_no, cusdec_number: c.cusdec_number, shipper: shipperName(c.shipper),
           created_by: authed.userId, created_by_name: prof?.full_name || prof?.username || '',
           result: {
-            ...(navisAlreadyDone ? { navis_done: true } : {}), dry_run: navisAlreadyDone ? false : dryRun,
+            dry_run: dryRun,
             ...(kind === 'trico_gate_pass' ? {
               vgm: tricoOpt.vgm !== false, fumigation: tricoOpt.fumigation !== false, quarantine: tricoOpt.quarantine !== false,
             } : {}),

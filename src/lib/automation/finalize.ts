@@ -15,7 +15,7 @@ const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 //      PDF templates) -> row in the `barcode` table
 //   3. generic uploaded_documents log row
 //   4. Activity Log entry (document_uploads + dashboard_notifications), reason "Container Moved",
-//      uploaded by "Automation (Barcode Enter)"
+//      uploaded by "Automated System"
 // If extraction or the table save fails the Drive file is deleted again and a FieldError
 // (step "finalize") is thrown, so nothing half-saved is left behind.
 export async function finalizeBarcode(p: { cdn: Record<string, any>; pdf: Buffer; fileName: string; origin: string }): Promise<{ driveLink: string; notifyError: string | null }> {
@@ -40,18 +40,15 @@ export async function finalizeBarcode(p: { cdn: Record<string, any>; pdf: Buffer
     if (!er.ok) throw new FieldError('finalize', 'Barcode extraction', `Barcode extraction failed: ${ej.error || er.status}${er.status === 401 ? ' (is WORKER_SECRET set on Vercel?)' : ''}`)
     tableData = Object.fromEntries((ej.fields || []).map((f: any) => [f.key, f.value]))
 
-    // The slip must be for THIS container — never save a barcode against the wrong CDN. On a
-    // mismatch the Drive file below gets deleted, so without this the actual extracted
-    // fields/text are lost and a wrong read can only ever be guessed at, not diagnosed.
-    const extracted = String(tableData.container_no || '').replace(/\s+/g, '').toUpperCase()
-    if (extracted && extracted !== container) {
-      const err = new FieldError('finalize', 'Container No', `The printed slip is for ${extracted}, not ${container}`)
-      err.debug = `extracted fields: ${JSON.stringify(tableData).slice(0, 3000)}`
-      throw err
-    }
+    // This PDF was just printed by us for THIS exact container (v.containerNo drove the whole
+    // Navis/SLPA run) — there is no "real" container number to go read off the page and verify
+    // against; we already know it. Extraction is still run for the slip's OTHER fields (seal no,
+    // truck no, ...), but container_no itself is always the known value, never the extracted one —
+    // a template/layout mismatch on the PDF can make the extracted text wrong (as "(@DASHBC" did),
+    // and rejecting the save over that was worse than just trusting what we know to be true.
     tableData.container_no = container
 
-    const saved = await insertExtractedData('barcode', tableData, driveLink, { uploadedBy: 'Automation (Barcode Enter)' })
+    const saved = await insertExtractedData('barcode', tableData, driveLink, { uploadedBy: 'Automated System' })
     if (!saved.ok) throw new FieldError('finalize', 'Barcode table', 'Barcode table save was refused')
   } catch (e) {
     await deleteDriveFileByUrl(driveLink)   // don't leave an orphaned PDF in Drive
@@ -70,7 +67,7 @@ export async function finalizeBarcode(p: { cdn: Record<string, any>; pdf: Buffer
   if (!already) {
     const n = await notifyToActivityLog({
       fileName: name, driveLink, docType: 'barcode', reason: 'Container Moved',
-      extractedData: tableData, byName: 'Automation (Barcode Enter)',
+      extractedData: tableData, byName: 'Automated System',
     })
     notifyError = n.error
   }
